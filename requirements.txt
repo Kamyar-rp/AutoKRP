@@ -1,7 +1,7 @@
 pywebview>=5.0
 requests>=2.32.4       # CVE-2024-35195, CVE-2024-47081
 urllib3>=2.5           # requests dependency; CVE-2025-50181/50182
-cryptography>=44.0.1   # CVE-2024-12797
+cryptography>=50.0.2   # CVE-2024-12797
 netmiko>=4.3
 paramiko>=4.0,<5.0     # paramiko 5 removed SHA-1 algorithms; some older devices need them (per-device "legacy" switch)
 dnspython>=2.6
