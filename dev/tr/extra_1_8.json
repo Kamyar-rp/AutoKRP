@@ -1,0 +1,14 @@
+{
+ "Ping (پیدا کردن هاست‌های روشن)": "Ping (find live hosts)",
+ "Ping برای پیدا کردن هاست‌های روشن و/یا اسکن پورت‌های TCP، فقط در رنج‌های مجاز.": "Ping to find live hosts and/or scan TCP ports, only in the allowed ranges.",
+ "common = {0} پورت رایج؛ یا بازه و فهرست، مثل 1-1024 یا 22,80,443,3389. هاست روشن = پاسخ ping یا حداقل یک پورت باز.": "common = {0} common ports; or a range and list, e.g. 1-1024 or 22,80,443,3389. Live host = answers ping or has at least one open port.",
+ "{0} پورت": "{0} ports",
+ "{0}: Ping یا پورت‌ها را انتخاب کنید.": "{0}: select Ping or ports.",
+ "، {0} پورت باز": ", {0} open ports",
+ "{0} هاست روشن از {1}، {2} پورت باز": "{0} hosts up of {1}, {2} open ports",
+ "؛ پورت‌ها فقط روی هاست‌های پاسخ‌دهنده به ping": "; ports only on hosts that answer ping",
+ "اسکن: Ping یا پورت‌ها را انتخاب کنید (هیچ‌کدام انتخاب نشده).": "Scan: select Ping or ports (neither is selected).",
+ "سریع‌تر؛ ولی هاستی که ping را بسته از قلم می‌افتد": "Faster, but hosts that block ping are missed",
+ "پورت‌ها فقط روی هاست‌های پاسخ‌دهنده به ping": "Ports only on hosts that answer ping",
+ "پورت‌های TCP (خالی = بدون اسکن پورت)": "TCP ports (empty = no port scan)"
+}

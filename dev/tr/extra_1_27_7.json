@@ -1,0 +1,9 @@
+{
+ "برای پاک‌سازی کامل، رمز خودتان را درست وارد کنید.": "To fully reset, enter your own password correctly.",
+ "تلاش‌های اشتباه زیاد بود؛ ۱۵ دقیقه‌ی دیگر دوباره امتحان کنید.": "Too many wrong attempts; try again in 15 minutes.",
+ "حساب «{0}» به‌خاطر تلاش‌های ناموفق زیاد از چند آدرس {1} دقیقه قفل شد (آخرین: {2})": "Account “{0}” was locked for {1} minutes after many failed attempts from several addresses (last: {2})",
+ "در SCP مسیر نباید با «-» شروع شود (مثلاً ./-file بنویسید).": "With SCP the path must not start with “-” (write ./-file instead).",
+ "رمز خودتان": "Your password",
+ "رمز فعلی چند بار اشتباه وارد شد": "The current password was entered wrong several times",
+ "پاک‌سازی کامل فقط برای ادمین است.": "Full reset is admin-only."
+}

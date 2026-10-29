@@ -1,0 +1,16 @@
+{
+ "دانلود آخرین نسخه‌ها…": "Download latest versions…",
+ "دانلود آخرین نسخه‌ی پشتیبان": "Download latest backup",
+ "هیچ دستگاهی هنوز نسخه‌ی پشتیبان ندارد.": "No device has a backup yet.",
+ "آخرین نسخه‌ی هر دستگاه تیک‌خورده، هر کدام یک فایل متنی، در یک فایل zip ذخیره می‌شود. فقط دستگاه‌هایی که نسخه دارند نمایش داده می‌شوند.": "The latest version of each checked device is saved as a text file inside one zip file. Only devices that have a backup are listed.",
+ "جستجوی نام یا آدرس…": "Search name or address…",
+ "آخرین پشتیبان": "Last backup",
+ "نسخه‌ها": "Versions",
+ "دانلود zip": "Download zip",
+ "{0} از {1} دستگاه انتخاب شده": "{0} of {1} devices selected",
+ "آخرین نسخه‌ی {0} دستگاه ذخیره شد: {1}": "Latest version of {0} devices saved: {1}",
+ "{0} دستگاه نسخه نداشت": "{0} devices had no backup",
+ "هیچ دستگاهی انتخاب نشده است.": "No device selected.",
+ "هیچ‌کدام از دستگاه‌های انتخاب‌شده نسخه‌ی پشتیبان ندارند.": "None of the selected devices has a backup.",
+ "حجم خروجی بیش از ۲۰۰ مگابایت است؛ دستگاه‌های کمتری انتخاب کنید.": "The output is over 200 MB; select fewer devices."
+}

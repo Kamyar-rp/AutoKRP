@@ -1,0 +1,8 @@
+{
+ "{0} ردیف اول از {1}؛ برای دیدن بقیه جستجو کنید": "First {0} of {1} rows; search to see the rest",
+ "از {0} ردیف غیرقابل بلاک فقط {1} نمونه آمده است": "Only {1} samples of the {0} non-blockable rows are included",
+ "جستجوی IP یا جزئیات": "Search IP or details",
+ "نمایش ردیف‌های غیرقابل بلاک هم": "Also show non-blockable rows",
+ "همه‌ی ردیف‌های فیلترشده": "All filtered rows",
+ "و {0} آدرس دیگر": "and {0} more addresses"
+}

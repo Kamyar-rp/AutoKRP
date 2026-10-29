@@ -1,0 +1,41 @@
+IP,ISP,Usage Type,ASN,Domain,Country,City,Abuse Confidence Score,Total Reports,Last Reported At,Is Whitelisted,Is Tor,Categories,Status,Error
+203.0.113.1,"Beijing Volcano Engine Technology Co., Ltd.",Data Center/Web Hosting/Transit,-,gwbn.net.cn,CN,-,-,75,24,2026-09-12T08:40:56+00:00,False,False,Clean,ABUSE,
+198.51.100.2,China United Network Communications Corporation Limited,Fixed Line ISP,-,chinaunicom.cn,CN,-,-,18,5,2026-09-11T18:00:17+00:00,False,False,Clean,ABUSE,
+203.0.113.3,Huawei Public Cloud Service (Huawei Software Technologies Ltd.Co),Data Center/Web Hosting/Transit,-,huawei.com,CN,-,-,100,45,2026-09-12T10:55:06+00:00,False,False,Clean,ABUSE,
+198.51.100.4,UCLOUD INFORMATION TECHNOLOGY (HK) LIMITED,Data Center/Web Hosting/Transit,-,ucloud.cn,DE,-,-,100,1057,2026-09-12T10:54:29+00:00,False,False,Clean,ABUSE,
+203.0.113.5,"Beijing Volcano Engine Technology Co., Ltd.",Fixed Line ISP,-,bytedance.com,CN,-,-,100,48,2026-09-12T10:50:14+00:00,False,False,Clean,ABUSE,
+198.51.100.6,"Aliyun Computing Co., LTD",Data Center/Web Hosting/Transit,-,alibabacloud.com,CN,-,-,74,12,2026-09-12T10:14:03+00:00,False,False,Clean,ABUSE,
+203.0.113.7,CHINANET Guizhou province network,Fixed Line ISP,-,chinatelecom.cn,CN,-,-,100,39,2026-09-12T07:00:21+00:00,False,False,Clean,ABUSE,1.165.229.216,Chunghwa Telecom Data Communication Business Group,Fixed Line ISP,-,cht.com.tw,TW,-,-,26,6,2026-09-12T10:15:38+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:14
+198.51.100.8,WIOCC-NIGERIA-102.209.29.0,Fixed Line ISP,-,wiocc.net,NG,-,-,80,32,2026-09-12T06:58:05+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:17
+203.0.113.9,HostPapa,Data Center/Web Hosting/Transit,-,hostpapa.com,US,-,-,31,4,2026-09-10T00:13:58+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:20
+198.51.100.10,HostPapa,Data Center/Web Hosting/Transit,-,hostpapa.com,US,-,-,4,1,2026-09-11T14:47:41+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:22
+203.0.113.11,HostPapa,Data Center/Web Hosting/Transit,-,hostpapa.com,US,-,-,0,0,2025-11-28T05:02:56+00:00,False,False,Clean,CLEAN,,2026-09-12 16:51:24
+198.51.100.12,HostPapa,Data Center/Web Hosting/Transit,-,hostpapa.com,US,-,-,0,0,2025-11-23T21:02:44+00:00,False,False,Clean,CLEAN,,2026-09-12 16:51:27
+203.0.113.13,"Ningbo Zhuo Zhi Innovation Network Technology Co., Ltd",Data Center/Web Hosting/Transit,-,nbgaofang.com,CN,-,-,71,24,2026-09-12T12:35:04+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:30
+198.51.100.14,"United-Communications-Network-Technology-Co-Ltd, GuangZhou",Fixed Line ISP,-,chinaunicom.cn,CN,-,-,60,22,2026-09-12T12:18:11+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:33
+203.0.113.15,jiedongxiankaifaquchaoyangdadaopang,Fixed Line ISP,-,gddc.com.cn,CN,-,-,100,53,2026-09-12T12:54:55+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:35
+198.51.100.16,CHINANET Guangdong province network,Fixed Line ISP,-,chinatelecom.cn,CN,-,-,32,9,2026-09-11T18:00:34+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:38
+203.0.113.17,"Aliyun Computing Co., LTD",Data Center/Web Hosting/Transit,-,alibabacloud.com,CN,-,-,25,11,2026-09-12T12:25:10+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:41
+198.51.100.18,"Hangzhou Louwailou Food Co., Ltd.",Fixed Line ISP,-,sina.com,CN,-,-,34,19,2026-09-12T13:16:11+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:45
+203.0.113.19,UCLOUD INFORMATION TECHNOLOGY (HK) LIMITED,Data Center/Web Hosting/Transit,-,ucloud.cn,KR,-,-,100,619,2026-09-12T09:00:27+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:47
+198.51.100.20,CHINANET Jilin province network,Fixed Line ISP,-,chinatelecom.cn,CN,-,-,83,26,2026-09-12T00:01:46+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:50
+203.0.113.21,UCLOUD,Data Center/Web Hosting/Transit,-,ucloud.cn,DE,-,-,100,946,2026-09-12T09:00:27+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:52
+198.51.100.22,University Project Allocation,University/College/School,-,aau.dk,DK,-,-,94,28,2026-09-11T14:35:04+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:55
+203.0.113.23,University Project Allocation,University/College/School,-,aau.dk,DK,-,-,74,16,2026-09-12T02:11:13+00:00,False,False,Clean,ABUSE,,2026-09-12 16:51:57
+198.51.100.24,University Project Allocation,University/College/School,-,aau.dk,DK,-,-,89,40,2026-09-12T03:20:06+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:00
+203.0.113.25,University Project Allocation,University/College/School,-,aau.dk,DK,-,-,18,4,2026-09-12T07:56:13+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:02
+198.51.100.26,"Vultr Holdings, LLC",Data Center/Web Hosting/Transit,-,vultr.com,FR,-,-,2,1,2026-09-12T07:14:27+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:05
+203.0.113.27,MegaNET Serviços de Comunicação Multimídia Ltda,Fixed Line ISP,-,meganetscm.net.br,BR,-,-,100,65,2026-09-12T12:32:44+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:08
+198.51.100.28,COMPAGNIE DU PONANT PTY LTD,Fixed Line ISP,-,compagnie-du-ponant.tel,AU,-,-,56,18,2026-09-12T10:21:02+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:11
+203.0.113.29,Cosmote Internet Services,Mobile ISP,-,ote.gr,GR,-,-,100,33,2026-09-12T11:00:10+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:13
+198.51.100.30,UCLOUD INFORMATION TECHNOLOGY (HK) LIMITED,Data Center/Web Hosting/Transit,-,ucloud.cn,NG,-,-,100,810,2026-09-12T13:21:12+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:17
+203.0.113.31,China Unicom Jiangsu province network,Fixed Line ISP,-,chinaunicom.cn,CN,-,-,95,34,2026-09-12T11:24:02+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:20
+198.51.100.32,AGOTOZ PTE. LTD,Commercial,-,agotoz.com,HK,-,-,100,7556,2026-09-12T13:18:50+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:23
+203.0.113.33,E-Light-Telecom,Fixed Line ISP,-,eltc.ru,RU,-,-,100,71,2026-09-12T11:31:14+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:25
+198.51.100.34,HostUS Solutions LLC,Data Center/Web Hosting/Transit,-,hostus.us,NL,-,-,100,505,2026-09-12T13:05:43+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:27
+203.0.113.35,"DigitalOcean, LLC",Data Center/Web Hosting/Transit,-,digitalocean.com,DE,-,-,2,8,2026-09-08T23:34:57+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:30
+198.51.100.36,OVH SAS,Data Center/Web Hosting/Transit,-,ovh.net,FR,-,-,100,580,2026-09-12T09:45:39+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:32
+203.0.113.37,"Scaleway Dedibox - Paris, France",Data Center/Web Hosting/Transit,-,scaleway.com,FR,-,-,90,33,2026-09-12T13:00:32+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:35
+198.51.100.38,UCLOUD INFORMATION TECHNOLOGY (HK) LIMITED,Data Center/Web Hosting/Transit,-,ucloud.cn,RU,-,-,100,716,2026-09-12T09:00:27+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:37
+203.0.113.39,"DigitalOcean, LLC",Data Center/Web Hosting/Transit,-,digitalocean.com,NL,-,-,34,7,2026-09-05T20:53:45+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:39
+198.51.100.40,Dedires LLC,Data Center/Web Hosting/Transit,-,dedires.com,US,-,-,100,3314,2026-09-12T12:55:41+00:00,False,False,Clean,ABUSE,,2026-09-12 16:52:42

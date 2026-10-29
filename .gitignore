@@ -1,0 +1,31 @@
+# Personal notes and documents — never part of the repository
+kamyar/
+
+# Python / build
+__pycache__/
+*.py[cod]
+.venv/
+.venv-build/
+.ruff_cache/
+*.tmp
+build/
+dist/
+*.spec
+requirements-lock.txt
+
+# Development data
+dev/_data/
+dev/_untranslated.json
+
+# Never commit runtime data, organisation settings or secret files
+settings.json
+settings.dat
+state.db*
+state.sdb*
+.cfg_data.bin
+.cfg_key.bin
+.data_key.bin
+.server_auth.json
+runs/
+exports/
+*.log

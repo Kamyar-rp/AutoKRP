@@ -1,0 +1,5 @@
+{
+ "اسکن روزانه فقط وقتی «کار خودکار» در داشبورد روشن است و فقط سر همان ساعت (تا ۱۵ دقیقه بعد) اجرا می‌شود؛ اگر برنامه آن موقع باز نبود، با باز شدن برنامه جبران نمی‌شود. باز کردن این صفحه هیچ اسکنی اجرا نمی‌کند. نتیجه‌ی اسکن هیچ تغییری را مستقیم اعمال نمی‌کند؛ همه به «در انتظار تأیید» می‌روند و ایمیل «مدیریت دارایی: تغییر منتظر تأیید» فرستاده می‌شود (اگر اعلان ایمیلی روشن باشد).": "The daily scan runs only when “Automation” is on in the dashboard, and only at the set time (up to 15 minutes after); if the app was not open then, it is not made up when the app opens. Opening this page never starts a scan. Scan results never change anything directly; everything goes to “Pending approval” and the “Asset management: change awaiting approval” email is sent (if email notifications are on).",
+ "اسکن روزانه‌ی دارایی ساعت {0} انجام نشد چون برنامه آن موقع باز نبود؛ اسکن بعدی سر ساعت فردا (یا دستی)": "The daily asset scan at {0} did not run because the app was not open then; the next one runs at that time tomorrow (or start it manually)",
+ "زمان‌بندی روزانه": "Daily schedule"
+}

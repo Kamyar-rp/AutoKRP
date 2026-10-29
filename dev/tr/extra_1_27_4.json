@@ -1,0 +1,6 @@
+{
+ "{0} از فهرست گزیده، {1} از رجیستری IANA": "{0} from the curated list, {1} from the IANA registry",
+ "{0} ردیف اول از {1} نمایش داده شد؛ جستجو را دقیق‌تر کنید یا CSV بگیرید.": "Showing the first {0} of {1} rows; refine the search or save as CSV.",
+ "جستجو در کل رجیستری رسمی IANA هم انجام می‌شود ({0} سرویس؛ نام رسمی ممکن است با کاربرد واقعی فرق کند، مثل 541 که فورتی‌گیت برای FGFM استفاده می‌کند). ردیف‌های IANA دسته و برچسب «پرخطر» ندارند و فقط با جستجو نمایش داده می‌شوند.": "The search also covers the full official IANA registry ({0} services; the official name may differ from real-world use, e.g. FortiGate uses 541 for FGFM). IANA rows have no category or “risky” label and appear only when searching.",
+ "رجیستری IANA بارگذاری نشد؛ فقط فهرست گزیده.": "The IANA registry could not be loaded; curated list only."
+}

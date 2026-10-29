@@ -1,0 +1,7 @@
+{
+ "خالی = خاموش. وضعیت خود دستگاه (مثلاً منبع تغذیه‌ی خراب یا دمای بحرانی گزارش‌شده) همیشه هشدار می‌دهد. دما به‌طور پیش‌فرض فقط با وضعیت خود دستگاه هشدار می‌دهد (سنسورهای CPU/Hotspot ذاتاً داغ‌اند)؛ اگر عدد بدهید روی همه‌ی سنسورهای دما اعمال می‌شود. پورت‌ها فقط وقتی «پیگیری» شوند هشدار قطع، مصرف و خطا دارند.": "Empty = off. The device's own status (e.g. a failed power supply or a critical temperature it reports) always raises an alarm. By default, temperature alarms come only from the device's own status (CPU/hotspot sensors run hot by design); a number here applies to every temperature sensor. Ports raise down, utilization and error alarms only when they are watched.",
+ "خطای پردازش داده: {0}": "Data processing error: {0}",
+ "خواندن کامل ناموفق بود ولی دستگاه پاسخ می‌دهد: {0}": "Full read failed but the device is responding: {0}",
+ "دستگاه یا عامل SNMP آن دوباره راه‌اندازی شد (uptime {0})": "The device or its SNMP agent restarted (uptime {0})",
+ "سوییچ/روتر قدیمی Cisco بدون ENTITY-MIB؛ سریال از chassisId خوانده شد که قابل‌تغییر است — با برچسب دستگاه مقایسه کنید": "Older Cisco switch/router without ENTITY-MIB; the serial was read from chassisId, which can be changed — compare it with the device label"
+}

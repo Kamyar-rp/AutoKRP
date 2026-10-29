@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="fa" dir="rtl" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoKRP</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="booting">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-dash" viewBox="0 0 24 24"><path d="M4 13h6V4H4zm10 7h6V11h-6zM4 20h6v-4H4zm10-16v4h6V4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-run" viewBox="0 0 24 24"><path d="M7 5v14l11-7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-ip" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-hist" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 8v4l2.5 1.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-set" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-cols" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM9.5 5v14M14.5 5v14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M7.5 10l2.5 2-2.5 2M12.5 14.5h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 12h17M12 3.5c2.5 2.6 3.7 5.4 3.7 8.5s-1.2 5.9-3.7 8.5c-2.5-2.6-3.7-5.4-3.7-8.5s1.2-5.9 3.7-8.5z" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+  <symbol id="i-img" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><path d="M5 17l4.5-4.5 3 3 2.5-2.5 4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-mon" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 4 12 2.5-6H21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20h16M7 16v-5M12 16V7M17 16v-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 11v5M12 8h.01" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="9.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5.5c0 4.3-3 7.7-7 9.5-4-1.8-7-5.2-7-9.5V6z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <div class="logo" id="brandLogo">A</div>
+      <div>
+        <div class="brand-name" id="brandName">AutoKRP</div>
+        <div class="brand-sub" id="brandSub">خودکارسازی پاسخ امنیتی</div>
+      </div>
+    </div>
+    <nav class="nav" id="nav">
+      <button data-page="dashboard" class="active"><svg><use href="#i-dash"/></svg>داشبورد</button>
+      <button data-page="run"><svg><use href="#i-run"/></svg>ابزارها<span class="nav-dot" id="navRunDot" hidden></span></button>
+      <button data-page="auto"><svg><use href="#i-auto"/></svg>کارهای خودکار</button>
+      <button data-page="ips"><svg><use href="#i-ip"/></svg>آدرس‌ها<span class="nav-count" id="navReview" hidden></span></button>
+      <button data-page="ssh" id="navSsh"><svg><use href="#i-term"/></svg>SSH<span class="nav-dot" id="navSshDot" hidden></span></button>
+      <button data-page="monitor" data-need-tool="monitor"><svg><use href="#i-mon"/></svg>مانیتورینگ<span class="nav-count err" id="navMonDot" hidden></span></button>
+      <button data-page="assets" data-need-tool="asset"><svg><use href="#i-box"/></svg>دارایی‌ها<span class="nav-count" id="navAssets" hidden></span></button>
+      <button data-page="stats"><svg><use href="#i-chart"/></svg>آمار</button>
+      <button data-page="history"><svg><use href="#i-hist"/></svg>تاریخچه</button>
+      <button data-page="settings" class="adm-only"><svg><use href="#i-set"/></svg>تنظیمات</button>
+      <button data-page="about"><svg><use href="#i-info"/></svg>درباره</button>
+    </nav>
+    <div class="side-foot">
+      <div class="conn-list" id="sideConn"></div>
+      <div class="badge-test" id="testBadge" hidden>حالت تست — بلاک و تیکت واقعی ارسال نمی‌شود</div>
+      <button class="badge-test" id="recBadge" hidden style="cursor:pointer;text-align:start;width:100%;font:inherit">کد بازیابی رمز ندارید — برای ساخت کلیک کنید</button>
+      <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:6px"><div class="side-ver" id="sideVer"></div>
+        <div class="row" style="gap:4px;flex-wrap:wrap;margin-inline-start:auto"><button class="btn sm ghost lang-btn" id="btnLang" title="English / فارسی" data-no-i18n><svg><use href="#i-globe"/></svg><span id="langLabel">English</span></button>
+        <button class="btn sm ghost" id="btnMyTools" title="ابزارهای من" aria-label="ابزارهای من"><svg><use href="#i-set"/></svg></button>
+        <button class="btn sm ghost" id="btnLock" hidden title="قفل کردن برنامه"><svg><use href="#i-lock"/></svg>قفل</button></div></div>
+      <div class="row user-chip" id="userChip" hidden></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- ========== داشبورد ========== -->
+    <section class="page active" id="page-dashboard">
+      <header class="ph">
+        <div><h1>داشبورد</h1><p>وضعیت زنجیره و رویدادهای زنده</p></div>
+        <div class="ph-actions">
+          <button class="btn adm-only" id="btnCheckConn">بررسی اتصال‌ها</button>
+          <button class="btn primary no-ro" data-goto="run">ابزارها</button>
+        </div>
+      </header>
+      <div class="statusbar">
+        <label class="bigswitch">
+          <input type="checkbox" id="masterSwitch">
+          <span class="track"><span class="thumb"></span></span>
+          <span class="bs-text"><b id="masterLabel">کار خودکار خاموش است</b><small id="masterSub">اجرای زمان‌بندی‌شده انجام نمی‌شود</small></span>
+        </label>
+        <div class="sb-conn" id="dashConn"></div>
+        <div class="sb-last"><small>آخرین بررسی</small><b id="lastCheck">—</b></div>
+      </div>
+      <div class="rail-wrap">
+        <div class="rail-head"><h2>آخرین اجرا</h2><span class="muted" id="railMeta"></span></div>
+        <div class="rail" id="dashRail"></div>
+      </div>
+      <div class="counts" id="todayCounts"></div>
+      <div class="panel adm-only health-panel" id="healthBox" hidden></div>
+      <div class="panel feed-panel">
+        <div class="panel-head"><h2>رویدادهای زنده</h2>
+          <div class="seg" id="feedFilter"><button data-f="all" class="on">همه</button><button data-f="warn">هشدار</button><button data-f="error">خطا</button></div>
+        </div>
+        <div class="feed" id="feed"><div class="empty">هنوز رویدادی ثبت نشده است.</div></div>
+      </div>
+    </section>
+
+    <!-- ========== ابزارها ========== -->
+    <section class="page" id="page-run">
+      <header class="ph">
+        <div><h1>ابزارها</h1><p>ابزارها به ترتیب کلیک اجرا می‌شوند؛ هر ابزار ورودی خودش را دارد</p></div>
+        <div class="ph-actions" id="runActs">
+          <button class="btn danger-ghost no-ro" id="btnCancel" hidden>توقف اجرا</button>
+          <button class="btn primary no-ro" id="btnStart">شروع اجرا</button>
+        </div>
+      </header>
+      <div class="tabs big" id="runTabs"><button data-t="run" class="on">اجرای ابزارها</button><button data-t="offline" data-need-tool="offline">ابزارهای آفلاین</button></div>
+      <div id="offPane" hidden><div id="offBody"></div></div>
+      <div id="runPane">
+      <div class="stages" id="stageForm"></div>
+      <div id="runArea" hidden>
+        <div class="rail-wrap"><div class="rail-head"><h2 id="runTitle">اجرای جاری</h2><span class="muted" id="runMeta"></span></div><div class="rail" id="runRail"></div></div>
+        <div id="approvalBox"></div>
+        <div class="panel">
+          <div class="panel-head"><div class="tabs" id="resultTabs"></div><button class="btn sm no-ro" id="btnRunFolder"><svg><use href="#i-folder"/></svg>خروجی فایل‌ها</button></div>
+          <div id="resultBody"></div>
+        </div>
+      </div>
+      </div>
+    </section>
+
+    <!-- ========== کارهای خودکار ========== -->
+    <section class="page" id="page-auto">
+      <header class="ph">
+        <div><h1>کارهای خودکار</h1><p>زمان‌بندی کارهای ذخیره‌شده‌ی ابزارها و کارهای دوره‌ای دیگر</p></div>
+        <div class="ph-actions"><button class="btn ghost adm-only" id="btnUndoAuto" data-undo title="برگرداندن همه‌ی تغییرهای ذخیره‌نشده">لغو تغییرها</button><button class="btn primary adm-only" id="btnSaveAuto">ذخیره</button></div>
+      </header>
+      <div class="tabs big" id="autoTabs">
+        <button data-t="daily" class="on">کارهای زمان‌بندی‌شده</button>
+        <button data-t="retry" data-need-tool="abuse">چک مجدد خطاها</button>
+        <button data-t="backup" data-need-tool="ssh">پشتیبان کانفیگ</button>
+        <button data-t="sshsched" data-need-tool="ssh">زمان‌بندی SSH</button>
+        <button data-t="tpl" data-need-tool="redmine">قالب‌های تیکت Redmine</button>
+      </div>
+      <div id="autoBody"></div>
+    </section>
+
+    <!-- ========== آدرس‌ها ========== -->
+    <section class="page" id="page-ips">
+      <header class="ph">
+        <div><h1>آدرس‌ها</h1><p>همه‌ی IPهای بررسی‌شده در AbuseIPDB، بررسی تکمیلی و FortiGate</p></div>
+        <div class="ph-actions">
+          <div class="colmenu"><button class="btn" id="btnCols"><svg><use href="#i-cols"/></svg>ستون‌ها</button><div class="dropdown" id="colsMenu" hidden></div></div>
+          <button class="btn" id="btnReloadIps">به‌روزرسانی</button>
+          <button class="btn no-ro" id="btnCheckUnchecked" data-need-tool="abuse" hidden></button>
+          <button class="btn warn adm-only" id="btnFullSync">بررسی کامل با FortiGate</button>
+          <button class="btn no-ro" id="btnExport">خروجی CSV</button>
+          <button class="btn primary adm-only" id="btnAddData">ورود / افزودن داده</button>
+        </div>
+      </header>
+      <div class="toolbar">
+        <input type="search" class="search" id="ipSearch" placeholder="جستجو در IP، کشور، ISP، دسته…">
+        <div class="seg" id="ipFilter">
+          <button data-f="all" class="on">همه</button>
+          <button data-f="ABUSE">مخرب</button>
+          <button data-f="CLEAN">غیرمخرب</button>
+          <button data-f="unchecked" title="هنوز در AbuseIPDB بررسی نشده یا بررسی‌اش خطا داده">بررسی‌نشده و خطا</button>
+          <button data-f="fw_pending">جامانده از بلاک</button>
+          <button data-f="intel" title="مخرب در «بررسی تکمیلی» (فید یا لیست داخلی)">مخرب تکمیلی</button>
+        </div>
+        <span class="muted" id="ipCount"></span>
+      </div>
+      <div class="table-wrap" id="ipTableWrap"><table class="grid" id="ipTable"></table></div>
+      <div class="selbar no-ro" id="selBar" hidden>
+        <b id="selCount"></b>
+        <button class="btn sm" data-act="recheck" data-need-tool="abuse">چک مجدد در AbuseIPDB</button>
+        <button class="btn sm warn" data-act="ban" data-need-tool="fortigate">بلاک در FortiGate</button>
+        <button class="btn sm adm-only" data-act="ignore">افزودن به مستثناها</button>
+        <button class="btn sm" data-act="copy">کپی IPها</button>
+        <button class="btn sm ghost" data-act="clear">لغو انتخاب</button>
+      </div>
+    </section>
+
+    <!-- ========== تاریخچه ========== -->
+    <section class="page" id="page-history">
+      <header class="ph">
+        <div><h1>تاریخچه</h1><p>همه‌ی عملیات انجام‌شده</p></div>
+        <div class="ph-actions"><button class="btn adm-only" id="btnRunsFolder"><svg><use href="#i-folder"/></svg>خروجی لاگ‌ها</button><button class="btn" id="btnReloadHist">به‌روزرسانی</button></div>
+      </header>
+      <div class="toolbar">
+        <input type="search" class="search" id="histSearch" placeholder="جستجو…">
+        <div class="seg" id="histFilter">
+          <button data-f="all" class="on">همه</button><button data-f="splunk">Splunk</button><button data-f="abuse">AbuseIPDB</button>
+          <button data-f="ban">بلاک</button><button data-f="ticket">تیکت</button><button data-f="security">امنیت</button><button data-f="ssh">SSH</button><button data-f="terminal">ترمینال</button><button data-f="transfer">انتقال فایل</button><button data-f="scan">اسکن شبکه</button><button data-f="error">خطاها</button>
+        </div>
+        <span class="muted" id="histCount"></span>
+      </div>
+      <div class="table-wrap"><table class="grid" id="histTable"></table></div>
+    </section>
+
+    <!-- ========== تنظیمات ========== -->
+    <section class="page" id="page-settings">
+      <header class="ph">
+        <div><h1>تنظیمات</h1><p>اتصال‌ها، فهرست‌ها و ظاهر برنامه</p></div>
+        <div class="ph-actions"><button class="btn ghost" id="btnUndoSettings" data-undo title="برگرداندن همه‌ی تغییرهای ذخیره‌نشده">لغو تغییرها</button><button class="btn primary" id="btnSaveSettings">ذخیره‌ی تنظیمات</button></div>
+      </header>
+      <div class="tabs big" id="setTabs">
+        <button data-t="general" class="on">عمومی</button>
+        <button data-t="splunk" data-need-tool="splunk">Splunk</button>
+        <button data-t="abuseipdb" data-need-tool="abuse">AbuseIPDB</button>
+        <button data-t="fortigate" data-need-tool="fortigate">FortiGate</button>
+        <button data-t="redmine" data-need-tool="redmine">Redmine</button>
+        <button data-t="dns" data-need-tool="dns">DNS</button>
+        <button data-t="scan" data-need-tool="scan">اسکن شبکه</button>
+        <button data-t="intel" data-need-tool="intel">بررسی تکمیلی</button>
+        <button data-t="terminal" data-need-tool="term">ترمینال و انتقال فایل</button>
+        <button data-t="monitor" data-need-tool="monitor">مانیتورینگ</button>
+        <button data-t="notify">اعلان‌ها</button>
+        <button data-t="users">کاربران و دسترسی‌ها</button>
+        <button data-t="security">امنیت</button>
+        <button data-t="database">پایگاه داده</button>
+      </div>
+      <div id="setBody"></div>
+    </section>
+
+    <!-- ========== SSH ========== -->
+    <section class="page" id="page-ssh">
+      <header class="ph">
+        <div><h1>SSH</h1><p>اجرای اسکریپت روی سرورهای لینوکس و تجهیزات شبکه</p></div>
+        <div class="ph-actions" id="sshActions"></div>
+      </header>
+      <div class="tabs big" id="sshTabs">
+        <button data-t="devices" class="on">دستگاه‌ها</button>
+        <button data-t="creds" class="no-ro">اعتبارنامه‌ها</button>
+        <button data-t="run">اجرا</button>
+        <button data-t="term" class="no-ro" data-need-tool="term">ترمینال</button>
+        <button data-t="xfer" class="no-ro" data-need-tool="term">انتقال فایل</button>
+        <button data-t="backups">پشتیبان کانفیگ</button>
+        <button data-t="fgu" class="adm-only">به‌روزرسانی FortiGate</button>
+        <button data-t="jobs">سابقه</button>
+      </div>
+      <div id="sshBody"></div>
+    </section>
+
+    <!-- ========== مانیتورینگ ========== -->
+    <section class="page" id="page-monitor">
+      <header class="ph">
+        <div><h1>مانیتورینگ</h1><p>وضعیت لحظه‌ای سرورها، تجهیزات و اینترنت؛ هشدار صوتی و اعلان هنگام قطعی</p></div>
+        <div class="ph-actions" id="monActions"></div>
+      </header>
+      <div id="monBody"></div>
+    </section>
+
+    <!-- ========== دارایی‌ها ========== -->
+    <section class="page" id="page-assets">
+      <header class="ph">
+        <div><h1>دارایی‌ها</h1><p>دستگاه‌ها و قطعه‌ها با شناسه‌ی سریال؛ هر تغییر با تأیید ادمین اعمال می‌شود</p></div>
+        <div class="ph-actions" id="asActions"></div>
+      </header>
+      <div class="tabs big" id="asTabs"><button data-t="list" class="on">دارایی‌ها</button><button data-t="pending">در انتظار تأیید<span class="n" id="asPendN" hidden></span></button><button data-t="hist">تاریخچه</button><button data-t="scan" class="adm-only">اسکن و تنظیمات</button></div>
+      <div id="asBody"></div>
+    </section>
+
+    <!-- ========== آمار ========== -->
+    <section class="page" id="page-stats">
+      <header class="ph">
+        <div><h1>آمار عملکرد</h1><p id="statsSub">روند هر بخش در بازه‌ی انتخابی، با مقایسه‌ی دوره‌ی قبل</p></div>
+        <div class="ph-actions">
+          <div class="seg" id="stTab"><button data-v="general" class="on">گزارش‌های عمومی</button><button data-v="repeat">IPهای تکراری</button><button data-v="monitor" data-need-tool="monitor">مانیتورینگ</button></div>
+          <div class="seg" id="stCal"><button data-v="jalali" class="on">شمسی</button><button data-v="gregorian">میلادی</button></div>
+          <div class="seg" id="stRange"><button data-v="7d">۷ روز</button><button data-v="30d" class="on">۳۰ روز</button><button data-v="90d">۹۰ روز</button><button data-v="12m">۱۲ ماه</button></div>
+          <button class="btn no-ro" id="btnStatsPngAll"><svg><use href="#i-img"/></svg>ذخیره‌ی همه‌ی نمودارها</button>
+          <button class="btn no-ro" id="btnStatsCsv">خروجی CSV</button>
+        </div>
+      </header>
+      <div id="statsBody"></div>
+    </section>
+
+    <!-- ========== درباره ========== -->
+    <section class="page" id="page-about">
+      <header class="ph"><div><h1>درباره</h1><p>اطلاعات برنامه و سازنده</p></div></header>
+      <div id="aboutBody"></div>
+    </section>
+  </main>
+</div>
+<div class="modal-back" id="modalBack" hidden><div class="modal" id="modal" role="dialog" aria-modal="true"></div></div>
+<div class="lock-screen" id="lockScreen" hidden><div class="lock-card" id="lockCard"></div></div>
+<div class="toasts" id="toasts"></div>
+<script src="i18n_en.js"></script>
+<script src="ports.js"></script>
+<script src="i18n.js"></script>
+<script src="app.js"></script>
+<script src="trange.js"></script>
+<script src="sshlive.js"></script>
+<script src="monitor.js"></script>
+<script src="snmp.js"></script>
+<script src="noc.js"></script>
+<script src="monevents.js"></script>
+<script src="assets.js"></script>
+<script src="offhash.js"></script>
+<script src="offline.js"></script>
+<script src="dbui.js"></script>
+<script src="keys.js"></script>
+</body>
+</html>

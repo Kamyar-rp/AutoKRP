@@ -1,0 +1,953 @@
+"use strict";
+/* ================================================================ SSH زنده: ترمینال و انتقال فایل
+ * از app.js استفاده می‌کند ($، api، openModal، SSH، toast، ...). xterm.js فقط با اولین باز شدن ترمینال بارگذاری می‌شود. */
+
+/* ---------- بارگذاری تنبل xterm.js ---------- */
+let _xtermReady = null;
+function loadXterm() {
+  if (_xtermReady) return _xtermReady;
+  // حالت وب: تگ‌های <style> خود xterm فقط با nonce همین صفحه مجازند (CSP)
+  const nm = document.querySelector('meta[name="akrp-style-nonce"]');
+  if (nm && !document.__akrpNonce) {
+    const nonce = nm.content, orig = document.createElement.bind(document);
+    document.createElement = function (tag, opts) { const el = orig(tag, opts); if (String(tag).toLowerCase() === "style") el.nonce = nonce; return el; };
+    document.__akrpNonce = true;
+  }
+  const add = (tag, attrs) => new Promise((res, rej) => { const e = document.createElement(tag); Object.assign(e, attrs); e.onload = res; e.onerror = () => rej(new Error("load " + (attrs.src || attrs.href))); document.head.appendChild(e); });
+  _xtermReady = Promise.all([add("link", { rel: "stylesheet", href: "vendor/xterm.css" }), add("script", { src: "vendor/xterm.js" })])
+    .then(() => add("script", { src: "vendor/addon-fit.js" }));
+  _xtermReady.catch(() => { _xtermReady = null; });
+  return _xtermReady;
+}
+
+// فایلی که بیرون از ناحیه‌ی رها کردن انداخته شود نباید پنجره را به آن فایل ببرد
+document.addEventListener("dragover", (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes("Files")) e.preventDefault(); });
+document.addEventListener("drop", (e) => { if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) e.preventDefault(); });
+
+/* ---------- ترجیحات هر مرورگر ---------- */
+const tt = (s) => (window.I18N ? window.I18N.t(s) : s);
+const TPREF_KEY = "akrp_term";
+const TP = Object.assign({ font: 14, highlight: true, copySel: true, theme: "dark", stats: true }, (() => { try { return JSON.parse(localStorage.getItem(TPREF_KEY) || "{}"); } catch (_) { return {}; } })());
+function saveTP() { try { localStorage.setItem(TPREF_KEY, JSON.stringify(TP)); } catch (_) { /* */ } }
+
+const TCOLORS = ["#4fc1b4", "#e7ae45", "#6fa8f0", "#ec6a5e", "#b58cf0", "#5cc48d", "#f08cc6", "#9fb3c8"];
+const XTHEME = { background: "#0c141d", foreground: "#d8e2ec", cursor: "#4fc1b4", cursorAccent: "#0c141d", selectionBackground: "#2c4a6a",
+  black: "#1b2633", red: "#ec6a5e", green: "#5cc48d", yellow: "#e7ae45", blue: "#6fa8f0", magenta: "#c38cf0", cyan: "#4fc1b4", white: "#d8e2ec",
+  brightBlack: "#5f7590", brightRed: "#ff8a7f", brightGreen: "#7fe0a9", brightYellow: "#ffd27a", brightBlue: "#94c1ff", brightMagenta: "#dcb0ff", brightCyan: "#7fe3d7", brightWhite: "#ffffff" };
+
+const TERM = { tabs: [], active: null, seq: 0 };
+
+/* ---------- رنگ‌آمیزی کلمه‌های مهم (بدون دست زدن به رنگ‌های خود دستگاه) ---------- */
+const HL_RULES = [
+  [/\b(error|errors|failed|failure|fail|denied|invalid|down|unreachable|refused|critical|err-disabled|timeout|timed out|not found|incomplete|rejected)\b/gi, "1;31"],
+  [/\b(warning|warn|deprecated|notice|flapping|retrying)\b/gi, "1;33"],
+  [/\b(up|ok|success|successful|succeeded|connected|established|enabled|active|running|full|accepted|passed)\b/gi, "1;32"],
+  [/\b(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?\b/g, "36"],
+  [/\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b|\b(?:[0-9a-f]{4}\.){2}[0-9a-f]{4}\b/gi, "35"],
+  [/\b(?:(?:Gi|Te|Fa|Eth|Ethernet|GigabitEthernet|TenGigabitEthernet|FastEthernet|Po|Port-channel|Vlan|Lo|Loopback|Tu|Tunnel|port|wan|lan|internal|ens|eth|enp)\d+(?:\/\d+)*(?:\.\d+)?)\b/g, "34"],
+];
+const ESC_RE = /\x1b(?:\[[0-9;?<>=!]*[ -\/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[()][0-9A-Za-z]|[@-Z\\-_])/g;
+function hlSegment(txt) {
+  const marks = [];
+  for (const [re, c] of HL_RULES) { re.lastIndex = 0; let m; while ((m = re.exec(txt))) { if (!m[0]) { re.lastIndex++; continue; } marks.push([m.index, m.index + m[0].length, c]); } }
+  if (!marks.length) return txt;
+  marks.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  let out = "", pos = 0;
+  for (const [s, e, c] of marks) { if (s < pos) continue; out += txt.slice(pos, s) + `\x1b[${c}m` + txt.slice(s, e) + "\x1b[22;39m"; pos = e; }
+  return out + txt.slice(pos);
+}
+function highlight(t, s) {
+  // دنباله‌ی ESC ناقص انتهای تکه برای تکه‌ی بعد نگه داشته می‌شود
+  s = t.pend + s; t.pend = "";
+  const li = s.lastIndexOf("\x1b");
+  if (li >= 0 && li > s.length - 64) { const tail = s.slice(li); ESC_RE.lastIndex = 0; const m = ESC_RE.exec(tail); if (!m || m.index !== 0) { t.pend = tail; s = s.slice(0, li); } }
+  let out = "", pos = 0, m;
+  ESC_RE.lastIndex = 0;
+  while ((m = ESC_RE.exec(s))) {
+    const seg = s.slice(pos, m.index);
+    out += t.fg ? seg : hlSegment(seg);
+    const q = m[0];
+    if (q.endsWith("m") && q.startsWith("\x1b[")) {            // وضعیت رنگ متن خود دستگاه
+      const ps = q.slice(2, -1).split(";");
+      for (let i = 0; i < ps.length; i++) {
+        const n = Number(ps[i] || 0);
+        if (n === 0 || n === 39) t.fg = false;
+        else if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97)) t.fg = true;
+        else if (n === 38) { t.fg = true; i += ps[i + 1] === "5" ? 2 : 4; }
+        else if (n === 48) i += ps[i + 1] === "5" ? 2 : 4;
+      }
+    }
+    out += q; pos = m.index + q.length;
+  }
+  const rest = s.slice(pos);
+  return out + (t.fg ? rest : hlSegment(rest));
+}
+
+/* ---------- صفحه‌ی ترمینال ---------- */
+function termRoot() {
+  let r = $("#termRoot");
+  if (!r) {
+    r = document.createElement("div"); r.id = "termRoot"; r.hidden = true;
+    r.innerHTML = `<div class="term-bar"><div class="term-tabs" id="termTabs" data-no-i18n></div>
+      <button class="btn sm primary" id="termNew"><svg><use href="#i-term"/></svg>اتصال تازه</button>
+      <div class="term-tools">
+        <button class="btn sm ghost" id="termFontM" title="کوچک کردن متن">A−</button><button class="btn sm ghost" id="termFontP" title="بزرگ کردن متن">A+</button>
+        <label class="chk" title="رنگی کردن کلمه‌های مهم مثل error، up/down، IP و نام اینترفیس‌ها"><input type="checkbox" id="termHl" ${TP.highlight ? "checked" : ""}>رنگ کلمه‌ها</label>
+        <label class="chk" title="متن انتخاب‌شده خودکار کپی شود (کلیک راست = چسباندن)"><input type="checkbox" id="termCs" ${TP.copySel ? "checked" : ""}>کپی با انتخاب</label>
+        <label class="chk" title="مصرف CPU، RAM، دیسک و شبکه‌ی سرورهای لینوکس، هر ۳ ثانیه (از یک کانال جدا روی همان اتصال؛ ترمینال دست نمی‌خورد)"><input type="checkbox" id="termSt" ${TP.stats ? "checked" : ""}>نوار منابع</label>
+      </div></div>
+      <div class="term-stage" id="termStage"></div>
+      <div class="term-stats" id="termStats" hidden></div>
+      <div class="term-status" id="termStatus"></div>`;
+    $("#sshBody").after(r);
+    $("#termNew").onclick = () => termConnectDlg();
+    $("#termFontM").onclick = () => termFont(-1);
+    $("#termFontP").onclick = () => termFont(1);
+    $("#termHl").onchange = (e) => { TP.highlight = e.target.checked; saveTP(); };
+    $("#termCs").onchange = (e) => { TP.copySel = e.target.checked; saveTP(); };
+    $("#termSt").onchange = (e) => { TP.stats = e.target.checked; saveTP(); termStatsRender(); termStatsTick(); };
+    window.addEventListener("resize", () => { clearTimeout(TERM._rz); TERM._rz = setTimeout(termFitActive, 120); });
+  }
+  return r;
+}
+function termFont(d) {
+  TP.font = Math.max(9, Math.min(28, TP.font + d)); saveTP();
+  TERM.tabs.forEach((t) => { t.term.options.fontSize = TP.font; });
+  termFitActive();
+}
+
+async function sshTerm() {
+  $("#sshActions").innerHTML = "";
+  $("#sshBody").innerHTML = "";
+  const r = termRoot(); r.hidden = false;
+  if (!TERM.loaded) {
+    TERM.loaded = true;
+    const l = await api("term_list");
+    if (l.ok) for (const s of l.sessions) if (!TERM.tabs.find((t) => t.id === s.id)) await termAttach(s);
+  }
+  if (!TERM.tabs.length) $("#termStage").innerHTML = `<div class="empty term-empty">هنوز ترمینالی باز نیست. «اتصال تازه» را بزنید؛ می‌توانید چند ترمینال هم‌زمان در تب‌های جدا داشته باشید.<br><small class="muted">Ctrl+Shift+C کپی · Ctrl+Shift+V یا کلیک راست چسباندن · متن چندخطی پیش از ارسال تأیید می‌خواهد</small></div>`;
+  termRenderTabs(); setTimeout(termFitActive, 30);
+}
+function termHide() { const r = $("#termRoot"); if (r) r.hidden = true; }
+
+function termRenderTabs() {
+  const box = $("#termTabs"); if (!box) return;
+  box.innerHTML = TERM.tabs.map((t) => `<div class="term-tab ${t.id === TERM.active ? "on" : ""} ${t.closed ? "dead" : ""}" data-tid="${t.id}" title="${esc(t.host + ":" + t.port)}">
+    <span class="dot" style="background:${t.color}"></span><span class="tt">${esc(t.title)}</span>${t.recording ? `<span class="rec" title="متن این نشست ضبط می‌شود">●</span>` : ""}
+    <button class="x" data-tclose="${t.id}" title="بستن"><svg><use href="#i-x"/></svg></button></div>`).join("");
+  $$("[data-tid]", box).forEach((el) => (el.onclick = (e) => { if (!e.target.closest("[data-tclose]")) termActivate(el.dataset.tid); }));
+  $$("[data-tclose]", box).forEach((b) => (b.onclick = () => termCloseTab(b.dataset.tclose)));
+  termStatus(); termStatsRender();
+}
+function termStatus() {
+  const t = TERM.tabs.find((x) => x.id === TERM.active), el = $("#termStatus"); if (!el) return;
+  el.innerHTML = t ? `<span class="dot" style="background:${t.color}"></span><span class="ltr">${esc(t.user ? t.user + "@" : "")}${esc(t.host)}:${t.port}</span>
+    ${t.kind === "adhoc" ? `<span class="tag mute">موقت</span>` : ""}${t.recording ? `<span class="tag warn">ضبط روشن</span>` : ""}
+    ${t.closed ? `<span class="tag err">قطع: ${esc(t.reason || "")}</span><button class="btn sm" id="termRe">اتصال دوباره</button>` : `<span class="tag ok">وصل</span>`}
+    <span class="muted ltr" style="margin-inline-start:auto">${t.cols}×${t.rows}</span>` : "";
+  const re = $("#termRe"); if (re) re.onclick = () => termReconnect(t);
+}
+function termActivate(id) {
+  TERM.active = id;
+  TERM.tabs.forEach((t) => (t.el.hidden = t.id !== id));
+  const emp = $(".term-empty"); if (emp) emp.remove();
+  termRenderTabs();
+  const t = TERM.tabs.find((x) => x.id === id);
+  termStatsRender();
+  if (t) setTimeout(() => { termFit(t); t.term.focus(); termStatsTick(); }, 20);
+}
+function termFit(t) {
+  if (!t || t.el.hidden || !t.el.offsetWidth) return;
+  try { t.fit.fit(); } catch (_) { /* */ }
+}
+function termFitActive() { termFit(TERM.tabs.find((x) => x.id === TERM.active)); }
+
+async function termConnectDlg(preset) {
+  const devs = SSH.devices.filter((d) => d.has_password && d.username);
+  const p = preset || {};
+  const res = await openModal({
+    title: "اتصال ترمینال SSH", wide: false,
+    body: `<div class="seg" id="tcMode" style="margin-bottom:12px"><button data-v="dev" class="${p.adhoc ? "" : "on"}">دستگاه ذخیره‌شده</button><button data-v="adhoc" class="${p.adhoc ? "on" : ""}">اتصال موقت</button></div>
+      <div id="tcDev" ${p.adhoc ? "hidden" : ""}>${devs.length ? `<label class="field"><span>دستگاه</span><select id="tcDevSel">${devs.map((d) => `<option value="${d.id}" ${d.id === p.device_id ? "selected" : ""}>${esc(d.name)} — ${esc(d.host)}${d.personal ? " (شخصی)" : ""}</option>`).join("")}</select></label>
+        <p class="hint">یوزر و رمز ذخیره‌شده‌ی دستگاه استفاده می‌شود و به مرورگر نمی‌آید. برای تجهیزات Cisco با «ورود به enable»، enable خودکار زده می‌شود.</p>`
+        : `<div class="empty">دستگاهی با یوزر و رمز ذخیره‌شده ندارید؛ از «اتصال موقت» استفاده کنید یا در تب «دستگاه‌ها» دستگاه بسازید.</div>`}</div>
+      <div id="tcAd" ${p.adhoc ? "" : "hidden"}><div class="form-grid">
+        <label class="field"><span>آدرس</span><input id="tcHost" class="ltr" value="${esc(p.host || "")}" placeholder="10.0.0.1"></label>
+        <label class="field"><span>پورت</span><input id="tcPort" class="ltr" value="${esc(p.port || 22)}"></label>
+        <label class="field"><span>یوزر</span><input id="tcUser" class="ltr" value="${esc(p.username || "")}" autocomplete="off"></label>
+        <label class="field"><span>رمز</span><input id="tcPass" type="password" class="ltr" autocomplete="off"></label>
+        <label class="field"><span>نوع دستگاه</span><select id="tcType">${typeOptions(p.device_type || "linux")}</select></label>
+        <label class="chk" style="align-self:end"><input type="checkbox" id="tcLegacy" ${p.legacy ? "checked" : ""}>الگوریتم‌های قدیمی (دستگاه‌های قدیمی)</label>
+      </div><p class="hint">اتصال موقت ذخیره نمی‌شود؛ فقط در تاریخچه ثبت می‌شود. بار اول اثر انگشت کلید دستگاه برای تأیید نشان داده می‌شود.</p></div>`,
+    foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">اتصال</button>`,
+    onOpen: (m, close) => {
+      $$("#tcMode button", m).forEach((b) => (b.onclick = () => { $$("#tcMode button", m).forEach((x) => x.classList.toggle("on", x === b)); $("#tcDev", m).hidden = b.dataset.v !== "dev"; $("#tcAd", m).hidden = b.dataset.v === "dev"; }));
+      $("[data-r='0']", m).onclick = () => close(null);
+      $("[data-r='1']", m).onclick = () => {
+        if (!$("#tcAd", m).hidden) {
+          const host = $("#tcHost", m).value.trim(); if (!host) return toast("آدرس را وارد کنید", "error");
+          close({ adhoc: { host, port: Number($("#tcPort", m).value) || 22, username: $("#tcUser", m).value.trim(), password: $("#tcPass", m).value, device_type: $("#tcType", m).value, legacy: $("#tcLegacy", m).checked } });
+        } else { const s = $("#tcDevSel", m); if (!s) return; close({ device_id: Number(s.value) }); }
+      };
+      const pw = $("#tcPass", m); if (pw) pw.onkeydown = (e) => { if (e.key === "Enter") $("[data-r='1']", m).click(); };
+    },
+  });
+  if (res) await termOpen(res);
+}
+async function hostKeyConfirm(c) {
+  return confirm2({ title: "تأیید کلید دستگاه", confirm: "اعتماد و اتصال",
+    body: `<p>این اولین اتصال به <b class="ltr">${esc(c.host)}</b> است. اثر انگشت کلید را با خود دستگاه مقایسه کنید:</p>
+      <p class="ltr tech" style="font-size:13px;word-break:break-all">${esc(c.type)} ${esc(c.fingerprint)}</p>
+      <p class="hint">با تأیید، کلید ثبت می‌شود و از این به بعد اگر عوض شود اتصال رد می‌شود.</p>` });
+}
+/* اتصال قابل لغو: نوار «در حال اتصال… [لغو]» (Esc هم لغو می‌کند)؛ شناسه‌ی تلاش را رابط می‌سازد */
+function connLabel(target) {
+  if (target.adhoc) return target.adhoc.host + (target.adhoc.port ? ":" + target.adhoc.port : "");
+  const d = (SSH.devices || []).find((x) => x.id === target.device_id); return d ? (d.name || d.host) : "";
+}
+async function connTry(btn, label, call) {
+  const aid = (window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2)).replace(/[^A-Za-z0-9]/g, "");
+  const bar = document.createElement("div"); bar.className = "conn-wait";
+  bar.innerHTML = `<span class="cw-spin"></span><span>در حال اتصال به <b class="ltr">${esc(label)}</b>…</span><button class="btn sm" title="Esc">لغو</button>`;
+  document.body.appendChild(bar);
+  let cancelled = false;
+  const cancel = () => { if (cancelled) return; cancelled = true; const b = bar.querySelector("button"); b.disabled = true; b.textContent = "در حال لغو…"; api("conn_cancel", aid); };
+  bar.querySelector("button").onclick = cancel;
+  const key = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel(); } };
+  document.addEventListener("keydown", key, true);
+  try { return await withSpin(btn, () => call(aid)); }
+  finally { document.removeEventListener("keydown", key, true); bar.remove(); }
+}
+async function termOpen(target, accept) {
+  await loadXterm().catch(() => null);
+  if (!window.Terminal) return toast("بارگذاری ترمینال ناموفق بود", "error");
+  const t0 = termTemp();
+  const r = await connTry($("#termNew"), connLabel(target), (aid) => api("term_open", target, t0.cols, t0.rows, accept || null, aid));
+  if (!r.ok) return toast(r.error, r.cancelled ? "warn" : "error");
+  if (r.confirm) { if (await hostKeyConfirm(r.confirm)) return termOpen(target, r.confirm.fingerprint); return; }
+  const s = r.session;
+  s.user = target.adhoc ? target.adhoc.username : ((SSH.devices.find((d) => d.id === target.device_id) || {}).username || "");
+  s.target = target.adhoc ? { adhoc: { ...target.adhoc, password: "" } } : target;
+  await termAttach(s);
+}
+function termTemp() {
+  // اندازه‌ی تقریبی پیش از ساخت ترمینال (بعد با fit دقیق می‌شود)
+  const st = $("#termStage"), w = (st && st.clientWidth) || 900, h = (st && st.clientHeight) || 500;
+  return { cols: Math.max(40, Math.floor(w / (TP.font * 0.6))), rows: Math.max(10, Math.floor(h / (TP.font * 1.2))) };
+}
+async function termAttach(s) {
+  await loadXterm();
+  const el = document.createElement("div"); el.className = "term-pane"; el.hidden = true; el.setAttribute("data-no-i18n", "");   // خروجی دستگاه ترجمه نشود
+  $("#termStage").appendChild(el);
+  const term = new window.Terminal({ fontFamily: 'Consolas, "Cascadia Mono", "DejaVu Sans Mono", monospace', fontSize: TP.font, cursorBlink: true,
+    scrollback: 5000, theme: XTHEME, allowProposedApi: false, rightClickSelectsWord: false, convertEol: false });
+  const fit = new window.FitAddon.FitAddon(); term.loadAddon(fit); term.open(el);
+  const t = { ...s, el, term, fit, next: 0, dec: new TextDecoder("utf-8"), fg: false, pend: "", color: TCOLORS[TERM.seq++ % TCOLORS.length], cols: term.cols, rows: term.rows, out: "", sending: false };
+  TERM.tabs.push(t);
+  // ورودی: تجمیع و ارسال ترتیبی
+  term.onData((d) => { if (!t.closed) { t.out += d; termFlush(t); } });
+  term.onResize(({ cols, rows }) => { t.cols = cols; t.rows = rows; termStatus(); clearTimeout(t._rz); t._rz = setTimeout(() => !t.closed && api("term_resize", t.id, cols, rows), 150); });
+  term.onSelectionChange(() => { if (TP.copySel && term.hasSelection()) termCopy(term.getSelection()); });
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== "keydown") return true;
+    if (e.ctrlKey && e.shiftKey && (e.key === "C" || e.key === "c")) { if (term.hasSelection()) termCopy(term.getSelection()); return false; }
+    if (e.ctrlKey && e.shiftKey && (e.key === "V" || e.key === "v")) { termPaste(t); return false; }
+    return true;
+  });
+  el.addEventListener("contextmenu", (e) => { e.preventDefault(); termPaste(t); });
+  el.addEventListener("paste", (e) => {           // Ctrl+V معمولی
+    const txt = (e.clipboardData && e.clipboardData.getData("text")) || "";
+    e.preventDefault(); e.stopPropagation(); termPasteText(t, txt);
+  }, true);
+  termActivate(t.id);
+  termPoll(t);
+}
+async function termCopy(s) { try { await navigator.clipboard.writeText(s); } catch (_) { /* بدون دسترسی clipboard */ } }
+async function termPaste(t) {
+  let txt = "";
+  try { txt = await navigator.clipboard.readText(); } catch (_) { return toast("دسترسی به کلیپ‌بورد نیست؛ از Ctrl+V استفاده کنید", "warn"); }
+  termPasteText(t, txt);
+}
+async function termPasteText(t, txt) {
+  if (!txt || t.closed) return;
+  txt = txt.replace(/\r\n/g, "\n");
+  const lines = txt.split("\n").filter((x, i, a) => x || i < a.length - 1);
+  if (lines.length > 1 || txt.length > 2000) {
+    const ok = await confirm2({ title: "چسباندن چندخطی", confirm: "ارسال به دستگاه",
+      body: `<p>این متن ${num(lines.length)} خط دارد و هر خط مثل یک دستور اجرا می‌شود:</p><pre class="ltr paste-prev" data-no-i18n>${esc(txt.slice(0, 3000))}${txt.length > 3000 ? "\n…" : ""}</pre>` });
+    t.term.focus();
+    if (!ok) return;
+  }
+  t.term.paste(txt);
+}
+async function termFlush(t) {
+  if (t.sending) return;
+  t.sending = true;
+  try {
+    while (t.out && !t.closed) {
+      const d = t.out; t.out = "";
+      const r = await api("term_write", t.id, d);
+      if (!r.ok) { termDead(t, r.error); break; }
+    }
+  } finally { t.sending = false; }
+}
+async function termPoll(t) {
+  t.polling = true;
+  while (!t.closed && TERM.tabs.includes(t)) {
+    const r = await api("term_read", t.id, t.next);
+    if (!TERM.tabs.includes(t)) break;
+    if (!r.ok) { termDead(t, r.error); break; }
+    if (r.lost) t.term.write("\r\n\x1b[33m" + tt("[بخشی از خروجی قدیمی‌تر از حافظه حذف شده است]") + "\x1b[0m\r\n");
+    if (r.data) {
+      const bin = atob(r.data), u = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+      let s = t.dec.decode(u, { stream: true });
+      if (TP.highlight) s = highlight(t, s); else if (t.pend) { s = t.pend + s; t.pend = ""; }
+      t.term.write(s);
+    }
+    t.next = r.next;
+    if (r.closed) { termDead(t, r.reason); break; }
+  }
+  t.polling = false;
+}
+function termDead(t, reason) {
+  if (t.closed) return;
+  t.closed = true; t.reason = reason || "";
+  const msg = tt(reason ? `[اتصال بسته شد: ${reason}]` : "[اتصال بسته شد]");
+  t.term.write("\r\n\x1b[1;33m" + msg + "\x1b[0m\r\n");
+  termRenderTabs();
+}
+async function termCloseTab(id) {
+  const t = TERM.tabs.find((x) => x.id === id); if (!t) return;
+  if (!t.closed && !(await confirm2({ title: "بستن ترمینال", body: `<p>اتصال به <b>${esc(t.title)}</b> قطع شود؟</p>`, confirm: "قطع اتصال", danger: true }))) return;
+  t.closed = true;
+  api("term_close", t.id);
+  TERM.tabs = TERM.tabs.filter((x) => x !== t);
+  t.term.dispose(); t.el.remove();
+  if (TERM.active === id) TERM.active = TERM.tabs.length ? TERM.tabs[TERM.tabs.length - 1].id : null;
+  if (TERM.active) termActivate(TERM.active); else { termRenderTabs(); sshTerm(); }
+}
+async function termReconnect(t) {
+  api("term_close", t.id);
+  if (t.target && t.target.adhoc) return termConnectDlg({ ...t.target.adhoc, adhoc: true });
+  if (t.target) return termOpen(t.target);
+  termConnectDlg();
+}
+
+/* ================================================================ انتقال فایل (شبیه WinSCP) */
+const XF = { conns: [], cur: null, desktop: !WEB, limit: 0, limitH: "", local: { cwd: "", items: [], sel: new Set() }, rsel: new Set(),
+  sub: "files", jobs: [], polling: false, sort: { k: "name", d: 1 }, tftp: null, tftpSel: new Set(),
+  focus: "r", files: new Map(), kc: { l: null, r: null }, ka: { l: null, r: null } };   // kc: ردیف مکان‌نما (کیبورد)، ka: لنگر Shift   // focus: پنل فعال برای Backspace؛ files: فایل‌های مرورگر برای «تلاش مجدد»
+
+/* پنل فعال (برای کلیدها، keys.js) = آخرین پنلی که رویش کلیک شده (مثل WinSCP) */
+document.addEventListener("mousedown", (e) => {
+  const p = e.target.closest && e.target.closest("#xfLocal, #xfRemote"); if (!p) return;
+  XF.focus = p.id === "xfLocal" ? "l" : "r";
+  $$(".xf-pane").forEach((x) => x.classList.toggle("act", x === p));
+}, true);
+
+async function sshXfer() {
+  termHide();
+  $("#sshActions").innerHTML = "";
+  const c = await api("xfer_conns");
+  if (c.ok) { XF.conns = c.conns; XF.limit = c.limit; XF.limitH = c.limit_h; XF.desktop = c.desktop; }
+  if (XF.cur && !XF.conns.find((x) => x.id === XF.cur.id)) XF.cur = null;
+  if (!XF.cur && XF.conns.length) XF.cur = XF.conns[0];
+  $("#sshBody").innerHTML = `<div class="xf-top"><div class="seg" id="xfSub"><button data-v="files" class="${XF.sub === "files" ? "on" : ""}">SFTP / SCP / FTP</button><button data-v="tftp" class="${XF.sub === "tftp" ? "on" : ""}">سرور TFTP</button></div>
+      <span class="muted">${XF.limit ? `سقف حجم هر فایل: <b class="ltr">${esc(XF.limitH)}</b>` : "بدون محدودیت حجم"}</span></div>
+    <div id="xfMain"></div>
+    <div class="panel xf-queue"><div class="panel-head"><h3>انتقال‌ها</h3><button class="btn sm ghost" id="xfClear">پاک کردن تمام‌شده‌ها</button></div><div id="xfJobs"></div></div>`;
+  $$("#xfSub button").forEach((b) => (b.onclick = () => { XF.sub = b.dataset.v; sshXfer(); }));
+  $("#xfClear").onclick = async () => { await api("xfer_clear"); xfPollJobs(true); };
+  if (XF.sub === "tftp") await tftpRender(); else xfRenderFiles();
+  xfPollJobs(true);
+}
+
+function xfRenderFiles() {
+  const conns = XF.conns;
+  $("#xfMain").innerHTML = `<div class="xf-conns">${conns.map((c) => `<div class="term-tab ${XF.cur && c.id === XF.cur.id ? "on" : ""}" data-xc="${c.id}"><span class="tag info">${c.proto.toUpperCase()}</span><span class="tt">${esc(c.title)}</span><button class="x" data-xclose="${c.id}" title="قطع اتصال"><svg><use href="#i-x"/></svg></button></div>`).join("")}
+      <button class="btn sm primary" id="xfNew">اتصال تازه</button></div>
+    <div class="xf-panes ${XF.desktop ? "" : "web"}">
+      <div class="xf-pane ${XF.focus === "l" ? "act" : ""}" id="xfLocal"></div>
+      <div class="xf-pane ${XF.focus === "r" ? "act" : ""}" id="xfRemote"></div>
+    </div>
+    <div class="kbd-hint">${XF.desktop ? `<kbd>Tab</kbd> پنل دیگر · ` : ""}<kbd>↑</kbd><kbd>↓</kbd> حرکت · <kbd>Enter</kbd> باز کردن · <kbd>Backspace</kbd> پوشه‌ی بالاتر · <kbd>Space</kbd>/<kbd>Shift</kbd> انتخاب · <kbd>Ctrl+A</kbd> همه · <kbd>F5</kbd> کپی به پنل دیگر · <kbd>F2</kbd> تغییر نام · <kbd>F7</kbd> پوشه‌ی تازه · <kbd>Delete</kbd> حذف · <kbd>Ctrl+R</kbd> تازه کردن · تایپ حروف = پرش به نام</div>`;
+  $$("[data-xc]").forEach((el) => (el.onclick = (e) => { if (e.target.closest("[data-xclose]")) return; XF.cur = XF.conns.find((c) => c.id === el.dataset.xc); XF.rsel.clear(); xfRenderFiles(); }));
+  $$("[data-xclose]").forEach((b) => (b.onclick = async () => { await api("xfer_close", b.dataset.xclose); if (XF.cur && XF.cur.id === b.dataset.xclose) XF.cur = null; sshXfer(); }));
+  $("#xfNew").onclick = () => xfConnectDlg();
+  xfRenderLocal(); xfRenderRemote();
+}
+
+const fsize = (n) => { n = Number(n || 0); if (n < 1024) return n + " B"; const u = ["KB", "MB", "GB", "TB"]; let i = -1; do { n /= 1024; i++; } while (n >= 1024 && i < 3); return n.toFixed(n < 10 ? 1 : 0) + " " + u[i]; };
+function xfSorted(items) {
+  const { k, d } = XF.sort;
+  return [...items].sort((a, b) => (b.dir - a.dir) || (k === "name" ? a.name.localeCompare(b.name, "en", { numeric: true }) : (a[k] || 0) - (b[k] || 0)) * d);
+}
+function xfTable(items, side, sel) {
+  const head = [["name", "نام"], ["size", "حجم"], ["mtime", "تغییر"]].map(([k, t]) => `<th data-xs="${k}" class="nosort">${t}${XF.sort.k === k ? (XF.sort.d > 0 ? " ▲" : " ▼") : ""}</th>`).join("");
+  return `<table class="xf-list"><thead><tr>${head}</tr></thead><tbody>${items.length ? xfSorted(items).map((it) => `<tr data-n="${esc(it.name)}" data-dir="${it.dir ? 1 : 0}" draggable="${XF.desktop || side === "r" ? "true" : "false"}" class="${sel.has(it.name) ? "sel" : ""}${XF.kc[side] === it.name ? " kcur" : ""}">
+      <td class="ltr nm"><span class="fi ${it.dir ? "d" : "f"}"></span>${esc(it.name)}</td><td class="ltr num">${it.dir ? "" : fsize(it.size)}</td><td class="ltr muted">${it.mtime ? fmtDate(it.mtime) : esc(it.when || "")}</td></tr>`).join("")
+    : `<tr><td colspan="3"><div class="empty">پوشه خالی است.</div></td></tr>`}</tbody></table>`;
+}
+function xfBindList(box, side) {
+  const sel = side === "l" ? XF.local.sel : XF.rsel;
+  $$("th[data-xs]", box).forEach((th) => (th.onclick = () => { const k = th.dataset.xs; XF.sort = { k, d: XF.sort.k === k ? -XF.sort.d : 1 }; side === "l" ? xfRenderLocal() : xfRenderRemote(); }));
+  let last = null;
+  $$("tbody tr[data-n]", box).forEach((tr) => {
+    tr.onclick = (e) => {
+      const n = tr.dataset.n;
+      if (e.shiftKey && last) {
+        const rows = $$("tbody tr[data-n]", box), a = rows.indexOf(last), b = rows.indexOf(tr);
+        rows.slice(Math.min(a, b), Math.max(a, b) + 1).forEach((r) => sel.add(r.dataset.n));
+      } else if (e.ctrlKey || e.metaKey) { sel.has(n) ? sel.delete(n) : sel.add(n); last = tr; }
+      else { sel.clear(); sel.add(n); last = tr; }
+      XF.kc[side] = n; if (!e.shiftKey) XF.ka[side] = n;
+      $$("tbody tr[data-n]", box).forEach((r) => { r.classList.toggle("sel", sel.has(r.dataset.n)); r.classList.toggle("kcur", r === tr); });
+      xfButtons();
+    };
+    tr.ondblclick = () => {
+      if (tr.dataset.dir === "1") { side === "l" ? xfLocalGo(xfJoinL(tr.dataset.n)) : xfRemoteGo(xfJoinR(tr.dataset.n)); }
+      else if (side === "r") xfDownload([tr.dataset.n]);
+      else if (XF.cur) xfUploadLocal([tr.dataset.n]);
+    };
+    tr.ondragstart = (e) => {
+      if (!sel.has(tr.dataset.n)) { sel.clear(); sel.add(tr.dataset.n); }
+      e.dataTransfer.setData("application/x-akrp-" + side, JSON.stringify([...sel]));
+      e.dataTransfer.effectAllowed = "copy";
+    };
+  });
+}
+function xfJoinL(n) { const c = XF.local.cwd; if (!c) return n; const sep = XF.local.sep || "/"; return c.endsWith(sep) ? c + n : c + sep + n; }
+function xfJoinR(n) { const c = (XF.cur && XF.cur.cwd) || "/"; return c.endsWith("/") ? c + n : c + "/" + n; }
+function xfButtons() {
+  const b = (id, on) => { const e = $("#" + id); if (e) e.disabled = !on; };
+  const rfiles = XF.cur && XF.cur.items ? XF.cur.items.filter((i) => XF.rsel.has(i.name)) : [];
+  b("xrDown", rfiles.some((i) => !i.dir)); b("xrDel", rfiles.length); b("xrRen", rfiles.length === 1);
+  const lf = XF.local.items.filter((i) => XF.local.sel.has(i.name) && !i.dir);
+  b("xlUp", lf.length && XF.cur);
+}
+
+/* --- پنل محلی --- */
+async function xfRenderLocal() {
+  const box = $("#xfLocal"); if (!box) return;
+  if (!XF.desktop) {
+    box.innerHTML = `<div class="xf-head"><b>این مرورگر</b></div>
+      <div class="xf-drop" id="xfDrop"><svg><use href="#i-folder"/></svg><div>فایل‌ها را اینجا یا روی پنل دستگاه بکشید و رها کنید</div>
+        <button class="btn sm" id="xfPick">انتخاب فایل…</button><input type="file" id="xfFile" multiple hidden></div>
+      <p class="hint">برای دانلود، روی فایل دستگاه دوبار کلیک کنید یا «دانلود» را بزنید؛ فایل مستقیم از دستگاه به مرورگر می‌آید و روی سرور نمی‌ماند.</p>`;
+    $("#xfPick").onclick = () => $("#xfFile").click();
+    $("#xfFile").onchange = (e) => { xfUploadFiles([...e.target.files]); e.target.value = ""; };
+    xfDropZone($("#xfDrop"));
+    return;
+  }
+  if (!XF.local.loaded) { XF.local.loaded = true; await xfLocalGo(""); return; }
+  const L = XF.local;
+  box.innerHTML = `<div class="xf-head"><b>این کامپیوتر</b><div class="xf-path"><button class="iconbtn" id="xlUpDir" title="پوشه‌ی بالاتر">↑</button><button class="iconbtn" id="xlHome" title="پوشه‌ی کاربر">⌂</button>
+      <input class="ltr" id="xlPath" value="${esc(L.cwd)}" placeholder="${navigator.platform.startsWith("Win") ? "درایوها" : "/"}"><button class="iconbtn" id="xlRef" title="تازه کردن">⟳</button></div></div>
+    <div class="xf-act"><button class="btn sm" id="xlUp" disabled>آپلود به دستگاه</button></div>
+    <div class="xf-scroll" id="xlList">${xfTable(L.items, "l", L.sel)}</div>`;
+  $("#xlUpDir").onclick = () => xfLocalGo(L.parent ?? "");
+  $("#xlHome").onclick = () => xfLocalGo(L.home || "");
+  $("#xlRef").onclick = () => xfLocalGo(L.cwd);
+  $("#xlPath").onkeydown = (e) => { if (e.key === "Enter") xfLocalGo(e.target.value.trim()); };
+  $("#xlUp").onclick = () => xfUploadLocal([...L.sel]);
+  xfBindList($("#xlList"), "l");
+  const lst = $("#xlList");
+  lst.ondragover = (e) => { if (e.dataTransfer.types.includes("application/x-akrp-r")) { e.preventDefault(); xfDropMark(lst, e); } };
+  lst.ondragleave = (e) => { if (!lst.contains(e.relatedTarget)) xfDropMark(lst, null); };
+  lst.ondrop = (e) => {
+    const row = xfDropRow(lst, e); xfDropMark(lst, null);
+    const d = e.dataTransfer.getData("application/x-akrp-r");
+    if (d) { e.preventDefault(); xfDownload(JSON.parse(d), false, row ? xfJoinL(row.dataset.n) : null); }   // روی ردیف پوشه ← داخل همان پوشه
+  };
+  xfButtons();
+}
+async function xfLocalGo(p) {
+  const r = await api("local_ls", p);
+  if (!r.ok) return toast(r.error, "error");
+  if (r.cwd !== XF.local.cwd) XF.kc.l = XF.ka.l = null;
+  Object.assign(XF.local, { cwd: r.cwd, items: r.items, parent: r.parent, home: r.home || XF.local.home, sep: r.sep || XF.local.sep });
+  XF.local.sel.clear(); xfRenderLocal();
+  return true;
+}
+async function xfUploadLocal(names, destDir) {
+  if (!XF.cur) return toast("ابتدا به دستگاه وصل شوید", "warn");
+  const files = XF.local.items.filter((i) => names.includes(i.name) && !i.dir).map((i) => xfJoinL(i.name));
+  if (!files.length) return toast("فقط فایل قابل انتقال است (پوشه نه)", "warn");
+  const dest = destDir || (XF.cur.browse ? XF.cur.cwd : await xfScpDest());
+  if (dest == null) return;
+  let r = await api("xfer_local", XF.cur.id, "up", files, dest, false);
+  if (r.ok && r.exists) { if (!(await xfOverwrite(r.remote))) return; r = await api("xfer_local", XF.cur.id, "up", files, dest, true); }
+  if (!r.ok) return toast(r.error, "error");
+  xfPollJobs(true);
+}
+
+/* --- پنل دستگاه --- */
+function xfRenderRemote() {
+  const box = $("#xfRemote"); if (!box) return;
+  const c = XF.cur;
+  if (!c) { box.innerHTML = `<div class="empty">به دستگاهی وصل نیستید. «اتصال تازه» را بزنید (SFTP، SCP، FTP یا FTPS).</div>`; return; }
+  if (!c.browse) {
+    box.innerHTML = `<div class="xf-head"><b class="ltr">${esc(c.user)}@${esc(c.host)}</b> <span class="tag info">SCP</span></div>
+      <p class="hint">SCP فهرست پوشه ندارد. برای دانلود مسیر کامل فایل را بنویسید (مثلاً <span class="ltr">/var/log/syslog</span> یا <span class="ltr">flash:config.text</span>). برای آپلود فایل‌ها را اینجا بکشید؛ مقصد پرسیده می‌شود.</p>
+      <div class="row"><input id="xsPath" class="ltr" placeholder="/path/to/file" style="flex:1"><button class="btn primary" id="xsGet">دانلود</button></div>
+      <div class="xf-drop" id="xfDropR" style="margin-top:12px"><div>فایل‌ها را برای آپلود اینجا رها کنید</div></div>`;
+    $("#xsGet").onclick = () => { const p = $("#xsPath").value.trim(); if (p) xfDownload([p], true); };
+    xfDropZone($("#xfDropR"));
+    return;
+  }
+  box.innerHTML = `<div class="xf-head"><b class="ltr">${esc(c.user)}@${esc(c.host)}</b> <span class="tag info">${c.proto.toUpperCase()}</span>
+      <div class="xf-path"><button class="iconbtn" id="xrUpDir" title="پوشه‌ی بالاتر">↑</button><button class="iconbtn" id="xrHome" title="پوشه‌ی خانه">⌂</button>
+      <input class="ltr" id="xrPath" value="${esc(c.cwd || c.home)}"><button class="iconbtn" id="xrRef" title="تازه کردن">⟳</button></div></div>
+    <div class="xf-act"><button class="btn sm" id="xrDown" disabled>${XF.desktop ? "دانلود به این کامپیوتر" : "دانلود"}</button><button class="btn sm ghost" id="xrMk">پوشه‌ی تازه</button>
+      <button class="btn sm ghost" id="xrRen" disabled>تغییر نام</button><button class="btn sm danger-ghost" id="xrDel" disabled>حذف</button>
+      ${XF.desktop ? "" : `<button class="btn sm" id="xrUpB">آپلود…</button><input type="file" id="xrFile" multiple hidden>`}</div>
+    <div class="xf-scroll" id="xrList">${c.items ? xfTable(c.items, "r", XF.rsel) : `<div class="empty">در حال خواندن…</div>`}</div>`;
+  $("#xrUpDir").onclick = xfRemoteUp;
+  $("#xrHome").onclick = () => xfRemoteGo(c.home);
+  $("#xrRef").onclick = () => xfRemoteGo(c.cwd);
+  $("#xrPath").onkeydown = (e) => { if (e.key === "Enter") xfRemoteGo(e.target.value.trim()); };
+  $("#xrDown").onclick = () => xfDownload([...XF.rsel]);
+  $("#xrMk").onclick = xfMkdir; $("#xrRen").onclick = xfRename; $("#xrDel").onclick = xfDelete;
+  if ($("#xrUpB")) { $("#xrUpB").onclick = () => $("#xrFile").click(); $("#xrFile").onchange = (e) => { xfUploadFiles([...e.target.files]); e.target.value = ""; }; }
+  if (c.items) xfBindList($("#xrList"), "r"); else xfRemoteGo(c.cwd || c.home);
+  const lst = $("#xrList");
+  xfDropZone(lst, (e, row) => {
+    const dest = row ? xfJoinR(row.dataset.n) : null;          // روی ردیف پوشه ← داخل همان پوشه؛ جای خالی ← پوشه‌ی باز
+    const d = e.dataTransfer.getData("application/x-akrp-l");
+    if (d) { xfUploadLocal(JSON.parse(d), dest); return true; }
+    const files = [...(e.dataTransfer.files || [])];
+    if (files.length) { xfUploadFiles(files, false, dest); return true; }
+    return false;
+  });
+  xfButtons();
+}
+function xfRemoteUp() {
+  const c = XF.cur; if (!c) return;
+  const p = (c.cwd || "/").replace(/\/+$/, "");
+  if (!p || p === "/") return;
+  const base = p.slice(p.lastIndexOf("/") + 1);
+  return xfRemoteGo(p.lastIndexOf("/") > 0 ? p.slice(0, p.lastIndexOf("/")) : "/").then((ok) => { if (ok && base) { XF.kc.r = XF.ka.r = base; xfRenderRemote(); } });
+}
+async function xfRemoteGo(p) {
+  const c = XF.cur; if (!c) return;
+  const r = await api("xfer_ls", c.id, p || c.home);
+  if (!r.ok) { toast(r.error, "error"); if (!c.items) { c.items = []; c.cwd = c.home; xfRenderRemote(); } return; }
+  if (r.cwd !== c.cwd) XF.kc.r = XF.ka.r = null;
+  c.cwd = r.cwd; c.items = r.items; XF.rsel.clear(); xfRenderRemote();
+  return true;
+}
+function xfDropRow(el, e) {
+  const tr = e && e.target && e.target.closest ? e.target.closest("tr[data-dir='1']") : null;
+  return tr && el.contains(tr) ? tr : null;
+}
+function xfDropMark(el, e) {
+  const row = e ? xfDropRow(el, e) : null;
+  el.classList.toggle("over", !!e && !row);
+  $$("tr.drop", el).forEach((r) => r !== row && r.classList.remove("drop"));
+  if (row) row.classList.add("drop");
+}
+function xfDropZone(el, custom) {
+  if (!el) return;
+  el.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].some((t) => t === "Files" || t.startsWith("application/x-akrp-l"))) { e.preventDefault(); xfDropMark(el, e); } });
+  el.addEventListener("dragleave", (e) => { if (!el.contains(e.relatedTarget)) xfDropMark(el, null); });
+  el.addEventListener("drop", (e) => {
+    const row = xfDropRow(el, e); xfDropMark(el, null); e.preventDefault();
+    if (custom && custom(e, row)) return;
+    const files = [...(e.dataTransfer.files || [])];
+    if (files.length) xfUploadFiles(files);
+  });
+}
+async function xfScpDest() {
+  const v = await openModal({ title: "مقصد روی دستگاه (SCP)",
+    body: `<label class="field"><span>پوشه یا مسیر مقصد</span><input id="xsDest" class="ltr" value="${esc(XF.scpDest || "/tmp/")}" autofocus></label><p class="hint">مثلاً <span class="ltr">/tmp/</span> یا <span class="ltr">flash:</span> — نام فایل خودکار اضافه می‌شود.</p>`,
+    foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">ادامه</button>`,
+    onOpen: (m, close) => { $("[data-r='0']", m).onclick = () => close(null); $("[data-r='1']", m).onclick = () => close($("#xsDest", m).value.trim()); } });
+  if (v) XF.scpDest = v;
+  return v || null;
+}
+async function xfOverwrite(name) {
+  return confirm2({ title: "فایل وجود دارد", body: `<p><span class="ltr">${esc(name)}</span> از قبل وجود دارد. جایگزین شود؟</p>`, confirm: "جایگزین کن", danger: true });
+}
+
+/* --- آپلود تکه‌ای از مرورگر/پنجره (فایل‌های کشیده‌شده یا انتخاب‌شده) --- */
+const XCHUNK = 4 * 1024 * 1024;
+function blobB64(blob) { return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1] || ""); fr.onerror = () => rej(fr.error); fr.readAsDataURL(blob); }); }
+async function xfUploadFiles(files, toTftp = false, destDir = null, overwrite = false) {
+  if (!toTftp && !XF.cur) return toast("ابتدا به دستگاه وصل شوید", "warn");
+  const big = XF.limit ? files.filter((f) => f.size > XF.limit) : [];
+  if (big.length) toast(`${big.length} فایل بیشتر از سقف حجم (${XF.limitH}) است و ارسال نمی‌شود`, "error");
+  files = files.filter((f) => !big.includes(f));
+  if (!files.length) return;
+  let dest = "";
+  if (!toTftp) dest = destDir != null ? destDir : XF.cur.browse ? XF.cur.cwd : await xfScpDest();
+  if (dest == null) return;
+  const cid = toTftp ? "tftp" : XF.cur.id;
+  await xfPutFiles(cid, dest, files, overwrite);
+  if (toTftp) tftpRender(); else if (XF.cur && XF.cur.browse) xfRemoteGo(XF.cur.cwd);
+}
+async function xfPutFiles(cid, dest, files, overwrite) {
+  for (const f of files) {
+    let r = await api("xfer_put_begin", cid, dest, f.name, f.size, overwrite);
+    if (r.ok && r.exists) { if (!(await xfOverwrite(r.remote))) continue; r = await api("xfer_put_begin", cid, dest, f.name, f.size, true); }
+    if (!r.ok) { toast(`${f.name}: ${r.error}`, "error"); continue; }
+    const jid = r.job.id; XF.files.set(jid, { file: f, cid, dest }); xfPollJobs(true);
+    for (let off = 0; off < f.size; off += XCHUNK) {
+      const b64 = await blobB64(f.slice(off, off + XCHUNK));
+      const w = await api("xfer_put", jid, off, b64);
+      if (!w.ok) { toast(`${f.name}: ${w.error}`, "error"); break; }
+      xfJobUpdate(w.job);
+    }
+  }
+  xfPollJobs(true);
+}
+async function xfDownload(names, raw = false, localDir = null) {
+  const c = XF.cur; if (!c) return;
+  const paths = raw ? names : (c.items || []).filter((i) => names.includes(i.name) && !i.dir).map((i) => xfJoinR(i.name));
+  if (!paths.length) return toast("فقط فایل قابل دانلود است (پوشه نه)", "warn");
+  if (XF.desktop) {
+    const to = localDir || XF.local.cwd;
+    if (!to) return toast("در پنل «این کامپیوتر» یک پوشه باز کنید", "warn");
+    let r = await api("xfer_local", c.id, "down", paths, to, false);
+    if (r.ok && r.exists) { if (!(await xfOverwrite(r.local))) return; r = await api("xfer_local", c.id, "down", paths, to, true); }
+    if (!r.ok) return toast(r.error, "error");
+    xfPollJobs(true);
+    return;
+  }
+  for (const p of paths) {
+    const r = await api("xfer_get", c.id, p);
+    if (!r.ok) { toast(r.error, "error"); continue; }
+    webDownload(r.url, p.split(/[/:]/).pop());
+    await new Promise((res) => setTimeout(res, 400));
+  }
+  xfPollJobs(true);
+}
+async function xfMkdir() {
+  const v = await openModal({ title: "پوشه‌ی تازه", body: `<label class="field"><span>نام</span><input id="xmN" class="ltr" autofocus></label>`,
+    foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">ساختن</button>`,
+    onOpen: (m, close) => { $("[data-r='0']", m).onclick = () => close(null); $("[data-r='1']", m).onclick = () => close($("#xmN", m).value.trim()); } });
+  if (!v) return;
+  const r = await api("xfer_mkdir", XF.cur.id, xfJoinR(v)); if (!r.ok) return toast(r.error, "error");
+  xfRemoteGo(XF.cur.cwd);
+}
+async function xfRename() {
+  const old = [...XF.rsel][0]; if (!old) return;
+  const v = await openModal({ title: "تغییر نام", body: `<label class="field"><span>نام تازه</span><input id="xrN" class="ltr" value="${esc(old)}" autofocus></label>`,
+    foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">ذخیره</button>`,
+    onOpen: (m, close) => { $("[data-r='0']", m).onclick = () => close(null); $("[data-r='1']", m).onclick = () => close($("#xrN", m).value.trim()); } });
+  if (!v || v === old) return;
+  const r = await api("xfer_rename", XF.cur.id, xfJoinR(old), xfJoinR(v)); if (!r.ok) return toast(r.error, "error");
+  xfRemoteGo(XF.cur.cwd);
+}
+async function xfDelete() {
+  const items = (XF.cur.items || []).filter((i) => XF.rsel.has(i.name));
+  if (!items.length) return;
+  if (!(await confirm2({ title: "حذف روی دستگاه", danger: true, confirm: "حذف",
+    body: `<p>${num(items.length)} مورد از دستگاه حذف شود؟ این کار برگشت ندارد. (پوشه فقط اگر خالی باشد حذف می‌شود.)</p><pre class="ltr paste-prev" data-no-i18n>${esc(items.map((i) => i.name + (i.dir ? "/" : "")).join("\n"))}</pre>` }))) return;
+  const r = await api("xfer_delete", XF.cur.id, items.map((i) => ({ path: xfJoinR(i.name), dir: i.dir })));
+  if (!r.ok) toast(r.error, "error");
+  xfRemoteGo(XF.cur.cwd);
+}
+async function xfConnectDlg(preset) {
+  const devs = SSH.devices.filter((d) => d.has_password && d.username);
+  const p = preset || {};
+  const res = await openModal({
+    title: "اتصال انتقال فایل",
+    body: `<div class="row" style="gap:10px;margin-bottom:12px;flex-wrap:wrap"><div class="seg" id="xcProto">${["sftp", "scp", "ftp", "ftps"].map((x) => `<button data-v="${x}" class="${(p.proto || "sftp") === x ? "on" : ""}">${x.toUpperCase()}</button>`).join("")}</div>
+      <div class="seg" id="xcMode"><button data-v="dev" class="${p.adhoc ? "" : "on"}">دستگاه ذخیره‌شده</button><button data-v="adhoc" class="${p.adhoc ? "on" : ""}">اتصال موقت</button></div></div>
+      <div id="xcDev" ${p.adhoc ? "hidden" : ""}>${devs.length ? `<label class="field"><span>دستگاه</span><select id="xcDevSel">${devs.map((d) => `<option value="${d.id}">${esc(d.name)} — ${esc(d.host)}${d.personal ? " (شخصی)" : ""}</option>`).join("")}</select></label>` : `<div class="empty">دستگاهی با یوزر و رمز ذخیره‌شده ندارید؛ از «اتصال موقت» استفاده کنید.</div>`}</div>
+      <div id="xcAd" ${p.adhoc ? "" : "hidden"}><div class="form-grid">
+        <label class="field"><span>آدرس</span><input id="xcHost" class="ltr" placeholder="10.0.0.1"></label>
+        <label class="field"><span>یوزر</span><input id="xcUser" class="ltr" autocomplete="off"></label>
+        <label class="field"><span>رمز</span><input id="xcPass" type="password" class="ltr" autocomplete="off"></label>
+        <label class="chk" style="align-self:end"><input type="checkbox" id="xcLegacy">الگوریتم‌های قدیمی SSH</label></div></div>
+      <div class="form-grid" style="margin-top:10px"><label class="field"><span>پورت (خالی = پیش‌فرض)</span><input id="xcPort" class="ltr" placeholder="SFTP/SCP: 22 · FTP: 21"></label>
+        <label class="chk" style="align-self:end" id="xcActW" hidden><input type="checkbox" id="xcActive">FTP فعال (Active)</label></div>
+      <p class="hint" id="xcHint"></p>`,
+    foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">اتصال</button>`,
+    onOpen: (m, close) => {
+      const proto = () => $("#xcProto button.on", m).dataset.v;
+      const hint = () => {
+        const pr = proto();
+        $("#xcActW", m).hidden = !pr.startsWith("ftp");
+        $("#xcHint", m).textContent = { sftp: "SFTP: مرور پوشه‌ها، آپلود، دانلود، ساخت پوشه، تغییر نام و حذف.", scp: "SCP: برای تجهیزاتی که SFTP ندارند (مثل بعضی روترها)؛ فقط آپلود و دانلود با مسیر کامل.",
+          ftp: "FTP: رمز و داده بدون رمزنگاری در شبکه می‌روند؛ فقط در شبکه‌ی امن استفاده کنید.", ftps: "FTPS: FTP با TLS صریح." }[pr];
+      };
+      $$("#xcProto button", m).forEach((b) => (b.onclick = () => { $$("#xcProto button", m).forEach((x) => x.classList.toggle("on", x === b)); hint(); }));
+      $$("#xcMode button", m).forEach((b) => (b.onclick = () => { $$("#xcMode button", m).forEach((x) => x.classList.toggle("on", x === b)); $("#xcDev", m).hidden = b.dataset.v !== "dev"; $("#xcAd", m).hidden = b.dataset.v === "dev"; }));
+      hint();
+      $("[data-r='0']", m).onclick = () => close(null);
+      $("[data-r='1']", m).onclick = () => {
+        const opts = { port: $("#xcPort", m).value.trim(), active: $("#xcActive", m).checked };
+        if (!$("#xcAd", m).hidden) {
+          const host = $("#xcHost", m).value.trim(); if (!host) return toast("آدرس را وارد کنید", "error");
+          close({ proto: proto(), opts, target: { adhoc: { host, port: Number(opts.port) || 22, username: $("#xcUser", m).value.trim(), password: $("#xcPass", m).value, legacy: $("#xcLegacy", m).checked } } });
+        } else { const s = $("#xcDevSel", m); if (!s) return; close({ proto: proto(), opts, target: { device_id: Number(s.value) } }); }
+      };
+    },
+  });
+  if (res) await xfOpen(res);
+}
+async function xfOpen(o, accept) {
+  const r = await connTry($("#xfNew"), `${o.proto.toUpperCase()} ${connLabel(o.target)}`, (aid) => api("xfer_open", o.target, o.proto, accept || null, o.opts, aid));
+  if (!r.ok) return toast(r.error, r.cancelled ? "warn" : "error");
+  if (r.confirm) { if (await hostKeyConfirm(r.confirm)) return xfOpen(o, r.confirm.fingerprint); return; }
+  XF.conns.push(r.conn); XF.cur = r.conn; XF.rsel.clear(); xfRenderFiles();
+}
+
+/* --- صف انتقال‌ها --- */
+function xfJobUpdate(j) { const i = XF.jobs.findIndex((x) => x.id === j.id); if (i >= 0) XF.jobs[i] = j; else XF.jobs.unshift(j); xfRenderJobs(); }
+const XJ_ST = { running: ["info", "در حال انتقال"], waiting: ["mute", "در انتظار"], ok: ["ok", "کامل"], error: ["err", "خطا"], cancelled: ["mute", "لغو شد"] };
+function xfRenderJobs() {
+  const box = $("#xfJobs"); if (!box) return;
+  if (!XF.jobs.length) { box.innerHTML = `<div class="empty">انتقالی نیست.</div>`; return; }
+  box.innerHTML = `<table class="grid"><thead><tr><th>جهت</th><th>فایل</th><th>دستگاه</th><th>پیشرفت</th><th>سرعت</th><th>وضعیت</th><th class="nosort"></th></tr></thead><tbody>${XF.jobs.map((j) => {
+    const st = XJ_ST[j.state] || ["mute", j.state], pct = j.size ? Math.min(100, Math.round((j.done / j.size) * 100)) : (j.state === "ok" ? 100 : 0);
+    return `<tr><td>${j.dir === "up" ? "↑ آپلود" : j.dir === "stage" ? "↑ TFTP" : "↓ دانلود"}</td><td class="ltr wrap">${esc(j.remote || j.name)}</td><td class="ltr">${esc(j.proto.toUpperCase())} ${esc(j.host)}</td>
+      <td><div class="xf-prog"><span style="width:${pct}%"></span></div><small class="muted ltr">${fsize(j.done)}${j.size != null ? " / " + fsize(j.size) : ""}</small></td>
+      <td class="ltr">${j.state === "running" ? fsize(j.speed) + "/s" : ""}</td><td><span class="tag ${st[0]}">${st[1]}</span>${j.error ? `<div class="muted wrap">${esc(j.error)}</div>` : ""}</td>
+      <td>${["running", "waiting"].includes(j.state) ? `<button class="btn sm ghost" data-xjc="${j.id}">لغو</button>`
+        : ["error", "cancelled"].includes(j.state) && xfCanRetry(j) ? `<button class="btn sm" data-xjr="${j.id}">تلاش مجدد</button>` : ""}</td></tr>`; }).join("")}</tbody></table>`;
+  $$("[data-xjc]", box).forEach((b) => (b.onclick = () => api("xfer_cancel", b.dataset.xjc).then(() => xfPollJobs(true))));
+  $$("[data-xjr]", box).forEach((b) => (b.onclick = () => withSpin(b, () => xfRetry(XF.jobs.find((x) => x.id === b.dataset.xjr)))));
+}
+const xfDirOf = (p, seps) => { const i = Math.max(...seps.map((x) => String(p).lastIndexOf(x))); return i >= 0 ? String(p).slice(0, i + 1) : ""; };
+function xfCanRetry(j) {
+  if (j.dir === "stage") return XF.files.has(j.id);
+  if (!j.local && j.dir === "up") return XF.files.has(j.id);          // آپلود از مرورگر: فایل باید هنوز در این صفحه باشد
+  return true;
+}
+/* همان انتقال دوباره، با همان مبدأ و مقصد (فایل نیمه‌کاره جایگزین می‌شود) */
+async function xfRetry(j) {
+  if (!j) return;
+  if (j.dir !== "stage" && !XF.conns.some((c) => c.id === j.conn)) return toast("اتصال این انتقال بسته شده است؛ دوباره وصل شوید و انتقال را از نو شروع کنید", "warn");
+  let r = { ok: true };
+  if (j.local) {
+    r = j.dir === "up" ? await api("xfer_local", j.conn, "up", [j.local], xfDirOf(j.remote, ["/", ":"]), true)
+      : await api("xfer_local", j.conn, "down", [j.remote], xfDirOf(j.local, ["/", "\\"]), true);
+  } else if (j.dir === "down") {
+    r = await api("xfer_get", j.conn, j.remote);
+    if (r.ok) webDownload(r.url, j.name);
+  } else {
+    const x = XF.files.get(j.id);
+    if (!x) return toast("فایل اصلی دیگر در دسترس نیست؛ دوباره انتخاب کنید", "warn");
+    XF.files.delete(j.id);
+    await xfPutFiles(x.cid, x.dest, [x.file], true);
+  }
+  if (!r.ok) return toast(r.error, "error");
+  await api("xfer_clear_one", j.id);
+  xfPollJobs(true);
+}
+async function xfPollJobs(once) {
+  const r = await api("xfer_jobs");
+  if (r.ok) {
+    const before = XF.jobs.filter((j) => j.state === "running").map((j) => j.id);
+    XF.jobs = r.jobs; xfRenderJobs();
+    const finished = before.filter((id) => { const j = XF.jobs.find((x) => x.id === id); return j && j.state !== "running"; });
+    if (finished.length && XF.desktop && XF.local.loaded && $("#xfLocal")) xfLocalGo(XF.local.cwd);
+    if (finished.length && XF.cur && XF.cur.browse && $("#xrList")) xfRemoteGo(XF.cur.cwd);
+  }
+  if (XF.polling) return;
+  if (XF.jobs.some((j) => ["running", "waiting"].includes(j.state)) && SSH.tab === "xfer" && S.page === "ssh") {
+    XF.polling = true; setTimeout(() => { XF.polling = false; xfPollJobs(); }, 1000);
+  }
+}
+
+/* --- سرور TFTP --- */
+async function tftpRender() {
+  const r = await api("tftp_status"); if (!r.ok) return toast(r.error, "error");
+  XF.tftp = r;
+  const box = $("#xfMain"); if (!box) return;
+  if (r.running && r.other) { box.innerHTML = `<div class="panel"><div class="empty">سرور TFTP الان توسط کاربر «${esc(r.other)}» روشن است. (هم‌زمان فقط یک سرور TFTP روی این سیستم ممکن است.)</div></div>`; return; }
+  if (!r.running) {
+    const devs = SSH.devices;
+    box.innerHTML = `<div class="panel"><div class="panel-head"><h3>سرور TFTP موقت</h3></div>
+      <p class="hint">برای تجهیزاتی که فقط TFTP دارند (کپی کانفیگ، فریم‌ور). سرور فقط به IP دستگاه‌های انتخاب‌شده جواب می‌دهد و پس از ۳۰ دقیقه بی‌کاری خودکار خاموش می‌شود.</p>
+      <div class="form-grid"><div class="field wide"><span>دستگاه‌های مجاز</span><div class="chks" style="max-height:160px;overflow:auto">${devs.length ? devs.map((d) => `<label class="chk"><input type="checkbox" class="tfDev" value="${d.id}" ${XF.tftpSel.has(d.id) ? "checked" : ""}>${esc(d.name)} <small class="muted ltr">${esc(d.host)}</small></label>`).join("") : `<span class="muted">دستگاهی تعریف نشده است.</span>`}</div></div>
+        <label class="field"><span>IPهای دیگر (اختیاری، با کاما)</span><input id="tfHosts" class="ltr" placeholder="10.0.0.5, 10.0.0.6"></label>
+        <label class="field"><span>پورت UDP</span><input id="tfPort" class="ltr" value="69"></label>
+        <label class="chk" style="align-self:end"><input type="checkbox" id="tfWrite" checked>اجازه‌ی دریافت فایل از دستگاه (مثلاً پشتیبان کانفیگ)</label></div>
+      <div style="margin-top:12px"><button class="btn primary" id="tfStart">روشن کردن سرور</button></div></div>`;
+    $("#tfStart").onclick = (e) => withSpin(e.currentTarget, async () => {
+      const ids = $$(".tfDev:checked").map((x) => Number(x.value)); XF.tftpSel = new Set(ids);
+      const hosts = $("#tfHosts").value.split(/[,\s]+/).filter(Boolean);
+      const s = await api("tftp_start", ids, hosts, Number($("#tfPort").value) || 69, $("#tfWrite").checked);
+      if (!s.ok) return toast(s.error, "error");
+      tftpRender(); xfPollJobs(true);
+    });
+    return;
+  }
+  const cmds = r.commands || {};
+  box.innerHTML = `<div class="panel"><div class="panel-head"><h3>سرور TFTP <span class="tag ok">روشن</span></h3><button class="btn danger-ghost sm" id="tfStop">خاموش کردن</button></div>
+    <div class="kv-row"><span>آدرس این سیستم (به سمت دستگاه):</span> <b class="ltr">${esc(r.local_ip || "—")}</b> · <span>پورت:</span> <b class="ltr">${r.port}</b> · <span>مجاز:</span> <span class="ltr">${esc(r.allowed.join(", "))}</span> · ${r.write ? `<span class="tag info">دریافت فعال</span>` : `<span class="tag mute">فقط ارسال</span>`}</div>
+    <div class="xf-panes" style="margin-top:12px"><div class="xf-pane"><div class="xf-head"><b>فایل‌های قابل دریافت توسط دستگاه</b>${XF.desktop ? `<button class="btn sm" id="tfAddL">افزودن از پنل محلی…</button>` : ""}</div>
+      <div class="xf-drop" id="tfDrop"><div>فایل (مثلاً فریم‌ور) را اینجا رها کنید</div><button class="btn sm" id="tfPick">انتخاب فایل…</button><input type="file" id="tfFile" multiple hidden></div>
+      <table class="grid"><tbody>${r.files.length ? r.files.map((f) => `<tr><td class="ltr">${esc(f.name)}</td><td class="ltr num">${fsize(f.size)}</td><td><button class="btn sm ghost" data-tfrm="${esc(f.name)}">برداشتن</button></td></tr>`).join("") : `<tr><td><div class="empty">فایلی اضافه نشده است.</div></td></tr>`}</tbody></table></div>
+      <div class="xf-pane"><div class="xf-head"><b>فایل‌های دریافتی از دستگاه</b></div>
+      <table class="grid"><tbody>${r.received.length ? r.received.slice().reverse().map((f) => `<tr><td class="ltr">${esc(f.name)}</td><td class="ltr">${esc(f.client)}</td><td class="ltr num">${fsize(f.size)}</td><td class="ltr muted">${fmtTime(f.ts)}</td><td><button class="btn sm" data-tfget="${esc(f.id)}">دانلود</button></td></tr>`).join("") : `<tr><td><div class="empty">هنوز فایلی دریافت نشده است.${r.write ? "" : " (دریافت خاموش است)"}</div></td></tr>`}</tbody></table>
+      <p class="hint">فایل‌های دریافتی رمزشده نگه داشته می‌شوند و از «تاریخچه» هم قابل دانلودند.</p></div></div></div>
+    ${Object.keys(cmds).length ? `<div class="panel"><div class="panel-head"><h3>دستورهای آماده</h3><span class="muted">FILE را با نام فایل عوض کنید</span></div>${Object.entries(cmds).map(([t, list]) => `<div class="tf-cmds"><b>${esc(typeName(t))}</b>${list.map((c) => `<div class="tf-cmd"><code class="ltr" data-no-i18n>${esc(c)}</code><button class="btn sm ghost" data-copy="${esc(c)}">کپی</button></div>`).join("")}</div>`).join("")}</div>` : ""}
+    <div class="panel"><div class="panel-head"><h3>رویدادهای TFTP</h3><button class="btn sm ghost" id="tfRef">تازه کردن</button></div>
+      <table class="grid"><thead><tr><th>فایل</th><th>دستگاه</th><th>جهت</th><th>حجم</th><th>وضعیت</th></tr></thead><tbody>${r.transfers.length ? r.transfers.slice().reverse().map((t) => `<tr><td class="ltr">${esc(t.file)}</td><td class="ltr">${esc(t.client)}</td><td>${t.dir === "in" ? "↓ دریافت" : "↑ ارسال"}</td><td class="ltr num">${fsize(t.bytes)}</td><td>${t.ok ? `<span class="tag ok">کامل</span>` : t.error ? `<span class="tag err">${esc(t.error)}</span>` : `<span class="tag info">در حال انتقال</span>`}</td></tr>`).join("") : `<tr><td colspan="5"><div class="empty">هنوز انتقالی نبوده است.</div></td></tr>`}</tbody></table></div>`;
+  $("#tfStop").onclick = async () => { await api("tftp_stop"); tftpRender(); };
+  $("#tfRef").onclick = () => tftpRender();
+  $("#tfPick").onclick = () => $("#tfFile").click();
+  $("#tfFile").onchange = (e) => { xfUploadFiles([...e.target.files], true); e.target.value = ""; };
+  xfDropZone($("#tfDrop"), (e) => { const f = [...(e.dataTransfer.files || [])]; if (f.length) xfUploadFiles(f, true); return true; });
+  if ($("#tfAddL")) $("#tfAddL").onclick = tftpAddLocal;
+  $$("[data-tfrm]").forEach((b) => (b.onclick = async () => { await api("tftp_remove", b.dataset.tfrm); tftpRender(); }));
+  $$("[data-tfget]").forEach((b) => (b.onclick = () => receivedGet(b.dataset.tfget)));
+  clearTimeout(XF._tft);
+  XF._tft = setTimeout(() => { if (XF.sub === "tftp" && SSH.tab === "xfer" && S.page === "ssh" && !modalClose) tftpRender(); }, 5000);
+}
+async function receivedGet(rid) {
+  const r = await api("tftp_received_get", rid);
+  if (!r.ok) return toast(r.error, "error");
+  if (r.url) webDownload(r.url, "");
+  else if (r.saved) toast("ذخیره شد: " + r.saved, "ok");
+}
+async function tftpAddLocal() {
+  if (!XF.local.loaded) await xfLocalGo("");
+  const L = XF.local;
+  const pick = await openModal({ title: "افزودن فایل به سرور TFTP", wide: true,
+    body: `<div class="xf-path" style="margin-bottom:8px"><input class="ltr" id="taPath" value="${esc(L.cwd)}" style="flex:1"><button class="btn sm" id="taGo">برو</button></div><div class="xf-scroll" style="max-height:360px" id="taList"></div>`,
+    foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">افزودن انتخاب‌شده‌ها</button>`,
+    onOpen: (m, close) => {
+      const sel = new Set();
+      const draw = () => {
+        $("#taList", m).innerHTML = xfTable(XF.local.items, "t", sel);
+        $$("tbody tr[data-n]", m).forEach((tr) => {
+          tr.onclick = () => { if (tr.dataset.dir === "1") return; sel.has(tr.dataset.n) ? sel.delete(tr.dataset.n) : sel.add(tr.dataset.n); tr.classList.toggle("sel"); };
+          tr.ondblclick = async () => { if (tr.dataset.dir === "1") { await xfLocalGo(xfJoinL(tr.dataset.n)); $("#taPath", m).value = XF.local.cwd; sel.clear(); draw(); } };
+        });
+      };
+      draw();
+      $("#taGo", m).onclick = async () => { await xfLocalGo($("#taPath", m).value.trim()); sel.clear(); draw(); };
+      $("[data-r='0']", m).onclick = () => close(null);
+      $("[data-r='1']", m).onclick = () => close([...sel].map(xfJoinL));
+    } });
+  if (!pick || !pick.length) return;
+  const r = await api("tftp_add_local", pick); if (!r.ok) toast(r.error, "error");
+  tftpRender();
+}
+
+/* ================================================================ نمایش داده‌ی تاریخچه */
+/* نمایش داده‌ی یک ردیف تاریخچه با جستجو: CSV در کل فایل (سمت برنامه)، متن و ترمینال خط‌به‌خط */
+function hvMark(text, q) {
+  if (!q) return esc(text);
+  const lo = text.toLowerCase(), ql = q.toLowerCase();
+  let out = "", i = 0, k;
+  while ((k = lo.indexOf(ql, i)) >= 0) { out += esc(text.slice(i, k)) + "<mark>" + esc(text.slice(k, k + q.length)) + "</mark>"; i = k + q.length; }
+  return out + esc(text.slice(i));
+}
+function hvCsv(r, q) {
+  const info = q ? `${num(r.matched)} ردیف از ${num(r.total)} ردیف شامل «${esc(q)}»${r.matched > r.rows.length ? ` — ${num(r.rows.length)} ردیف اول` : ""}`
+    : `${num(r.total)} ردیف${r.total > r.rows.length ? ` — ${num(r.rows.length)} ردیف اول نمایش داده شده است` : ""}`;
+  return `<div class="muted" style="margin-bottom:6px">${info}</div>
+    <div class="table-wrap inner" data-no-i18n><table class="grid"><thead><tr>${r.columns.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${r.rows.map((row) => `<tr>${row.map((c) => `<td class="wrap">${hvMark(String(c), q)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+function hvLines(text, q) {
+  const lines = text.split(/\r?\n/);
+  if (!q) return `<pre class="ltr hv-text" data-no-i18n>${esc(text)}</pre>`;
+  const ql = q.toLowerCase(), hit = lines.filter((l) => l.toLowerCase().includes(ql));
+  return `<div class="muted" style="margin-bottom:6px">${num(hit.length)} خط از ${num(lines.length)} خط شامل «${esc(q)}»</div>
+    <pre class="ltr hv-text" data-no-i18n>${hit.length ? hit.map((l) => hvMark(l, q)).join("\n") : esc("—")}</pre>`;
+}
+async function histView(id, fname) {
+  const r = await api("history_view", id, fname || null);
+  if (!r.ok) return toast(r.error, "error");
+  const files = r.files && r.files.length > 1 ? `<div class="seg" id="hvFiles" style="margin-bottom:10px;flex-wrap:wrap">${r.files.map((f) => `<button data-f="${esc(f)}" class="${f === r.file ? "on" : ""}">${esc(f)}</button>`).join("")}</div>` : "";
+  const searchable = ["csv", "text", "term"].includes(r.type);
+  const search = searchable ? `<div class="row" style="gap:8px;margin-bottom:8px"><input type="search" class="search" id="hvQ" placeholder="جستجو در ${r.type === "csv" ? "همه‌ی ردیف‌های این فایل" : "متن"}…" style="max-width:360px"><span class="muted" id="hvQs"></span></div>` : "";
+  let body = "";
+  if (r.type === "csv") body = `${files}${search}<div id="hvBody">${hvCsv(r, "")}</div>`;
+  else if (r.type === "text") body = `${files}${search}<div id="hvBody">${hvLines(r.text, "")}</div>`;
+  else if (r.type === "term") {
+    body = `${search}${r.cut ? `<p class="hint">نشست طولانی بود؛ فقط بخش پایانی نمایش داده می‌شود.</p>` : ""}<div class="hv-term" id="hvTerm" data-no-i18n></div><div id="hvBody" hidden></div>`;
+  } else if (r.type === "received") {
+    body = `<p>فایل دریافتی (${fsize(r.size)}). فایل رمزشده نگه داشته شده است.</p><button class="btn primary" id="hvGet">دانلود</button>`;
+  }
+  openModal({ title: r.title || "نمایش", wide: true, body,
+    onOpen: async (m) => {
+      $$("#hvFiles button", m).forEach((b) => (b.onclick = () => { modalClose(null); histView(id, b.dataset.f); }));
+      if ($("#hvGet", m)) $("#hvGet", m).onclick = () => receivedGet(r.rid);
+      const qi = $("#hvQ", m);
+      if (qi) {
+        let tm, seq = 0;
+        qi.focus();
+        qi.oninput = () => {
+          clearTimeout(tm);
+          tm = setTimeout(async () => {
+            const q = qi.value.trim(), box = $("#hvBody", m); if (!box) return;
+            if (r.type === "csv") {
+              const my = ++seq; $("#hvQs", m).textContent = q ? "…" : "";
+              const x = await api("history_view", id, r.file, q || null);
+              if (my !== seq || !$("#hvBody", m)) return;
+              $("#hvQs", m).textContent = "";
+              box.innerHTML = x.ok ? hvCsv(x, q) : `<div class="empty">${esc(x.error)}</div>`;
+            } else if (r.type === "text") box.innerHTML = hvLines(r.text, q);
+            else {   // ترمینال: با جستجو، خط‌های پیداشده به‌صورت متن ساده (بدون کد رنگ)
+              box.hidden = !q; $("#hvTerm", m).hidden = !!q;
+              if (q) box.innerHTML = hvLines(r.text.replace(ESC_RE, "").replace(/\r/g, ""), q);
+            }
+          }, r.type === "csv" ? 350 : 150);
+        };
+      }
+      if (r.type === "term") {
+        try { await loadXterm(); } catch (_) { $("#hvTerm", m).textContent = r.text.replace(ESC_RE, ""); return; }
+        const t = new window.Terminal({ fontFamily: 'Consolas, "DejaVu Sans Mono", monospace', fontSize: 13, theme: XTHEME, scrollback: 100000, disableStdin: true, convertEol: false, cols: 140, rows: 32 });
+        t.open($("#hvTerm", m));
+        const st = { fg: false, pend: "" };
+        t.write(TP.highlight ? highlight(st, r.text) : r.text);
+        const obs = new MutationObserver(() => { if (!document.body.contains($("#hvTerm") || null) || !$("#hvTerm")) { t.dispose(); obs.disconnect(); } });
+        obs.observe($("#modal"), { childList: true });
+      }
+    } });
+}
+
+/* ---------- نوار منابع سرور لینوکس (مثل MobaXterm) ---------- */
+const STATS_MS = 3000;
+function fmtBytes(n, d = 1) { n = Number(n || 0); const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return (i ? n.toFixed(n < 10 ? d : 0) : n) + " " + u[i]; }
+function fmtUp(sec) { sec = Number(sec || 0); const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`; }
+function tsBar(p) { const v = Math.max(0, Math.min(100, Number(p || 0))); return `<span class="ts-bar ${v >= 90 ? "hot" : v >= 75 ? "warm" : ""}"><i style="width:${v}%"></i></span>`; }
+function tsSpark(arr) {
+  if (!arr || arr.length < 2) return "";
+  const w = 60, h = 16, n = arr.length, pts = arr.map((v, i) => `${((i / (n - 1)) * w).toFixed(1)},${(h - (Math.max(0, Math.min(100, v)) / 100) * h).toFixed(1)}`).join(" ");
+  return `<svg class="ts-spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><polyline points="${pts}"/></svg>`;
+}
+function termStatsActive() {
+  const r = $("#termRoot"), t = TERM.tabs.find((x) => x.id === TERM.active);
+  if (!TP.stats || !r || r.hidden || S.page !== "ssh" || SSH.tab !== "term" || !t || t.closed || t.noStats) return null;
+  return t;
+}
+function termStatsRender() {
+  const el = $("#termStats"); if (!el) return;
+  const t = termStatsActive(), st = t && t.st;
+  const show = !!(t && st && st.supported);
+  if (el.hidden === show) { el.hidden = !show; setTimeout(termFitActive, 30); }
+  if (!show) return;
+  const m = st.mem || {}, sw = st.swap || {}, dk = st.disk, n = st.net || {};
+  const hot = (v) => (v != null && v >= 90 ? " hot" : "");
+  el.innerHTML = `<span class="ts${hot(st.cpu)}" title="مصرف CPU — ${st.ncpu || "?"} هسته"><b>CPU</b>${tsBar(st.cpu)}<span class="v">${st.cpu == null ? "…" : st.cpu.toFixed(0) + "%"}</span>${tsSpark(t.cpuHist)}</span>
+    ${st.load && st.load.length ? `<span class="ts" title="Load average (۱، ۵ و ۱۵ دقیقه)"><b>Load</b><span class="v">${st.load.map((x) => x.toFixed(2)).join(" ")}</span></span>` : ""}
+    <span class="ts${hot(m.pct)}" title="RAM: ${fmtBytes(m.used)} از ${fmtBytes(m.total)}"><b>RAM</b>${tsBar(m.pct)}<span class="v">${fmtBytes(m.used)} / ${fmtBytes(m.total)}</span></span>
+    ${sw.total && sw.used ? `<span class="ts${hot(sw.pct)}" title="Swap"><b>Swap</b>${tsBar(sw.pct)}<span class="v">${fmtBytes(sw.used)}</span></span>` : ""}
+    ${dk ? `<span class="ts${hot(dk.pct)}" title="${esc((st.disks || []).map((d) => `${d.mount}  ${d.pct}%  ${fmtBytes(d.used)} / ${fmtBytes(d.size)}`).join("\n"))}"><b>Disk</b><span class="v">${esc(dk.mount)}</span>${tsBar(dk.pct)}<span class="v">${dk.pct.toFixed(0)}%  ${fmtBytes(dk.used)} / ${fmtBytes(dk.size)}</span>${(st.disks || []).some((d) => d !== dk && d.pct >= 90) ? `<span class="v hot">⚠</span>` : ""}</span>` : ""}
+    <span class="ts" title="${esc((n.ifs || []).map((i) => `${i.name}  ↓ ${fmtBytes(i.rx)}/s  ↑ ${fmtBytes(i.tx)}/s`).join("\n"))}"><b>Net</b><span class="v">↓ ${fmtBytes(n.rx)}/s</span><span class="v">↑ ${fmtBytes(n.tx)}/s</span></span>
+    ${st.uptime ? `<span class="ts" title="مدت روشن بودن سرور"><b>Up</b><span class="v">${fmtUp(st.uptime)}</span></span>` : ""}
+    ${st.users != null ? `<span class="ts" title="کاربران وارد شده (who)"><b>Users</b><span class="v">${st.users}</span></span>` : ""}`;
+}
+async function termStatsTick() {
+  const t = termStatsActive();
+  if (!t || t.statsBusy || document.visibilityState === "hidden") return;
+  t.statsBusy = true;
+  try {
+    const r = await api("term_stats", t.id);
+    if (!r.ok) return;
+    if (r.supported === false) { t.noStats = true; t.st = null; return; }
+    if (r.error) return;            // خطای گذرا؛ آخرین مقدار می‌ماند
+    t.st = r;
+    if (r.cpu != null) { (t.cpuHist = t.cpuHist || []).push(r.cpu); if (t.cpuHist.length > 40) t.cpuHist.shift(); }
+  } finally { t.statsBusy = false; termStatsRender(); }
+}
+setInterval(termStatsTick, STATS_MS);

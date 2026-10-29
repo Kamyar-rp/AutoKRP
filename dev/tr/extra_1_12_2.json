@@ -1,0 +1,20 @@
+{
+ "Content-Length لازم است": "Content-Length is required",
+ "Content-Length نامعتبر است": "Invalid Content-Length",
+ "DPAPI فقط در ویندوز وجود دارد؛ حالت کلاینت فقط روی ویندوز پشتیبانی می‌شود (در سیستم‌های دیگر از حالت سرور استفاده کنید).": "DPAPI only exists on Windows; client mode is supported only on Windows (use server mode on other systems).",
+ "TFTP: درخواست {0} رد شد (سقف انتقال هم‌زمان)": "TFTP: request from {0} rejected (concurrent transfer limit)",
+ "«بررسی گواهی SSL» خاموش است و گواهی": "\"Verify SSL certificate\" is off and the certificate of",
+ "اثر انگشت را با گواهی سرور مقایسه کردم": "I compared the fingerprint with the server's certificate",
+ "اعتماد و پین گواهی": "Trust and pin certificate",
+ "با تأیید، از این به بعد فقط همین گواهی پذیرفته می‌شود. اگر مطمئن نیستید، تأیید نکنید.": "Once confirmed, only this certificate is accepted from now on. If you are not sure, do not confirm.",
+ "تأیید گواهی سرور": "Confirm server certificate",
+ "خطای گواهی SSL. بهتر است گواهی معتبر یا CA سازمان را روی سرور/ویندوز نصب کنید. اگر گواهی self-signed است، «بررسی گواهی SSL» را خاموش و «پین گواهی» را روشن کنید و اثر انگشت را در «تست اتصال» تأیید کنید.": "SSL certificate error. Preferably install a valid certificate or your organization's CA on the server/Windows. If the certificate is self-signed, turn \"Verify SSL certificate\" off, turn \"Pin certificate\" on and confirm the fingerprint in \"Test connection\".",
+ "سرور مشغول دریافت فایل‌های دیگر است؛ کمی بعد دوباره تلاش کنید": "The server is busy receiving other files; try again shortly",
+ "هنوز تأیید نشده است. اثر انگشت SHA-256 را با گواهی خود سرور مقایسه کنید (مثلاً در FortiGate: System ← Certificates):": "has not been confirmed yet. Compare the SHA-256 fingerprint with the server's own certificate (e.g. on FortiGate: System → Certificates):",
+ "هنوز گواهی‌ای پین نشده؛ «تست اتصال» را بزنید و اثر انگشت را تأیید کنید. تا آن موقع اتصال برقرار نمی‌شود.": "No certificate pinned yet; press \"Test connection\" and confirm the fingerprint. Until then the connection is refused.",
+ "ورود تنظیمات از فایل {0}": "Settings imported from file {0}",
+ "وقتی «بررسی گواهی SSL» خاموش است، با روشن کردن این گزینه اثر انگشت گواهی سرور با «تست اتصال» به شما نشان داده می‌شود و فقط پس از تأیید شما ذخیره می‌شود؛ اگر بعداً گواهی دیگری برگردد، اتصال رد می‌شود.": "When \"Verify SSL certificate\" is off, this option shows you the server certificate's fingerprint in \"Test connection\" and stores it only after you confirm; if a different certificate is returned later, the connection is refused.",
+ "پیکربندی سرور نامعتبر است.": "Invalid server configuration.",
+ "گواهی {0} با تأیید کاربر پین شد (SHA-256: {1}…)": "Certificate {0} pinned with user confirmation (SHA-256: {1}…)",
+ "گواهی {0} هنوز تأیید نشده است (SHA-256: {1}). در «تنظیمات» همین اتصال «تست اتصال» را بزنید، اثر انگشت را با گواهی خود سرور مقایسه و تأیید کنید.": "Certificate {0} has not been confirmed yet (SHA-256: {1}). In this connection's settings press \"Test connection\", compare the fingerprint with the server's own certificate and confirm."
+}

@@ -1,0 +1,59 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **Do not include tokens, passwords, internal IPs or hostnames.**
+        Security problems must be reported privately — see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: AutoKRP version
+      description: Shown on the About page (e.g. 1.30.0)
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Client (desktop)
+        - Server (web)
+        - Demo
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How do you run it?
+      options:
+        - AutoKRP.exe from Releases
+        - From source (Python)
+  - type: input
+    id: os
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 23H2
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to …
+        2. Click …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error message, run log or screenshot
+      description: For slowness or memory problems, start with --memdiag and attach logs\memdiag.txt from the data folder.

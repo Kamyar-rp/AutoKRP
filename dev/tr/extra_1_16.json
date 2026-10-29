@@ -1,0 +1,10 @@
+{
+ "مصرف CPU — {0} هسته": "CPU usage — {0} cores",
+ "Load average (۱، ۵ و ۱۵ دقیقه)": "Load average (1, 5 and 15 minutes)",
+ "RAM: {0} از {1}": "RAM: {0} of {1}",
+ "اتصال SSH فعال نیست.": "The SSH connection is not active.",
+ "مدت روشن بودن سرور": "Server uptime",
+ "مصرف CPU، RAM، دیسک و شبکه‌ی سرورهای لینوکس، هر ۳ ثانیه (از یک کانال جدا روی همان اتصال؛ ترمینال دست نمی‌خورد)": "CPU, RAM, disk and network usage of Linux servers every 3 seconds (over a separate channel on the same connection; the terminal is untouched)",
+ "نوار منابع": "Resource bar",
+ "کاربران وارد شده (who)": "Logged-in users (who)"
+}
