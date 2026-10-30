@@ -251,15 +251,26 @@ def _m15(c):
               " note TEXT, created REAL)")
 
 
-MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15]
+def _m16(c):
+    """1.31: پروتکل اتصال دستگاه (ssh یا telnet)؛ هشدار انقضای گواهی HTTPS در مانیتورینگ (روز؛ ۰ = خاموش)."""
+    have = {r[1] for r in c.execute("PRAGMA table_info(ssh_devices)")}
+    if "protocol" not in have:
+        c.execute("ALTER TABLE ssh_devices ADD COLUMN protocol TEXT DEFAULT 'ssh'")
+    have = {r[1] for r in c.execute("PRAGMA table_info(mon_targets)")}
+    if "cert_days" not in have:
+        c.execute("ALTER TABLE mon_targets ADD COLUMN cert_days INTEGER DEFAULT 0")
+
+
+MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16]
 # ستون‌هایی که مهاجرت‌ها اضافه می‌کنند؛ هر بار باز شدن بررسی می‌شود و اگر نباشد اضافه می‌شود
 # (پایگاه داده‌ای که شماره‌ی نسخه‌اش جلوتر از ستون‌هایش است، مثلاً بازگردانی فایل قدیمی، دیگر خطا نمی‌دهد)
 REQUIRED_COLUMNS = {
     "ssh_devices": {"backup": "INTEGER", "backup_status": "TEXT", "backup_at": "REAL", "backup_message": "TEXT",
-                    "legacy": "INTEGER DEFAULT 0", "owner": "TEXT DEFAULT ''", "cred_id": "INTEGER"},
+                    "legacy": "INTEGER DEFAULT 0", "owner": "TEXT DEFAULT ''", "cred_id": "INTEGER",
+                    "protocol": "TEXT DEFAULT 'ssh'"},
     "history": {"user": "TEXT"},
     "ips": {c: "TEXT" for c in INTEL_FIELDS},
-    "mon_targets": {"snmp": "TEXT", "cred_id": "INTEGER", "parent_id": "INTEGER"},
+    "mon_targets": {"snmp": "TEXT", "cred_id": "INTEGER", "parent_id": "INTEGER", "cert_days": "INTEGER DEFAULT 0"},
     "mon_events": {"kind": "TEXT DEFAULT 'down'"},
 }
 ACTOR = threading.local()   # نام کاربر جاری هر رشته (API یا اجرای ابزار)؛ برای ستون user تاریخچه
@@ -1167,7 +1178,7 @@ class Store:
                 "SELECT * FROM daily_snapshot WHERE day>=? ORDER BY day", (since_day,)).fetchall()]
 
     # ------------------------------------------------------------ ssh
-    SSH_DEV_FIELDS = ("name", "host", "port", "device_type", "grp", "use_enable", "notes", "backup", "legacy", "owner", "cred_id")   # username در vault
+    SSH_DEV_FIELDS = ("name", "host", "port", "device_type", "grp", "use_enable", "notes", "backup", "legacy", "owner", "cred_id", "protocol")   # username در vault
 
     def ssh_devices(self):
         with self._lock:
@@ -1191,7 +1202,7 @@ class Store:
 
     # ------------------------------------------------------------ مانیتورینگ
     MON_FIELDS = ("name", "host", "kind", "port", "url", "interval", "threshold", "timeout", "slow_ms", "icon", "grp",
-                  "owner", "enabled", "notify", "notes", "snmp", "cred_id", "parent_id")
+                  "owner", "enabled", "notify", "notes", "snmp", "cred_id", "parent_id", "cert_days")
 
     def mon_targets(self):
         with self._lock:

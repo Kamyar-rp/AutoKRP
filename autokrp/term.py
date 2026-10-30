@@ -1,5 +1,6 @@
 """
-ترمینال SSH زنده (مثل PuTTY): نشست تعاملی با PTY (xterm-256color) روی دستگاه ذخیره‌شده یا اتصال موقت.
+ترمینال زنده (مثل PuTTY): نشست تعاملی SSH (PTY xterm-256color)، Telnet، یا پورت سریال (کابل کنسول؛ فقط حالت کلاینت)
+روی دستگاه ذخیره‌شده یا اتصال موقت.
 
 - رابط با long-poll کار می‌کند (term_read تا ۱ ثانیه برای داده‌ی تازه صبر می‌کند)؛ هم در پنجره‌ی دسکتاپ و هم در وب.
 - رمزها هرگز به مرورگر نمی‌روند؛ اتصال از خود برنامه برقرار می‌شود.
@@ -9,6 +10,7 @@
 """
 import base64
 import logging
+import re
 import shlex
 import threading
 import time
@@ -31,12 +33,167 @@ class TermError(Exception):
     pass
 
 
+# ---------------------------------------------------------------------- لایه‌ی انتقال (SSH / Telnet / Serial)
+class SshT:
+    proto = "ssh"
+
+    def __init__(self, client, chan):
+        self.client, self.chan = client, chan
+
+    def recv(self, n):
+        try:
+            return self.chan.recv(n)
+        except (TimeoutError, OSError) as e:
+            if isinstance(e, TimeoutError) or "timed out" in str(e):
+                if self.chan.closed or self.chan.exit_status_ready():
+                    return b""
+                raise TimeoutError("timed out")
+            raise
+
+    def send(self, data):
+        self.chan.sendall(data)
+
+    def resize(self, cols, rows):
+        self.chan.resize_pty(width=cols, height=rows)
+
+    def brk(self):
+        raise TermError("ارسال Break فقط برای پورت سریال است.")
+
+    def close(self):
+        self.client.close()
+
+
+class TelnetT:
+    proto = "telnet"
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def recv(self, n):
+        return self.conn.recv(n)
+
+    def send(self, data):
+        self.conn.send(data)
+
+    def resize(self, cols, rows):
+        self.conn.resize(cols, rows)
+
+    def brk(self):
+        raise TermError("ارسال Break فقط برای پورت سریال است.")
+
+    def close(self):
+        self.conn.close()
+
+
+class SerialT:
+    proto = "serial"
+
+    def __init__(self, ser):
+        self.ser = ser
+
+    def recv(self, n):
+        d = self.ser.read(1)          # تا timeout پورت (۰٫۵ ثانیه) صبر می‌کند
+        if not d:
+            raise TimeoutError("timed out")
+        w = self.ser.in_waiting
+        if w:
+            d += self.ser.read(min(w, n))
+        return d
+
+    def send(self, data):
+        self.ser.write(data)
+
+    def resize(self, cols, rows):
+        pass                           # کنسول سریال اندازه‌ی پنجره ندارد
+
+    def brk(self):
+        self.ser.send_break(duration=0.5)
+
+    def close(self):
+        try:
+            self.ser.close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------- پورت سریال
+BAUDS = (300, 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200, 230400, 460800, 921600)
+PARITY = {"N": "N", "E": "E", "O": "O", "M": "M", "S": "S"}
+STOPS = {"1": 1, "1.5": 1.5, "2": 2}
+FLOWS = ("none", "xonxoff", "rtscts", "dsrdtr")
+
+
+def list_serial():
+    """پورت‌های سریال این کامپیوتر (کابل کنسول USB بعد از نصب درایور در «Ports (COM & LPT)» ویندوز)."""
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return []
+    out = []
+    for p in list_ports.comports():
+        out.append({"port": p.device, "desc": p.description if p.description and p.description != "n/a" else "",
+                    "hwid": p.hwid if p.hwid and p.hwid != "n/a" else "",
+                    "vid": f"{p.vid:04X}" if p.vid is not None else "", "pid": f"{p.pid:04X}" if p.pid is not None else ""})
+    def key(x):
+        m = re.search(r"(\d+)$", x["port"])
+        return (re.sub(r"\d+$", "", x["port"]), int(m.group(1)) if m else 0)
+    return sorted(out, key=key)
+
+
+def clean_serial(o):
+    """تنظیمات اتصال سریال از رابط؛ پورت باید در فهرست پورت‌های واقعی همین کامپیوتر باشد (نه مسیر دلخواه دستگاه)."""
+    o = o if isinstance(o, dict) else {}
+    port = str(o.get("port") or "").strip()
+    if not port or port not in {p["port"] for p in list_serial()}:
+        raise TermError(f"پورت سریال «{port or '-'}» پیدا نشد؛ کابل را وصل کنید و فهرست را تازه کنید.")
+    try:
+        baud = int(o.get("baud") or 9600)
+    except (TypeError, ValueError):
+        baud = 0
+    if baud not in BAUDS:
+        raise TermError(f"سرعت {o.get('baud')} معتبر نیست.")
+    bits = int(o.get("bits") or 8) if str(o.get("bits") or 8) in ("5", "6", "7", "8") else 0
+    if not bits:
+        raise TermError("تعداد بیت داده معتبر نیست.")
+    parity = PARITY.get(str(o.get("parity") or "N").upper()[:1])
+    stop = STOPS.get(str(o.get("stop") or "1"))
+    flow = str(o.get("flow") or "none")
+    if parity is None or stop is None or flow not in FLOWS:
+        raise TermError("تنظیمات پورت سریال معتبر نیست.")
+    return {"port": port, "baud": baud, "bits": bits, "parity": parity, "stop": stop, "flow": flow}
+
+
+def serial_label(c):
+    st = {1: "1", 1.5: "1.5", 2: "2"}[c["stop"]]
+    return f"{c['baud']} {c['bits']}{c['parity']}{st}" + ("" if c["flow"] == "none" else f" {c['flow']}")
+
+
+def serial_open(c):
+    try:
+        import serial
+    except ImportError:
+        raise TermError("کتابخانه‌ی pyserial نصب نیست (pip install pyserial).")
+    kw = dict(port=c["port"], baudrate=c["baud"], bytesize=c["bits"], parity=c["parity"], stopbits=c["stop"],
+              timeout=0.5, write_timeout=5, xonxoff=c["flow"] == "xonxoff", rtscts=c["flow"] == "rtscts",
+              dsrdtr=c["flow"] == "dsrdtr")
+    try:
+        try:
+            return serial.Serial(exclusive=True, **kw)
+        except (TypeError, ValueError):          # exclusive روی ویندوز پیش‌فرض و در بعضی نسخه‌ها پارامتر ندارد
+            return serial.Serial(**kw)
+    except serial.SerialException as e:
+        m = str(e)
+        if "ermission" in m or "Access is denied" in m or "PermissionError" in m or "busy" in m.lower():
+            raise TermError(f"پورت {c['port']} در دسترس نیست؛ احتمالاً برنامه‌ی دیگری (مثل PuTTY) آن را باز کرده است.")
+        raise TermError(f"باز کردن پورت {c['port']} ناموفق بود: {m[:200]}")
+
+
 class Session:
-    def __init__(self, owner, title, host, port, kind):
+    def __init__(self, owner, title, host, port, kind, proto="ssh", info=""):
         self.id = uuid.uuid4().hex
         self.owner, self.title, self.host, self.port, self.kind = owner, title, host, int(port), kind
-        self.client = None
-        self.chan = None
+        self.proto, self.info = proto, info
+        self.t = None                  # SshT / TelnetT / SerialT
         self.buf = bytearray()
         self.base = 0                  # آفست بایت اول buf در کل خروجی
         self.cond = threading.Condition()
@@ -54,7 +211,7 @@ class Session:
 
     def public(self):
         return {"id": self.id, "title": self.title, "host": self.host, "port": self.port, "kind": self.kind,
-                "created": self.created, "closed": self.closed, "reason": self.reason, "recording": bool(self.rec_path)}
+                "proto": self.proto, "info": self.info, "created": self.created, "closed": self.closed, "reason": self.reason, "recording": bool(self.rec_path)}
 
 
 def check_hostkey(hostkeys, host, port, legacy, adhoc, accept_fp, emit, attempt=None):
@@ -119,66 +276,141 @@ class TermManager:
         return {"idle_minutes": int(c.get("idle_minutes", 30) or 0), "record": bool(c.get("record", False))}
 
     # ------------------------------------------------------------------ باز کردن
-    def open(self, owner, dev, creds, cols=120, rows=32, accept_fp=None, adhoc=False, add_history=None, attempt=None):
-        """dev: {host, port, device_type, name, legacy, use_enable}؛ creds: {username, password, secret}"""
+    def _limits(self, owner):
         with self._lock:
             mine = [s for s in self.sessions.values() if s.owner == owner and not s.closed]
             if len(mine) >= MAX_PER_USER:
                 raise TermError(f"حداکثر {MAX_PER_USER} ترمینال باز برای هر کاربر.")
             if len([s for s in self.sessions.values() if not s.closed]) >= MAX_TOTAL:
                 raise TermError("تعداد ترمینال‌های باز برنامه به سقف رسیده است.")
-        host, port = dev["host"], int(dev.get("port") or 22)
-        legacy = bool(dev.get("legacy"))
-        if not creds.get("username"):
-            raise TermError("یوزر وارد نشده است.")
-        confirm = check_hostkey(self.hostkeys, host, port, legacy, adhoc, accept_fp, self.emit, attempt)
-        if confirm:
-            return confirm
-        cli = ssh_connect(self.hostkeys, dev, creds, attempt)
-        try:
-            chan = cli.invoke_shell(term="xterm-256color", width=max(20, min(int(cols), 500)), height=max(5, min(int(rows), 200)))
-            chan.settimeout(0.5)
-            if attempt:
-                attempt.check()     # لغو درست هم‌زمان با برقراری اتصال: نشست ساخته نمی‌شود
-        except Exception as e:
-            cli.close()
-            raise TermError(CANCEL_MSG if attempt and attempt.cancelled else friendly(e))
+
+    def open(self, owner, dev, creds, cols=120, rows=32, accept_fp=None, adhoc=False, add_history=None, attempt=None):
+        """dev: {host, port, device_type, name, legacy, use_enable, protocol (ssh|telnet)}؛ creds: {username, password, secret}"""
+        self._limits(owner)
+        cols, rows = max(20, min(int(cols), 500)), max(5, min(int(rows), 200))
+        proto = dev.get("protocol") or "ssh"
+        host = dev["host"]
+        port = int(dev.get("port") or (23 if proto == "telnet" else 22))
+        if proto == "telnet":
+            from .telnet import TelnetConn
+            try:
+                conn = TelnetConn.connect(host, port, 15, attempt, cols, rows)
+                if attempt:
+                    attempt.check()
+            except Exception as e:
+                raise TermError(CANCEL_MSG if attempt and attempt.cancelled else friendly(e))
+            tr = TelnetT(conn)
+        else:
+            legacy = bool(dev.get("legacy"))
+            if not creds.get("username"):
+                raise TermError("یوزر وارد نشده است.")
+            confirm = check_hostkey(self.hostkeys, host, port, legacy, adhoc, accept_fp, self.emit, attempt)
+            if confirm:
+                return confirm
+            cli = ssh_connect(self.hostkeys, dev, creds, attempt)
+            try:
+                chan = cli.invoke_shell(term="xterm-256color", width=cols, height=rows)
+                chan.settimeout(0.5)
+                if attempt:
+                    attempt.check()     # لغو درست هم‌زمان با برقراری اتصال: نشست ساخته نمی‌شود
+            except Exception as e:
+                cli.close()
+                raise TermError(CANCEL_MSG if attempt and attempt.cancelled else friendly(e))
+            tr = SshT(cli, chan)
         title = dev.get("name") or host
-        s = Session(owner, title, host, port, "adhoc" if adhoc else "device")
-        s.client, s.chan = cli, chan
+        s = Session(owner, title, host, port, "adhoc" if adhoc else "device", proto)
+        s.t = tr
         s.device_type = dev.get("device_type") or ""
-        if self.cfg()["record"]:
-            d = paths.data_dir() / "term_logs"
-            d.mkdir(exist_ok=True)
-            s.rec_path = d / f"{time.strftime('%Y%m%d_%H%M%S')}_{s.id[:8]}.log"
-            self._rec(s, f"# {title} ({host}:{port}) — user {creds['username']} — {owner or '-'} — {time.strftime('%Y-%m-%d %H:%M:%S')}\r\n")
-        with self._lock:
-            self.sessions[s.id] = s
-        threading.Thread(target=self._reader, args=(s,), name=f"term-{s.id[:6]}", daemon=True).start()
-        if dev.get("use_enable") and dev.get("device_type") not in ("linux", None) and creds.get("secret"):
+        self._start(s, f"{title} ({proto} {host}:{port}) — user {creds.get('username') or '-'}")
+        if proto == "telnet" and (creds.get("username") or creds.get("password")):
+            threading.Thread(target=self._auto_login, args=(s, creds, bool(dev.get("use_enable"))), daemon=True).start()
+        elif dev.get("use_enable") and dev.get("device_type") not in ("linux", None) and creds.get("secret"):
             threading.Thread(target=self._auto_enable, args=(s, creds["secret"]), daemon=True).start()
         if add_history:
             add_history(s, "open")
         return {"session": s.public()}
 
+    def open_serial(self, owner, cfg):
+        """کابل کنسول: cfg از clean_serial. پورت انحصاری باز می‌شود (برنامه‌ی دیگری هم‌زمان نمی‌تواند)."""
+        self._limits(owner)
+        with self._lock:
+            if any(not x.closed and x.proto == "serial" and x.host == cfg["port"] for x in self.sessions.values()):
+                raise TermError(f"پورت {cfg['port']} همین حالا در یک ترمینال دیگر باز است.")
+        ser = serial_open(cfg)
+        info = serial_label(cfg)
+        s = Session(owner, cfg["port"], cfg["port"], cfg["baud"], "serial", "serial", info)
+        s.t = SerialT(ser)
+        self._start(s, f"{cfg['port']} ({info})")
+        try:
+            s.t.send(b"\r")             # بیدار کردن کنسول تا prompt دیده شود
+        except Exception:
+            pass
+        return {"session": s.public()}
+
+    def _start(self, s, head):
+        if self.cfg()["record"]:
+            d = paths.data_dir() / "term_logs"
+            d.mkdir(exist_ok=True)
+            s.rec_path = d / f"{time.strftime('%Y%m%d_%H%M%S')}_{s.id[:8]}.log"
+            self._rec(s, f"# {head} — {s.owner or '-'} — {time.strftime('%Y-%m-%d %H:%M:%S')}\r\n")
+        with self._lock:
+            self.sessions[s.id] = s
+        threading.Thread(target=self._reader, args=(s,), name=f"term-{s.id[:6]}", daemon=True).start()
+
+    def _wait_for(self, s, pred, secs, since=None):
+        """متن خروجی از آفست since (یا ۲۰۰ بایت آخر) تا pred درست شود؛ None = نشد."""
+        t = time.time() + secs
+        with s.cond:
+            while not s.closed and time.time() < t:
+                if since is None:
+                    tail = bytes(s.buf[-200:]).decode("utf-8", "replace")
+                else:
+                    tail = bytes(s.buf[max(0, since - s.base):][-400:]).decode("utf-8", "replace")
+                if pred(tail):
+                    return tail
+                s.cond.wait(0.3)
+        return None
+
+    _USER_RE = re.compile(r"(user\s*name|username|login)\s*:\s*$", re.I)
+    _PASS_RE = re.compile(r"pass(word|code)?\s*:\s*$", re.I)
+
+    def _auto_login(self, s, creds, use_enable):
+        """Telnet: یوزر و رمز ذخیره‌شده از خود برنامه (به مرورگر نمی‌رود). prompt ناشناخته = کاربر خودش وارد می‌کند."""
+        user, pw = creds.get("username") or "", creds.get("password") or ""
+        try:
+            tail = self._wait_for(s, lambda x: bool(self._USER_RE.search(x.rstrip(" ")) or self._PASS_RE.search(x.rstrip(" "))), 15)
+            if not tail:
+                return
+            if self._USER_RE.search(tail.rstrip(" ")):
+                if not user:
+                    return
+                mark = s.end
+                s.t.send(user.encode("utf-8") + b"\r")
+                tail = self._wait_for(s, lambda x: bool(self._PASS_RE.search(x.rstrip(" "))), 10, mark)
+                if not tail:
+                    return
+            if not pw:
+                return
+            mark = s.end
+            s.t.send(pw.encode("utf-8") + b"\r")
+            if use_enable and creds.get("secret") and s.device_type not in ("linux", ""):
+                tail = self._wait_for(s, lambda x: x.rstrip().endswith((">", "#")) or bool(self._USER_RE.search(x.rstrip(" "))), 10, mark)
+                if tail and tail.rstrip().endswith(">"):
+                    s.t.send(b"enable\r")
+                    if self._wait_for(s, lambda x: "assword" in x[-40:], 6):
+                        s.t.send(creds["secret"].encode("utf-8") + b"\r")
+        except Exception:
+            log.debug("telnet auto-login", exc_info=True)
+
     def _auto_enable(self, s, secret):
         """دستگاه ذخیره‌شده با «ورود به حالت enable»: enable و رمزش از خود برنامه (رمز به مرورگر نمی‌رود)."""
-        def wait_for(pred, secs):
-            t = time.time() + secs
-            with s.cond:
-                while not s.closed and time.time() < t:
-                    tail = bytes(s.buf[-200:]).decode("utf-8", "replace")
-                    if pred(tail):
-                        return tail
-                    s.cond.wait(0.3)
-            return None
-        tail = wait_for(lambda x: x.rstrip().endswith((">", "#")), 8)
+        tail = self._wait_for(s, lambda x: x.rstrip().endswith((">", "#")), 8)
         if not tail or tail.rstrip().endswith("#"):
             return
         try:
-            s.chan.send(b"enable\n")
-            if wait_for(lambda x: "assword" in x[-40:], 6):
-                s.chan.send(secret.encode("utf-8") + b"\n")
+            s.t.send(b"enable\n")
+            if self._wait_for(s, lambda x: "assword" in x[-40:], 6):
+                s.t.send(secret.encode("utf-8") + b"\n")
         except OSError:
             pass
 
@@ -187,13 +419,9 @@ class TermManager:
         try:
             while not s.closed:
                 try:
-                    data = s.chan.recv(65536)
-                except (TimeoutError, OSError) as e:
-                    if isinstance(e, TimeoutError) or "timed out" in str(e):
-                        if s.chan.closed or s.chan.exit_status_ready():
-                            break
-                        continue
-                    raise
+                    data = s.t.recv(65536)
+                except TimeoutError:
+                    continue
                 if not data:
                     break
                 with s.cond:
@@ -207,9 +435,14 @@ class TermManager:
                 if s.rec_path:
                     self._rec(s, data.decode("utf-8", "replace"))
         except Exception as e:
-            s.reason = friendly(e)
+            if s.closed:
+                pass
+            elif s.proto == "serial":
+                s.reason = f"پورت سریال قطع شد (کابل جدا شد؟): {str(e)[:150]}"
+            else:
+                s.reason = friendly(e)
         finally:
-            self._finish(s, s.reason or "اتصال از طرف دستگاه بسته شد")
+            self._finish(s, s.reason or ("پورت سریال بسته شد" if s.proto == "serial" else "اتصال از طرف دستگاه بسته شد"))
 
     def _rec(self, s, text):
         try:
@@ -226,7 +459,8 @@ class TermManager:
             s.reason = s.reason or reason
             s.cond.notify_all()
         try:
-            s.client.close()
+            if s.t:
+                s.t.close()
         except Exception:
             pass
         if self._on_close:
@@ -266,8 +500,8 @@ class TermManager:
         if len(raw) > 256 * 1024:
             raise TermError("متن ارسالی بیش از حد بزرگ است.")
         try:
-            s.chan.sendall(raw)
-        except OSError as e:
+            s.t.send(raw)
+        except Exception as e:
             self._finish(s, friendly(e))
             raise TermError("ارسال به دستگاه ناموفق بود؛ اتصال بسته شد.")
         return {}
@@ -276,9 +510,24 @@ class TermManager:
         s = self._get(sid, owner)
         if not s.closed:
             try:
-                s.chan.resize_pty(width=max(20, min(int(cols), 500)), height=max(5, min(int(rows), 200)))
+                s.t.resize(max(20, min(int(cols), 500)), max(5, min(int(rows), 200)))
             except Exception:
                 pass
+        return {}
+
+    def send_break(self, sid, owner):
+        s = self._get(sid, owner)
+        if s.closed:
+            raise TermError("نشست بسته شده است.")
+        s.last_input = time.time()
+        try:
+            s.t.brk()
+        except TermError:
+            raise
+        except Exception as e:
+            raise TermError(f"ارسال Break ناموفق بود: {str(e)[:150]}")
+        if s.rec_path:
+            self._rec(s, "\r\n[BREAK]\r\n")
         return {}
 
     def stats(self, sid, owner):
@@ -286,11 +535,11 @@ class TermManager:
         s = self._get(sid, owner)
         if s.closed:
             raise TermError("نشست بسته شده است.")
-        if s.device_type and s.device_type != "linux":
+        if s.proto != "ssh" or (s.device_type and s.device_type != "linux"):
             return {"supported": False}
         if s.stats is None:
             s.stats = HostStats()
-        return s.stats.poll(s.client)
+        return s.stats.poll(s.t.client)
 
     def close(self, sid, owner, reason="بسته شد توسط کاربر"):
         s = self._get(sid, owner)
@@ -336,7 +585,7 @@ def read_recording(path):
     return "".join(atrest.read_log_lines(path))
 
 
-__all__ = ["TermManager", "TermError", "SshError", "read_recording"]
+__all__ = ["TermManager", "TermError", "SshError", "read_recording", "list_serial", "clean_serial"]
 
 
 # ---------------------------------------------------------------------- نوار منابع (مثل MobaXterm)

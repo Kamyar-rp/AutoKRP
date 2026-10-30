@@ -30,10 +30,12 @@ A typical SOC chore: take the source IPs from IDS alerts, check them on AbuseIPD
 - **Python tasks**: write a `plan(fg, rows, ctx)` function that reads from the device and *proposes* actions (create an address, add it to a group, build a policy, …). AutoKRP shows the proposed requests and sends only the approved ones. Templates and a dry-run are included.
 - Offline FortiGate signature updates over SSH/TFTP; a CLI log-search command builder.
 
-**SSH and network devices**
+**Device access (SSH, Telnet, console cable)**
 - Script library with variables from the previous tool's output; run on many devices at once; the last command's output can be passed on as CSV.
 - Scheduled config backups with version diff and "download latest of selected devices" as a zip.
-- Live SSH terminal in tabs and WinSCP-style file transfer (SFTP, SCP, FTP/FTPS, temporary TFTP server).
+- Live terminal in tabs over SSH, Telnet or a USB/serial console cable (COM port, desktop mode only, with Break), MultiExec and saved command buttons; WinSCP-style file transfer (SFTP, SCP, FTP/FTPS, temporary TFTP server).
+- Telnet devices for runs and config backups (Cisco and other network devices supported by netmiko).
+- Network tools: find where an IP/MAC is connected (switch and port, via SNMP ARP/MAC tables), traceroute, IP owner lookup (RDAP), MAC vendor lookup (IEEE).
 
 **Monitoring and assets**
 - Ping / TCP / HTTP monitoring with sound, browser and email alerts, maintenance windows, reports and a NOC view.

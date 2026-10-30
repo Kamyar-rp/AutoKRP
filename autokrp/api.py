@@ -342,6 +342,11 @@ class Api:
         return self._me()
 
     def _me(self):
+        r = self._me0()
+        r["hidden_modes"] = perms.hidden_modes()        # 1.31: بخش‌های مخصوص حالت دیگر (data-mode در رابط)
+        return r
+
+    def _me0(self):
         u = self._current_user()
         feats = perms.enabled_features(self._settings)
         if paths.is_server():
@@ -2223,8 +2228,10 @@ class Api:
         a = t.get("adhoc") if isinstance(t.get("adhoc"), dict) else None
         if not a:
             raise ConnectorError("دستگاه یا اتصال موقت انتخاب نشده است.")
-        d = self._clean_dev({"host": a.get("host"), "port": a.get("port") or 22, "device_type": a.get("device_type") or "linux",
-                             "name": a.get("host"), "legacy": a.get("legacy")})
+        proto = "telnet" if a.get("protocol") == "telnet" else "ssh"
+        d = self._clean_dev({"host": a.get("host"), "port": a.get("port") or (23 if proto == "telnet" else 22),
+                             "device_type": a.get("device_type") or "linux", "name": a.get("host"), "legacy": a.get("legacy"),
+                             "protocol": proto, "use_enable": False})
         return d, {"username": str(a.get("username") or "").strip(), "password": str(a.get("password") or ""), "secret": ""}, True
 
     def _term_closed(self, s):
@@ -2238,6 +2245,8 @@ class Api:
         if not self._vault.unlocked():
             raise VaultError("برنامه قفل است.")
         from .term import TermError
+        if isinstance(target, dict) and target.get("serial") is not None:
+            return self._term_serial(target.get("serial"))
         d, c, adhoc = self._target(target)
         att = self._attempt_begin(attempt)
         if isinstance(att, dict):
@@ -2252,10 +2261,62 @@ class Api:
             self._attempts.end(self._uname(), attempt)
         if "session" in res:
             s = res["session"]
-            self._store.add_history("terminal", s["title"], "ok", f"اتصال ترمینال به {s['host']}:{s['port']}"
-                                    + (f" (موقت، یوزر {c['username']})" if adhoc else "")
+            self._store.add_history("terminal", s["title"], "ok", f"اتصال ترمینال {s['proto'].upper()} به {s['host']}:{s['port']}"
+                                    + (f" (موقت، یوزر {c['username'] or '-'})" if adhoc else "")
+                                    + ("؛ Telnet بدون رمزنگاری" if s["proto"] == "telnet" else "")
                                     + ("؛ ضبط روشن" if s["recording"] else ""))
         return res
+
+    def _term_serial(self, opts):
+        """کابل کنسول (فقط حالت کلاینت: پورت سریال روی همان کامپیوتری است که برنامه اجرا می‌شود)."""
+        from .term import TermError, clean_serial
+        if paths.is_server():
+            raise ConnectorError("اتصال با کابل کنسول فقط در حالت کلاینت (دسکتاپ) در دسترس است.")
+        try:
+            res = self._term.open_serial(self._uname(), clean_serial(opts))
+        except TermError as e:
+            raise ConnectorError(str(e))
+        s = res["session"]
+        self._store.add_history("terminal", s["title"], "ok", f"اتصال کابل کنسول {s['host']} ({s['info']})")
+        return res
+
+    @_safe
+    def serial_ports(self):
+        """فهرست پورت‌های COM این کامپیوتر (فقط کلاینت)."""
+        if paths.is_server():
+            raise ConnectorError("اتصال با کابل کنسول فقط در حالت کلاینت (دسکتاپ) در دسترس است.")
+        from .term import BAUDS, list_serial
+        try:
+            import serial  # noqa: F401
+            have = True
+        except ImportError:
+            have = False
+        return {"ports": list_serial(), "bauds": list(BAUDS), "available": have}
+
+    @_safe
+    def term_snips_save(self, items):
+        """دستورهای ذخیره‌شده‌ی ترمینال (دکمه‌های آماده) برای همین کاربر؛ فقط متن، اجرا با کلیک خود کاربر."""
+        if not isinstance(items, list) or len(items) > 200:
+            raise ConnectorError("حداکثر ۲۰۰ دستور.")
+        out = []
+        for it in items:
+            if not isinstance(it, dict):
+                raise ConnectorError("مقدار نامعتبر است.")
+            name, text = str(it.get("name") or "").strip()[:60], str(it.get("text") or "")
+            if not text.strip() or len(text) > 8000:
+                raise ConnectorError("متن دستور خالی یا بیش از حد بلند است.")
+            out.append({"name": name or text.strip().splitlines()[0][:40], "text": text.replace("\r\n", "\n"),
+                        "enter": it.get("enter", True) is not False})
+        u = self._current_user()
+        if u:
+            self._settings.set_user_ui(u["username"].lower(), "term_snips", out)
+        else:
+            self._settings.update({"ui": {"term_snips": out}})
+        return {"items": out}
+
+    @_safe
+    def term_break(self, sid):
+        return self._term_call(self._term.send_break, sid, self._uname())
 
     # ------------------------------------------------------------ لغو اتصال در حال برقراری
     def _attempt_begin(self, aid):
@@ -2529,6 +2590,101 @@ class Api:
             for c in enc_iter(p):
                 f.write(c)
         return {"saved": str(dest)}
+
+    # ------------------------------------------------------------ ابزارهای شبکه (1.31)
+    def _net(self, fn, *a):
+        from .nettools import NetError
+        try:
+            return fn(*a)
+        except NetError as e:
+            raise ConnectorError(str(e))
+
+    @property
+    def _netjobs(self):
+        if not hasattr(self, "_nj"):
+            from .nettools import Jobs
+            self._nj = Jobs()
+        return self._nj
+
+    @_safe
+    def net_oui(self, text):
+        """سازنده‌ی MACهای یک متن (تا ۵۰۰۰ مورد)؛ آفلاین از جدول IEEE."""
+        from .nettools import OUI, extract_macs
+        text = str(text or "")[:2_000_000]
+        macs = extract_macs(text)
+        return {"items": [{"mac": m, "vendor": OUI.lookup(m)} for m in macs], "info": OUI.info()}
+
+    @_safe
+    def net_oui_update(self):
+        """به‌روزرسانی جدول سازنده‌ها از سایت IEEE (فقط ادمین؛ داده‌ی عمومی)."""
+        from .nettools import OUI
+        try:
+            info = self._net(OUI.update_from_ieee)
+        except ConnectorError:
+            raise
+        except Exception as e:
+            raise ConnectorError(f"دریافت از سایت IEEE ناموفق بود: {str(e)[:200]}")
+        self._store.add_history("nettools", "OUI", "ok", f"جدول سازنده‌های MAC از IEEE به‌روز شد ({info['entries']} مورد)")
+        return info
+
+    @_safe
+    def net_rdap(self, ip):
+        from .nettools import rdap_lookup
+        res = self._net(rdap_lookup, ip)
+        self._store.add_history("nettools", res["ip"], "ok", f"RDAP: {res.get('name') or '-'} ({res.get('country') or '-'})")
+        return res
+
+    @_safe
+    def net_trace_start(self, host, hops=30, wait=2, resolve=False):
+        from .nettools import clean_host, traceroute
+        h = self._net(clean_host, host)
+        try:
+            hops, wait = max(1, min(int(hops or 30), 64)), max(1, min(int(wait or 2), 10))
+        except (TypeError, ValueError):
+            raise ConnectorError("مقدار نامعتبر است.")
+        self._store.add_history("nettools", h, "ok", f"Traceroute به {h}")
+        return self._net(self._netjobs.start, self._uname(), "trace", h,
+                         lambda j: traceroute(j, h, hops, wait, bool(resolve)))
+
+    def _net_targets(self):
+        return [t for t in self._mon.targets().values() if t.get("kind") == "snmp" and t.get("enabled") and self._mon_visible(t)]
+
+    @_safe
+    def net_locate_targets(self):
+        return {"targets": [{"id": t["id"], "name": t["name"], "host": t.get("host") or "", "grp": t.get("grp") or ""}
+                            for t in self._net_targets()]}
+
+    @_safe
+    def net_locate_start(self, query, ids=None):
+        """محل IP/MAC: جدول ARP و MAC هدف‌های SNMP مانیتورینگ (فقط خواندن SNMP؛ هیچ تغییری روی دستگاه)."""
+        from .nettools import locate
+        ts = self._net_targets()
+        if ids:
+            want = {int(x) for x in ids if str(x).isdigit()}
+            ts = [t for t in ts if t["id"] in want]
+        if len(ts) > 300:
+            raise ConnectorError("حداکثر ۳۰۰ دستگاه در هر جستجو.")
+        topo = self._mon.topo.load() or {}
+        up = {}
+        for lk in topo.get("links") or []:
+            up.setdefault(lk["a"], set()).add(lk.get("a_port") or "")
+            if lk.get("b"):
+                up.setdefault(lk["b"], set()).add(lk.get("b_port") or "")
+        snmp = self._mon.snmp
+        q = str(query or "").strip()[:100]
+        self._store.add_history("nettools", q, "ok", f"جستجوی محل {q} روی {len(ts)} دستگاه SNMP")
+        return self._net(self._netjobs.start, self._uname(), "locate", q,
+                         lambda j: locate(j, q, ts, snmp.cred_for, snmp.client, up, self._demo))
+
+    @_safe
+    def net_job(self, jid, since=0):
+        from .nettools import Jobs
+        j = self._net(self._netjobs.get, jid, self._uname())
+        return Jobs.public(j, int(since or 0))
+
+    @_safe
+    def net_job_cancel(self, jid):
+        return self._net(self._netjobs.cancel, jid, self._uname())
 
     # ------------------------------------------------------------ مانیتورینگ
     @property
@@ -3747,7 +3903,7 @@ class Api:
         for d in devs:
             d["personal"] = bool(d.get("owner"))
         return {"devices": devs, "scripts": self._store.ssh_scripts(), "types": sshmod.DEVICE_TYPES,
-                "groups": sorted({d["grp"] for d in devs if d.get("grp")}), "vars": list(sshmod.VARS)}
+                "telnet_types": list(sshmod.TELNET_TYPES), "groups": sorted({d["grp"] for d in devs if d.get("grp")}), "vars": list(sshmod.VARS)}
 
     def _clean_dev(self, d):
         host = str(d.get("host") or "").strip()
@@ -3762,12 +3918,17 @@ class Api:
         dt = str(d.get("device_type") or "linux").strip()
         if not dt.replace("_", "").isalnum():
             raise ConnectorError(f"نوع دستگاه معتبر نیست: {dt}")
+        proto = "telnet" if d.get("protocol") == "telnet" else "ssh"
+        if proto == "telnet":
+            from .ssh import TELNET_TYPES
+            if dt not in TELNET_TYPES:
+                raise ConnectorError("Telnet برای این نوع دستگاه پشتیبانی نمی‌شود (فقط تجهیزات شبکه‌ای که netmiko برایشان Telnet دارد).")
         cid = d.get("cred_id")
         return {"id": d.get("id"), "cred_id": int(cid) if str(cid or "").isdigit() and int(cid) > 0 else None,
                 "name": str(d.get("name") or "").strip() or host, "host": host, "port": port,
                 "device_type": dt, "username": str(d.get("username") or "").strip(), "grp": str(d.get("grp") or "").strip(),
                 "use_enable": 1 if d.get("use_enable") else 0, "notes": str(d.get("notes") or ""),
-                "legacy": 1 if d.get("legacy") else 0,
+                "legacy": 1 if d.get("legacy") else 0, "protocol": proto,
                 "backup": None if d.get("backup") in (None, "", "default") else (1 if d.get("backup") else 0)}
 
     def _set_creds(self, dev_id, password=None, secret=None, username=None):
@@ -3839,8 +4000,10 @@ class Api:
             if row and row[0].lower() in ("host", "ip", "address"):
                 continue
             g = lambda i, k: (row[i] if len(row) > i and row[i] else dfl.get(k, ""))
-            d = {"host": g(0, "host"), "port": g(1, "port") or 22, "username": g(2, "username"), "device_type": g(4, "device_type") or "linux",
-                 "name": g(6, "name"), "grp": g(7, "grp"), "use_enable": dfl.get("use_enable")}
+            proto = "telnet" if dfl.get("protocol") == "telnet" else "ssh"
+            d = {"host": g(0, "host"), "port": g(1, "port") or (23 if proto == "telnet" else 22), "username": g(2, "username"),
+                 "device_type": g(4, "device_type") or "linux", "name": g(6, "name"), "grp": g(7, "grp"),
+                 "use_enable": dfl.get("use_enable"), "protocol": proto}
             try:
                 cd = self._clean_dev(d)
             except ConnectorError as e:

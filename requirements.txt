@@ -11,6 +11,7 @@ ldap3>=2.9,<3          # optional Active Directory sign-in in server mode (pure 
 sqlcipher3>=0.6,<1     # encrypted local database (SQLCipher 4; Windows wheels include the library)
 pysmi>=2.0,<3          # compiles MIB files to JSON (no code execution; BSD; deps: lark, Jinja2)
 truststore>=0.9        # use the Windows certificate store for TLS
+pyserial>=3.5          # console cable (COM port) terminal in client mode (pure Python, BSD-3-Clause)
 pystray>=0.19          # system tray icon (monitoring keeps running in the background)
 Pillow>=11.3           # CVE-2025-48379
 Jinja2>=3.1.6          # pysmi dependency; CVE-2025-27516

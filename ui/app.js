@@ -380,7 +380,7 @@ function connChip(name, st) {
 }
 /* نمایش ابزارها: ابزار/بخش خاموش (تنظیمات ← عمومی، برای همه) یا پنهان در «ابزارهای من» (فقط همین کاربر) */
 const CONN_TOOL = { splunk: "splunk", abuseipdb: "abuse", fortigate: "fortigate", redmine: "redmine" };
-const FEATS = [["monitor", "مانیتورینگ"], ["term", "ترمینال و انتقال فایل"], ["offline", "ابزارهای آفلاین"]];
+const FEATS = [["monitor", "مانیتورینگ"], ["term", "ترمینال و انتقال فایل"], ["offline", "ابزارهای آفلاین"], ["nettools", "ابزارهای شبکه"]];
 function hiddenTools() { return (S.settings && S.settings.ui && S.settings.ui.hidden_tools) || []; }
 function shown(t) {
   if (hiddenTools().includes(t)) return false;
@@ -414,7 +414,7 @@ function isAdmin() { return !S.state || !S.state.me || S.state.me.role === "admi
 function isRO() { return !!(S.state && S.state.me && S.state.me.role === "readonly"); }
 function applyRole(r) {
   const hid = hiddenTools();
-  const me = r.me, sig = JSON.stringify([me, r.tools, r.tools_enabled, r.features, hid]);
+  const me = r.me, sig = JSON.stringify([me, r.tools, r.tools_enabled, r.features, hid, r.hidden_modes]);
   if (sig === roleSig) return;
   roleSig = sig;
   const role = me ? me.role : "admin";
@@ -424,6 +424,8 @@ function applyRole(r) {
   const feats = (r.features || FEATS.map(([k]) => k)).filter((f) => role === "admin" || f !== "term" || (r.tools || []).includes("term"));
   const tl = (role === "admin" ? (r.tools_enabled || []) : (r.tools || [])).concat(feats).filter((t) => !hid.includes(t));
   $$("[data-need-tool]").forEach((el) => el.classList.toggle("tool-off", !tl.includes(el.dataset.needTool)));
+  // 1.31: بخش مخصوص حالت دیگر (مثلاً کابل کنسول فقط در کلاینت) اصلاً دیده نمی‌شود
+  $$("[data-mode]").forEach((el) => el.classList.toggle("mode-off", (r.hidden_modes || []).includes(el.dataset.mode)));
   $("#navSsh").hidden = !(r.tools_enabled || []).includes("ssh") || (role !== "admin" && !(r.tools || []).includes("ssh")) || hid.includes("ssh");
   // تب یا صفحه‌ای که الان پنهان شد
   const off = (sel) => { const b = $(sel); return !!b && b.classList.contains("tool-off"); };
@@ -1628,7 +1630,7 @@ function isRunDir(p) {
 function renderHist() {
   const q = $("#histSearch").value.trim().toLowerCase(), f = S.histFilter;
   const runDir = Object.fromEntries(S.runs.map((x) => [x.id, x.dir]));
-  const KIND = { terminal: "ترمینال", transfer: "انتقال فایل", fgupdate: "به‌روزرسانی FortiGate", approval: "تأیید", dns: "DNS", ssh: "SSH", scan: "اسکن شبکه", intel: "بررسی تکمیلی", security: "امنیت", splunk: "Splunk", abuse: "AbuseIPDB", fortigate: "FortiGate", ban: "بلاک", ticket: "تیکت", redmine: "Redmine", import: "ورود داده", export: "خروجی" };
+  const KIND = { nettools: "ابزارهای شبکه", terminal: "ترمینال", transfer: "انتقال فایل", fgupdate: "به‌روزرسانی FortiGate", approval: "تأیید", dns: "DNS", ssh: "SSH", scan: "اسکن شبکه", intel: "بررسی تکمیلی", security: "امنیت", splunk: "Splunk", abuse: "AbuseIPDB", fortigate: "FortiGate", ban: "بلاک", ticket: "تیکت", redmine: "Redmine", import: "ورود داده", export: "خروجی" };
   const ST = { ok: ["ok", "موفق"], error: ["err", "خطا"], warn: ["warn", "با هشدار"], test: ["warn", "تست"] };
   const rows = S.hist.filter((h) => (f === "all" || (f === "error" ? h.status === "error" : h.kind === f || (f === "ban" && h.kind === "fortigate") || (f === "ticket" && h.kind === "redmine")))
     && (!q || [h.target, h.detail, h.run_id, h.kind, h.user].some((x) => String(x || "").toLowerCase().includes(q))));
@@ -2050,7 +2052,7 @@ function renderSettings() {
   if (t === "notify") {
     const N = D.notify || {}, ev = N.events || {};
     const EV = [["approval", "اجرا منتظر تأیید است"], ["run_error", "مرحله‌ای از اجرا خطا داد"], ["ban_failed", "بلاک در FortiGate ناموفق بود"],
-      ["ssh_failed", "اجرای SSH روی دستگاهی ناموفق بود"], ["backup_failed", "پشتیبان‌گیری کانفیگ ناموفق بود"], ["config_changed", "کانفیگ دستگاهی تغییر کرد"], ["abuse_quota", "سهمیه‌ی روزانه‌ی AbuseIPDB تمام شد و IPهایی بررسی نشدند"], ["scan_new", "اسکن شبکه هاست یا پورت تازه پیدا کرد"], ["mon_down", "هدف مانیتورینگ قطع شد"], ["mon_up", "هدف مانیتورینگ دوباره وصل شد"], ["mon_alarm", "هشدار آستانه‌ی SNMP (CPU، حافظه، دما، پورت، OID دستی) یا راه‌اندازی دوباره‌ی دستگاه"], ["abuse_repeat", "IP غیرمخربی بارها تکرار شد و نیاز به بررسی مجدد دارد"], ["health", "سلامت سرور: فضای دیسک کم، RAM یا CPU برنامه بالا"], ["dev_event", "رخداد بحرانی دستگاه (Trap یا Syslog)"]];
+      ["ssh_failed", "اجرای SSH روی دستگاهی ناموفق بود"], ["backup_failed", "پشتیبان‌گیری کانفیگ ناموفق بود"], ["config_changed", "کانفیگ دستگاهی تغییر کرد"], ["abuse_quota", "سهمیه‌ی روزانه‌ی AbuseIPDB تمام شد و IPهایی بررسی نشدند"], ["scan_new", "اسکن شبکه هاست یا پورت تازه پیدا کرد"], ["mon_down", "هدف مانیتورینگ قطع شد"], ["mon_up", "هدف مانیتورینگ دوباره وصل شد"], ["mon_alarm", "هشدار آستانه‌ی SNMP (CPU، حافظه، دما، پورت، OID دستی) یا راه‌اندازی دوباره‌ی دستگاه"], ["mon_cert", "گواهی HTTPS هدف مانیتورینگ نزدیک انقضاست"], ["abuse_repeat", "IP غیرمخربی بارها تکرار شد و نیاز به بررسی مجدد دارد"], ["health", "سلامت سرور: فضای دیسک کم، RAM یا CPU برنامه بالا"], ["dev_event", "رخداد بحرانی دستگاه (Trap یا Syslog)"]];
     body.innerHTML = `<div class="form"><div class="row" style="justify-content:space-between">${sw("notify.enabled", N.enabled, "<b>ارسال اعلان با ایمیل</b>")}</div>
       <h3 style="margin:16px 0 10px">سرور ایمیل (SMTP)</h3><div class="form-grid">
         ${inp("notify.host", "سرور", { ltr: true, ph: "mail.example.com" })}${inp("notify.port", "پورت", { type: "num" })}
@@ -3467,17 +3469,17 @@ const isLinux = (id) => (SSH.devices.find((d) => d.id === id) || {}).device_type
 async function loadSsh() {
   const [r, c] = await Promise.all([api("ssh_list"), isRO() ? Promise.resolve({ ok: false }) : api("cred_list")]);
   if (!r.ok) return toast(r.error, "error");
-  Object.assign(SSH, { devices: r.devices, scripts: r.scripts, types: r.types, groups: r.groups, vars: r.vars, creds: c.ok ? c.profiles : [] });
+  Object.assign(SSH, { devices: r.devices, scripts: r.scripts, types: r.types, telnetTypes: r.telnet_types || [], groups: r.groups, vars: r.vars, creds: c.ok ? c.profiles : [] });
   const ids = new Set(r.devices.map((d) => d.id));
   SSH.sel = new Set([...SSH.sel].filter((i) => ids.has(i))); SSH.run.devs = new Set([...SSH.run.devs].filter((i) => ids.has(i)));
   renderSsh();
 }
 function renderSsh() {
   if (!isAdmin() && SSH.tab === "fgu") SSH.tab = "run";
-  if (S.state && S.state.me && S.state.me.role === "readonly" && ["term", "xfer", "creds"].includes(SSH.tab)) SSH.tab = "devices";
+  if (S.state && S.state.me && S.state.me.role === "readonly" && ["term", "xfer", "creds", "net"].includes(SSH.tab)) SSH.tab = "devices";
   $$("#sshTabs button").forEach((b) => b.classList.toggle("on", b.dataset.t === SSH.tab));
   if (SSH.tab !== "term") termHide();
-  ({ devices: sshDevices, creds: sshCreds, run: sshRun, term: sshTerm, xfer: sshXfer, backups: sshBackups, fgu: sshFgu, jobs: sshJobs })[SSH.tab]();
+  ({ devices: sshDevices, creds: sshCreds, run: sshRun, term: sshTerm, xfer: sshXfer, net: sshNet, backups: sshBackups, fgu: sshFgu, jobs: sshJobs })[SSH.tab]();
 }
 $("#sshTabs").addEventListener("click", (e) => { const b = e.target.closest("button[data-t]"); if (b) { SSH.tab = b.dataset.t; renderSsh(); } });
 function typeOptions(cur, withAny = false) {
@@ -3499,7 +3501,7 @@ function sshDevices() {
       ${["نام", "آدرس", "نوع", "گروه", "آخرین وضعیت", "پشتیبان"].map((t) => `<th class="nosort">${t}</th>`).join("")}${canTerm ? `<th class="nosort"></th>` : ""}</tr></thead><tbody>
       ${rows.length ? rows.map((d) => `<tr class="${SSH.sel.has(d.id) ? "sel" : ""}"><td class="chk"><input type="checkbox" class="sshChk" value="${d.id}" ${SSH.sel.has(d.id) ? "checked" : ""}></td>
         <td><span class="link tech" data-edit="${d.id}">${esc(d.name)}</span>${d.personal ? ` <span class="tag info" title="فقط شما این دستگاه را می‌بینید">شخصی</span>` : ""}${d.has_password ? "" : ` <span class="tag warn">بدون پسورد</span>`}${d.cred_id ? ` <span class="tag mute" title="اعتبارنامه از پروفایل">🔑 ${esc(d.cred_name || "")}</span>` : ""}</td>
-        <td class="ltr">${esc(d.host)}${Number(d.port) !== 22 ? ":" + esc(d.port) : ""}</td><td>${esc(typeName(d.device_type))}</td><td>${esc(d.grp || "—")}</td>
+        <td class="ltr">${esc(d.host)}${Number(d.port) !== (d.protocol === "telnet" ? 23 : 22) ? ":" + esc(d.port) : ""}${d.protocol === "telnet" ? ` <span class="tag warn" title="Telnet بدون رمزنگاری است">Telnet</span>` : ""}</td><td>${esc(typeName(d.device_type))}</td><td>${esc(d.grp || "—")}</td>
         <td class="wrap" title="${esc(d.last_message || "")}">${d.last_status ? `${stTag(d.last_status)} <span class="muted">${fmtDate(d.last_at)}</span>` : "—"}</td>
         <td>${d.backup_on ? `<span class="tag ok" title="${esc(d.backup_message || "")}">✓</span>` : `<span class="muted">—</span>`}</td>
         ${canTerm ? `<td class="nowrap"><button class="btn sm ghost" data-term="${d.id}" title="${esc(d.has_password ? "اتصال مستقیم در ترمینال" : "یوزر یا پسورد این دستگاه ذخیره نشده است")}"${d.has_password ? "" : " disabled"}><svg style="width:15px;height:15px"><use href="#i-term"/></svg>ترمینال</button></td>` : ""}</tr>`).join("")
@@ -3580,12 +3582,13 @@ function credModal(p) {
     } });
 }
 function deviceModal(d) {
-  const isNew = !d; d = d || { name: "", host: "", port: 22, device_type: "cisco_ios", grp: "", username: "", use_enable: 0, notes: "", backup: null };
+  const isNew = !d; d = d || { name: "", host: "", port: 22, device_type: "cisco_ios", grp: "", username: "", use_enable: 0, notes: "", backup: null, protocol: "ssh" };
   const secretLabel = (t) => (t === "linux" ? "رمز sudo (خالی = همان پسورد ورود)" : "رمز enable (secret)");
   const bkOn = d.backup === null || d.backup === undefined ? d.device_type !== "linux" : !!d.backup;
   openModal({ title: isNew ? "افزودن دستگاه" : `ویرایش ${d.name}`, wide: true, body: `<div class="form-grid">
       <label class="field"><span>نام</span><input type="text" id="dvName" value="${esc(d.name)}"></label>
       <label class="field"><span>آدرس (IP یا نام میزبان)</span><input type="text" class="ltr" id="dvHost" value="${esc(d.host)}"></label>
+      <label class="field"><span>پروتکل</span><select id="dvProto"><option value="ssh">SSH</option><option value="telnet" ${d.protocol === "telnet" ? "selected" : ""}>Telnet</option></select></label>
       <label class="field"><span>پورت</span><input type="number" class="ltr" id="dvPort" value="${esc(d.port || 22)}"></label>
       <label class="field"><span>نوع دستگاه</span><select id="dvType">${typeOptions(d.device_type)}</select></label>
       <label class="field"><span>گروه</span><input type="text" id="dvGrp" list="dvGroups" value="${esc(d.grp || "")}"><datalist id="dvGroups">${SSH.groups.map((g) => `<option>${esc(g)}</option>`).join("")}</datalist></label>
@@ -3597,12 +3600,22 @@ function deviceModal(d) {
         <label class="switch"><input type="checkbox" id="dvEn" ${d.use_enable ? "checked" : ""}><span class="track"><span class="thumb"></span></span><span id="dvEnL">${d.device_type === "linux" ? "اجازه‌ی sudo" : "ورود به حالت enable"}</span></label>
         ${isAdmin() && !d.personal ? `<label class="switch"><input type="checkbox" id="dvBk" ${bkOn ? "checked" : ""}><span class="track"><span class="thumb"></span></span>پشتیبان‌گیری کانفیگ</label>` : ""}
         ${isNew && isAdmin() && S.state && S.state.me && !S.state.me.single ? `<label class="switch" title="فقط شما این دستگاه را می‌بینید و استفاده می‌کنید"><input type="checkbox" id="dvPersonal"><span class="track"><span class="thumb"></span></span>دستگاه شخصی (فقط من)</label>` : ""}
-        <label class="switch" title="فقط برای دستگاه‌هایی که الگوریتم امروزی ندارند (خطای no acceptable kex)"><input type="checkbox" id="dvLeg" ${d.legacy ? "checked" : ""}><span class="track"><span class="thumb"></span></span>سازگاری با دستگاه قدیمی (SHA1)</label></div>
-        <small class="hint">«سازگاری با دستگاه قدیمی» الگوریتم‌های ضعیف‌تر (diffie-hellman-group1/14-sha1 و ssh-rsa) را فقط برای همین دستگاه مجاز می‌کند؛ فقط وقتی روشن کنید که اتصال با خطای الگوریتم رد می‌شود.</small></div>
+        <label class="switch dvSshOnly" title="فقط برای دستگاه‌هایی که الگوریتم امروزی ندارند (خطای no acceptable kex)"><input type="checkbox" id="dvLeg" ${d.legacy ? "checked" : ""}><span class="track"><span class="thumb"></span></span>سازگاری با دستگاه قدیمی (SHA1)</label></div>
+        <small class="hint warn-text" id="dvTelHint" hidden>Telnet رمزنگاری ندارد: یوزر، رمز و کانفیگ روی شبکه خوانا منتقل می‌شوند. فقط برای دستگاه‌هایی که SSH ندارند و در شبکه‌ی مدیریتی امن. Telnet فقط برای تجهیزات شبکه (نه لینوکس، ASA، MikroTik و FortiGate) در دسترس است.</small>
+        <small class="hint dvSshOnly">«سازگاری با دستگاه قدیمی» الگوریتم‌های ضعیف‌تر (diffie-hellman-group1/14-sha1 و ssh-rsa) را فقط برای همین دستگاه مجاز می‌کند؛ فقط وقتی روشن کنید که اتصال با خطای الگوریتم رد می‌شود.</small></div>
       <label class="field wide"><span>یادداشت</span><input type="text" id="dvNotes" value="${esc(d.notes || "")}"></label></div>`,
     foot: `${isNew ? "" : `<button class="btn ghost" id="dvClear" style="margin-inline-end:auto">پاک کردن رمزهای ذخیره‌شده</button>`}<button class="btn ghost" data-x="0">انصراف</button><button class="btn primary" id="dvSave">ذخیره</button>`,
     onOpen: (m, close) => {
-      $("#dvType", m).onchange = (e) => { $("#dvSecL", m).textContent = secretLabel(e.target.value); $("#dvEnL", m).textContent = e.target.value === "linux" ? "اجازه‌ی sudo" : "ورود به حالت enable"; };
+      const protoUi = () => {
+        const tel = $("#dvProto", m).value === "telnet", okType = (SSH.telnetTypes || []).includes($("#dvType", m).value);
+        $$(".dvSshOnly", m).forEach((x) => (x.hidden = tel));
+        $("#dvTelHint", m).hidden = !tel;
+        $("#dvProto option[value='telnet']", m).disabled = !okType;
+        if (tel && !okType) { $("#dvProto", m).value = "ssh"; protoUi(); }
+      };
+      $("#dvProto", m).onchange = () => { const p = $("#dvPort", m); if (["22", "23", ""].includes(p.value)) p.value = $("#dvProto", m).value === "telnet" ? 23 : 22; protoUi(); };
+      $("#dvType", m).onchange = (e) => { $("#dvSecL", m).textContent = secretLabel(e.target.value); $("#dvEnL", m).textContent = e.target.value === "linux" ? "اجازه‌ی sudo" : "ورود به حالت enable"; protoUi(); };
+      protoUi();
       $("[data-x]", m).onclick = () => close();
       // دستگاه مشترک فقط پروفایل مشترک؛ دستگاه شخصی فقط پروفایل شخصی (رمز مشترک به دستگاهی با آدرس دلخواه اپراتور نرسد)
       const personal = () => (isNew ? !isAdmin() || !!($("#dvPersonal", m) && $("#dvPersonal", m).checked) : !!d.personal);
@@ -3618,7 +3631,7 @@ function deviceModal(d) {
       if ($("#dvPersonal", m)) $("#dvPersonal", m).onchange = fillCred;
       const save = async (clear) => {
         const dev = { id: isNew ? null : d.id, cred_id: $("#dvCred", m).value || null, name: $("#dvName", m).value, host: $("#dvHost", m).value, port: $("#dvPort", m).value, device_type: $("#dvType", m).value,
-          grp: $("#dvGrp", m).value, username: $("#dvUser", m).value, use_enable: $("#dvEn", m).checked, notes: $("#dvNotes", m).value, backup: $("#dvBk", m) ? $("#dvBk", m).checked : false, legacy: $("#dvLeg", m).checked,
+          grp: $("#dvGrp", m).value, username: $("#dvUser", m).value, use_enable: $("#dvEn", m).checked, notes: $("#dvNotes", m).value, backup: $("#dvBk", m) ? $("#dvBk", m).checked : false, legacy: $("#dvLeg", m).checked, protocol: $("#dvProto", m).value,
           personal: !isAdmin() || !!($("#dvPersonal", m) && $("#dvPersonal", m).checked) };
         const r = await api("ssh_save_device", dev, clear ? "__clear__" : $("#dvPw", m).value, clear ? "__clear__" : $("#dvSec", m).value);
         if (!r.ok) return toast(r.error, "error");
@@ -3636,6 +3649,7 @@ function bulkModal() {
     <textarea class="ltr code-edit" id="bkText" style="min-height:160px" placeholder="10.0.0.1&#10;10.0.0.2:2222&#10;10.0.0.3,22,admin,P@ss,cisco_ios,En@ble,core-sw,Core"></textarea>
     <h3 style="margin:14px 0 8px">مقادیر مشترک</h3><div class="form-grid">
       <label class="field"><span>نوع دستگاه</span><select id="bkType">${typeOptions("cisco_ios")}</select></label>
+      <label class="field"><span>پروتکل</span><select id="bkProto"><option value="ssh">SSH</option><option value="telnet">Telnet</option></select></label>
       <label class="field"><span>پورت</span><input type="number" class="ltr" id="bkPort" value="22"></label>
       <label class="field"><span>گروه</span><input type="text" id="bkGrp" list="dvGroups2"><datalist id="dvGroups2">${SSH.groups.map((g) => `<option>${esc(g)}</option>`).join("")}</datalist></label>
       <label class="field"><span>اعتبارنامه</span><select id="bkCred"><option value="">یوزر و پسورد همین فرم / ستون‌های CSV</option>${(SSH.creds || []).filter((p) => p.kind === "ssh" && !p.personal).map((p) => `<option value="${p.id}">🔑 ${esc(p.name)} (${esc(p.username)})</option>`).join("")}</select></label>
@@ -3647,7 +3661,8 @@ function bulkModal() {
     foot: `<button class="btn" id="bkPrev">پیش‌نمایش</button><button class="btn primary" id="bkGo" disabled>افزودن</button>`,
     onOpen: (m, close) => {
       $("#bkCred", m).onchange = () => $$(".bkOwn", m).forEach((x) => (x.hidden = !!$("#bkCred", m).value));
-      const dfl = () => ({ device_type: $("#bkType", m).value, port: $("#bkPort", m).value, grp: $("#bkGrp", m).value, username: $("#bkUser", m).value,
+      $("#bkProto", m).onchange = (e) => { const p = $("#bkPort", m); if (["22", "23", ""].includes(p.value)) p.value = e.target.value === "telnet" ? 23 : 22; };
+      const dfl = () => ({ protocol: $("#bkProto", m).value, device_type: $("#bkType", m).value, port: $("#bkPort", m).value, grp: $("#bkGrp", m).value, username: $("#bkUser", m).value,
         password: $("#bkPw", m).value, secret: $("#bkSec", m).value, use_enable: $("#bkEn", m).checked, cred_id: $("#bkCred", m).value || null });
       $("#bkPrev", m).onclick = (e) => withSpin(e.currentTarget, async () => {
         const r = await api("ssh_bulk_add", $("#bkText", m).value, dfl(), true); if (!r.ok) return toast(r.error, "error");

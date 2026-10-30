@@ -102,7 +102,8 @@ def clean_target(t, owner=None):
             "snmp": snmp_cfg, "cred_id": None,       # cred_id را api بعد از بررسی دسترسی می‌گذارد
             "icon": icon, "grp": str(t.get("grp") or "").strip()[:60], "owner": owner if owner is not None else (t.get("owner") or ""),
             "enabled": 1 if t.get("enabled", True) else 0, "notify": 1 if t.get("notify", True) else 0,
-            "notes": str(t.get("notes") or "")[:500], "parent_id": _int_or_none(t.get("parent_id"))}
+            "notes": str(t.get("notes") or "")[:500], "parent_id": _int_or_none(t.get("parent_id")),
+            "cert_days": num("cert_days", 0, 365, 0) if kind == "http" and url.lower().startswith("https://") else 0}
 
 
 def _int_or_none(v):
@@ -241,6 +242,29 @@ def check_tcp(host, port, timeout):
         return False, None, str(e)[:120]
     finally:
         s.close()
+
+
+CERT_EVERY = 3600          # گواهی هر ساعت یک بار خوانده می‌شود (نه با هر بررسی)
+
+
+def cert_expiry(url, timeout):
+    """تاریخ انقضای گواهی سرور HTTPS. فقط گواهی خوانده می‌شود (بدون ارسال داده)؛ برای همین گواهی خودامضا هم خوانده می‌شود."""
+    import ssl
+
+    from cryptography import x509
+    u = urllib.parse.urlsplit(url)
+    host, port = u.hostname, u.port or 443
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE  # nosec B501 — فقط خواندن تاریخ انقضا؛ هیچ داده‌ای فرستاده نمی‌شود
+    with socket.create_connection((host, port), timeout=timeout) as s:
+        with ctx.wrap_socket(s, server_hostname=host) as ss:
+            der = ss.getpeercert(binary_form=True)
+    c = x509.load_der_x509_certificate(der)
+    na = c.not_valid_after_utc.timestamp()
+    cn = c.subject.get_attributes_for_oid(x509.oid.NameOID.COMMON_NAME)
+    return {"expires": na, "days": int((na - time.time()) // 86400), "cn": (cn[0].value if cn else "")[:120],
+            "at": time.time(), "err": ""}
 
 
 def check_http(url, timeout):
@@ -417,6 +441,8 @@ class Monitor:
                 ok, rtt, err = check_tcp(t["host"], int(t["port"]), float(t.get("timeout") or 2))
             elif t["kind"] == "http":
                 ok, rtt, err = check_http(t["url"], float(t.get("timeout") or 5))
+                if ok and int(t.get("cert_days") or 0) > 0:
+                    self._cert(t)
             else:
                 ok, rtt, err = check_ping(t["host"], float(t.get("timeout") or 2))
             self._result(t, ok, rtt, err)
@@ -427,6 +453,30 @@ class Monitor:
             self._result(t, False, None, str(e)[:120])
         finally:
             self._busy.discard(tid)
+
+    def _cert(self, t):
+        """1.31: هشدار نزدیک بودن انقضای گواهی HTTPS (روزی یک بار تا تمدید). قطع حساب نمی‌شود."""
+        st = self.state.setdefault(t["id"], {"status": "unknown", "since": time.time(), "fails": 0, "next": time.time()})
+        c = st.get("cert") or {}
+        if c.get("url") == t["url"] and time.time() - c.get("at", 0) < CERT_EVERY:
+            return
+        try:
+            c = {**cert_expiry(t["url"], float(t.get("timeout") or 5)), "url": t["url"], "warned": c.get("warned", 0)}
+        except Exception as e:  # noqa — خطای خواندن گواهی؛ وضعیت HTTP دست نمی‌خورد
+            c = {"url": t["url"], "at": time.time(), "err": str(e)[:150], "warned": c.get("warned", 0)}
+        st["cert"] = c
+        days, lim = c.get("days"), int(t.get("cert_days") or 0)
+        if days is None or days > lim or st.get("maint") or time.time() - c.get("warned", 0) < 86400:
+            return
+        c["warned"] = time.time()
+        when = time.strftime("%Y-%m-%d", time.localtime(c["expires"]))
+        msg = (f"گواهی HTTPS «{t['name']}» منقضی شده است ({when})" if days < 0
+               else f"گواهی HTTPS «{t['name']}» تا {days} روز دیگر منقضی می‌شود ({when})")
+        self.emit("warn", msg, "monitor")
+        if self.history:
+            self.history("monitor", t["name"], "warn", msg, "")
+        if t.get("notify"):
+            self.notify("mon_cert", msg)
 
     def _result(self, t, ok, rtt, err):
         tid, now = t["id"], time.time()
@@ -766,6 +816,9 @@ class Monitor:
             from .snmp import load_cfg
             out["snmp_sum"] = self.snmp.summary(t["id"])
             out["snmp_cfg"] = load_cfg(t)
+        cert = st.get("cert") or {}
+        if cert:
+            out["cert"] = {k: cert.get(k) for k in ("days", "expires", "cn", "err", "at")}
         return {**out, "status": status, "since": st.get("since"), "rtt": st.get("rtt"), "err": st.get("err", ""),
                 "maint": st.get("maint") or "", "cause": st.get("cause") or "",
                 "last": st.get("last"), "fails": st.get("fails", 0),

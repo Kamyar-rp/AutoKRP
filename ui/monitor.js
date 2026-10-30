@@ -51,6 +51,13 @@ function monDur(s) {
   if (s < 86400) return `${num(Math.floor(s / 3600))} ساعت و ${num(Math.floor((s % 3600) / 60))} دقیقه`;
   return `${num(Math.floor(s / 86400))} روز و ${num(Math.floor((s % 86400) / 3600))} ساعت`;
 }
+/* 1.31: روزهای باقی‌مانده‌ی گواهی HTTPS (فقط وقتی هشدار روشن است و به آستانه رسیده یا خطا داشته) */
+function monCertTag(t) {
+  const c = t.cert; if (!c || !t.cert_days) return "";
+  if (c.err && c.days == null) return ` <span class="tag mute" title="${esc(c.err)}">گواهی: خطا</span>`;
+  if (c.days == null || c.days > t.cert_days) return "";
+  return ` <span class="tag ${c.days < 0 ? "err" : "warn"}" title="${esc(c.cn || "")}">${c.days < 0 ? "گواهی منقضی شده" : `<span>گواهی:</span> <span>${num(c.days)}</span> <span>روز</span>`}</span>`;
+}
 const monWhere = (t) => (t.kind === "http" ? t.url : t.kind === "tcp" ? `${t.host}:${t.port}` : t.kind === "snmp" ? `${t.host} (SNMP)` : t.host);
 
 /* ---------------------------------------------------------------- هشدار سراسری */
@@ -212,7 +219,7 @@ function renderMon() {
       const why = t.status === "unreachable" && t.cause ? `به‌خاطر قطع «${t.cause}»` : "";
       return `<div class="mon-card st-${t.status}${t.maint ? " maint" : ""}${lv && lv !== "ok" ? " lv-" + lv : ""}" data-mid="${t.id}" title="${esc([why, t.err, t.maint ? "پنجره‌ی نگهداری: " + t.maint : ""].filter(Boolean).join(" — "))}">
         <div class="mon-ic">${monIcon(t.icon)}<span class="mon-dot"></span></div>
-        <div class="mon-main"><b class="bidi">${esc(t.name)}</b><span class="ltr muted">${esc(monWhere(t))}</span>
+        <div class="mon-main"><b class="bidi">${esc(t.name)}</b><span class="ltr muted">${esc(monWhere(t))}</span>${monCertTag(t)}
           <span class="mon-meta"><span class="tag ${st[0]}">${st[1]}</span>${t.rtt != null && t.status !== "down" && t.status !== "paused" ? `<span class="ltr">${num(t.rtt)} ms</span>` : ""}
           ${t.since && t.status !== "unknown" ? `<span class="muted">${monDur(now - t.since)}</span>` : ""}${t.owner ? `<span class="tag mute" title="فقط شما و ادمین می‌بینید">شخصی</span>` : ""}${t.maint ? `<span class="tag mnt" title="${esc(t.maint)}">نگهداری</span>` : ""}${why ? `<span class="muted bidi">${esc(why)}</span>` : ""}${t.kind === "snmp" && t.status !== "paused" ? snCardLine(t) : ""}</span></div>
         <div class="mon-spark" title="۲۴ ساعت گذشته">${t.spark.map((v) => `<i class="${v == null ? "n" : v >= 99.9 ? "g" : v >= 90 ? "y" : "r"}"></i>`).join("")}</div>
@@ -305,6 +312,7 @@ async function monEdit(t0) {
       <label class="field" id="mePortW"><span>پورت</span><input id="mePort" class="ltr" value="${esc(t.port || "")}" placeholder="22, 443, 3389…"></label>
       <div class="field wide" id="meSnmpW">${snEditHtml(t)}</div>
       <label class="field wide" id="meUrlW"><span>آدرس</span><input id="meUrl" class="ltr" value="${esc(t.url || "")}" placeholder="https://portal.example.local"><small class="hint">کد ۵۰۰ به بالا یا بدون پاسخ = قطع. گواهی بررسی نمی‌شود و ریدایرکت دنبال نمی‌شود.</small></label>
+      <label class="field" id="meCertW"><span>هشدار انقضای گواهی HTTPS (روز قبل)</span><input id="meCert" type="number" min="0" max="365" value="${esc(t.cert_days || 0)}"><small class="hint">۰ = خاموش. گواهی هر ساعت خوانده می‌شود؛ هشدار روزی یک بار تا تمدید (قطع حساب نمی‌شود).</small></label>
       <label class="field"><span>هر چند ثانیه بررسی شود</span><input id="meInt" type="number" min="10" value="${esc(t.interval)}"></label>
       <label class="field"><span>قطع پس از چند شکست پشت‌سرهم</span><input id="meThr" type="number" min="1" max="20" value="${esc(t.threshold)}"></label>
       <label class="field"><span>Timeout (ثانیه)</span><input id="meTo" type="number" step="0.5" min="0.5" value="${esc(t.timeout)}"></label>
@@ -319,7 +327,7 @@ async function monEdit(t0) {
     onOpen: (m, close) => {
       const kind = () => $("#meKind button.on", m).dataset.v;
       const vis = () => {
-        const k = kind(); $("#meHostW", m).hidden = k === "http"; $("#mePortW", m).hidden = k !== "tcp" && k !== "snmp"; $("#meUrlW", m).hidden = k !== "http";
+        const k = kind(); $("#meHostW", m).hidden = k === "http"; $("#mePortW", m).hidden = k !== "tcp" && k !== "snmp"; $("#meUrlW", m).hidden = k !== "http"; $("#meCertW", m).hidden = k !== "http";
         $("#meSnmpW", m).hidden = k !== "snmp"; $("#mePort", m).placeholder = k === "snmp" ? "161" : "22, 443, 3389…";
       };
       $$("#meKind button", m).forEach((b) => (b.onclick = () => {
@@ -345,7 +353,7 @@ async function monEdit(t0) {
       $("[data-r='1']", m).onclick = async () => {
         const k = kind();
         const body = { id: t.id, name: $("#meName", m).value.trim(), kind: k, host: $("#meHost", m).value.trim(), port: $("#mePort", m).value.trim(),
-          url: $("#meUrl", m).value.trim(), interval: $("#meInt", m).value, threshold: $("#meThr", m).value, timeout: $("#meTo", m).value,
+          url: $("#meUrl", m).value.trim(), cert_days: $("#meCert", m).value || 0, interval: $("#meInt", m).value, threshold: $("#meThr", m).value, timeout: $("#meTo", m).value,
           slow_ms: $("#meSlow", m).value, grp: $("#meGrp", m).value.trim(), icon, notify: $("#meNotify", m).checked, enabled: t.enabled !== 0, notes: t.notes || "",
           parent_id: $("#meParent", m).value || null };
         if (k === "snmp") { body.snmp = snEditCollect(m); body.cred_id = $("#snCred", m).value; }

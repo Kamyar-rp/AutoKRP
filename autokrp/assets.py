@@ -481,7 +481,10 @@ class AssetManager:
         if not creds["username"] or not creds["password"]:
             raise AssetError("یوزر یا پسورد این دستگاه ذخیره نشده است")
         att = Attempt()
-        state, fp, old = self.hostkeys.check(d["host"], d.get("port") or 22, legacy=bool(d.get("legacy")), attempt=att)
+        if d.get("protocol") == "telnet":
+            state, fp, old = "telnet", "", ""          # Telnet کلید میزبان ندارد
+        else:
+            state, fp, old = self.hostkeys.check(d["host"], d.get("port") or 22, legacy=bool(d.get("legacy")), attempt=att)
         if state == "mismatch":
             raise AssetError(f"کلید میزبان عوض شده است (ثبت‌شده {old}، فعلی {fp}); اتصال انجام نشد.")
         if state == "new":

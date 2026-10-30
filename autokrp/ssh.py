@@ -45,6 +45,8 @@ DEVICE_TYPES = [
     ("paloalto_panos", "Palo Alto PAN-OS"),
 ]
 TYPE_NAMES = dict(DEVICE_TYPES)
+# 1.31: نوع‌هایی که netmiko برایشان «<نوع>_telnet» دارد (بررسی‌شده با netmiko.ssh_dispatcher.CLASS_MAPPER)
+TELNET_TYPES = ("cisco_ios", "cisco_nxos", "cisco_xr", "juniper_junos", "huawei", "hp_procurve", "paloalto_panos")
 TEST_COMMANDS = {"linux": "uname -a", "cisco_ios": "show version | include Version", "cisco_nxos": "show version | include version",
                  "cisco_asa": "show version | include Version", "cisco_xr": "show version | include Version",
                  "mikrotik_routeros": "/system resource print", "juniper_junos": "show version | match Junos",
@@ -286,6 +288,13 @@ def run_netmiko(dev, creds, body, mode, save_config, timeout, known_hosts, cance
                 last_out=None):
     from netmiko import ConnectHandler
     lines = [l.rstrip() for l in body.replace("\r\n", "\n").split("\n") if l.strip() and not l.strip().startswith("!#")]
+    if dev.get("protocol") == "telnet":
+        if dev["device_type"] not in TELNET_TYPES:
+            raise SshError("Telnet برای این نوع دستگاه پشتیبانی نمی‌شود")
+        conn = ConnectHandler(device_type=dev["device_type"] + "_telnet", host=dev["host"], port=int(dev.get("port") or 23),
+                              username=creds["username"], password=creds["password"], secret=creds.get("secret") or "",
+                              conn_timeout=15, auth_timeout=20, timeout=timeout, fast_cli=False)
+        return _netmiko_session(conn, dev, lines, mode, save_config, timeout, cancel, on_client, raw, last_out)
     params = dict(device_type=dev["device_type"], host=dev["host"], port=int(dev.get("port") or 22),
                   username=creds["username"], password=creds["password"], secret=creds.get("secret") or "",
                   conn_timeout=15, auth_timeout=20, banner_timeout=15, timeout=timeout, fast_cli=False,
@@ -296,6 +305,10 @@ def run_netmiko(dev, creds, body, mode, save_config, timeout, known_hosts, cance
         if attempt:
             params["sock"] = attempt.connect(dev["host"], int(dev.get("port") or 22), 15)
         conn = ConnectHandler(**params, alt_key_file=kf)
+    return _netmiko_session(conn, dev, lines, mode, save_config, timeout, cancel, on_client, raw, last_out)
+
+
+def _netmiko_session(conn, dev, lines, mode, save_config, timeout, cancel, on_client, raw, last_out):
     try:
         if on_client:
             on_client(conn)
@@ -466,8 +479,11 @@ class SshRunner:
                 att = job["attempts"][dev["id"]] = Attempt()
                 if job["cancel"].is_set():
                     att.cancel()
-                state, fp, old = self.hostkeys.check(dev["host"], dev.get("port") or 22, legacy=bool(dev.get("legacy")),
-                                                     attempt=att)
+                if dev.get("protocol") == "telnet":
+                    state, fp, old = "telnet", "", ""        # Telnet کلید میزبان ندارد
+                else:
+                    state, fp, old = self.hostkeys.check(dev["host"], dev.get("port") or 22, legacy=bool(dev.get("legacy")),
+                                                         attempt=att)
                 if state == "mismatch":
                     raise SshError(f"کلید میزبان عوض شده است! ثبت‌شده: {old} — فعلی: {fp}. "
                                    "اگر تغییر را تأیید می‌کنید از «کلیدهای میزبان» کلید قبلی را حذف کنید.")

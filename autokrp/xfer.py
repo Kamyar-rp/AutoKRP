@@ -292,7 +292,7 @@ class Conn:
         self.owner, self.proto, self.dev, self.creds, self.opts = owner, proto, dev, creds, opts
         self.title = dev.get("name") or dev["host"]
         self.host = dev["host"]
-        self.port = int(opts.get("port") or (21 if proto in ("ftp", "ftps") else dev.get("port") or 22))
+        self.port = int(opts.get("port") or (21 if proto in ("ftp", "ftps") else (dev.get("port") if dev.get("protocol") != "telnet" else 22) or 22))
         self.cli = self.sftp = self.ftp = None
         self.lock = threading.RLock()
         self.last = time.time()

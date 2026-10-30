@@ -42,7 +42,7 @@
       <button data-page="run"><svg><use href="#i-run"/></svg>ابزارها<span class="nav-dot" id="navRunDot" hidden></span></button>
       <button data-page="auto"><svg><use href="#i-auto"/></svg>کارهای خودکار</button>
       <button data-page="ips"><svg><use href="#i-ip"/></svg>آدرس‌ها<span class="nav-count" id="navReview" hidden></span></button>
-      <button data-page="ssh" id="navSsh"><svg><use href="#i-term"/></svg>SSH<span class="nav-dot" id="navSshDot" hidden></span></button>
+      <button data-page="ssh" id="navSsh"><svg><use href="#i-term"/></svg>ارتباط با دستگاه‌ها<span class="nav-dot" id="navSshDot" hidden></span></button>
       <button data-page="monitor" data-need-tool="monitor"><svg><use href="#i-mon"/></svg>مانیتورینگ<span class="nav-count err" id="navMonDot" hidden></span></button>
       <button data-page="assets" data-need-tool="asset"><svg><use href="#i-box"/></svg>دارایی‌ها<span class="nav-count" id="navAssets" hidden></span></button>
       <button data-page="stats"><svg><use href="#i-chart"/></svg>آمار</button>
@@ -216,7 +216,7 @@
     <!-- ========== SSH ========== -->
     <section class="page" id="page-ssh">
       <header class="ph">
-        <div><h1>SSH</h1><p>اجرای اسکریپت روی سرورهای لینوکس و تجهیزات شبکه</p></div>
+        <div><h1>ارتباط با دستگاه‌ها</h1><p>ترمینال SSH، Telnet و کابل کنسول، اجرای دستور، انتقال فایل و پشتیبان کانفیگ تجهیزات</p></div>
         <div class="ph-actions" id="sshActions"></div>
       </header>
       <div class="tabs big" id="sshTabs">
@@ -225,6 +225,7 @@
         <button data-t="run">اجرا</button>
         <button data-t="term" class="no-ro" data-need-tool="term">ترمینال</button>
         <button data-t="xfer" class="no-ro" data-need-tool="term">انتقال فایل</button>
+        <button data-t="net" class="no-ro" data-need-tool="nettools">ابزارهای شبکه</button>
         <button data-t="backups">پشتیبان کانفیگ</button>
         <button data-t="fgu" class="adm-only">به‌روزرسانی FortiGate</button>
         <button data-t="jobs">سابقه</button>
@@ -282,6 +283,7 @@
 <script src="app.js"></script>
 <script src="trange.js"></script>
 <script src="sshlive.js"></script>
+<script src="nettools.js"></script>
 <script src="monitor.js"></script>
 <script src="snmp.js"></script>
 <script src="noc.js"></script>

@@ -384,7 +384,7 @@ html[lang="en"] .chart svg text { font-family: "Vazir", "Segoe UI", Tahoma, sans
 .toolbox .btn .n { font-size: 11px; opacity: .7; margin-inline-start: 4px; }
 .stage .stage-top .x { margin-inline-start: auto; }
 .chks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
-body.nadm .adm-only, body.ro .no-ro, body.ro #approvalBox .actions, .tool-off { display: none !important; }
+body.nadm .adm-only, body.ro .no-ro, body.ro #approvalBox .actions, .tool-off, .mode-off { display: none !important; }
 body.nadm .bigswitch { pointer-events: none; opacity: .75; }
 .user-chip { gap: 6px; align-items: center; font-size: 12.5px; color: var(--muted); margin-top: 6px; }
 .user-chip b { color: var(--text); }
@@ -409,6 +409,11 @@ body.nadm .bigswitch { pointer-events: none; opacity: .75; }
 .term-pane { position: absolute; inset: 6px 4px 4px 8px; }
 .term-pane .xterm { height: 100%; }
 .term-status { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 6px 2px 0; color: var(--muted); }
+.term-snips { margin-bottom: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.term-multi { margin-bottom: 8px; padding: 6px 10px; border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent); border-radius: 8px; color: var(--warn); font-size: 13px; display: flex; gap: 8px; align-items: center; }
+.term-tab .tm-chk { margin: 0; }
+.term-tab .tp { font-size: 10.5px; padding: 0 5px; }
+.warn-text { color: var(--warn); }
 pre.paste-prev, pre.hv-text { max-height: 50vh; overflow: auto; background: var(--panel2); border: 1px solid var(--line2); border-radius: 8px; padding: 10px; font-size: 12.5px; white-space: pre-wrap; word-break: break-all; }
 .hv-term { height: 60vh; background: #0c141d; border-radius: 8px; padding: 6px; direction: ltr; }
 .modal.wide:has(.hv-term) { width: min(1200px, 96vw); }
@@ -703,3 +708,8 @@ body.noc-on { overflow: hidden; }
 .scn-step:first-child { border-top: 0; }
 .scn-step .n { font-weight: 700; padding-top: 8px; text-align: center; }
 .fnote { font-family: "Vazir", sans-serif; unicode-bidi: plaintext; }
+
+/* 1.31 ابزارهای شبکه */
+.nt-job { display: flex; align-items: center; gap: 10px; margin: 10px 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.nt-job .cw-spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--muted); border-top-color: transparent; animation: spin .7s linear infinite; flex: none; }
+.ok-card { border-color: color-mix(in srgb, var(--ok) 55%, transparent); }

@@ -90,17 +90,23 @@ function termRoot() {
     r = document.createElement("div"); r.id = "termRoot"; r.hidden = true;
     r.innerHTML = `<div class="term-bar"><div class="term-tabs" id="termTabs" data-no-i18n></div>
       <button class="btn sm primary" id="termNew"><svg><use href="#i-term"/></svg>اتصال تازه</button>
+      <button class="btn sm ghost" id="termSnipBtn" title="دستورهای ذخیره‌شده: با یک کلیک به ترمینال فعال (یا همه، در حالت MultiExec) فرستاده می‌شوند">دستورها ▾</button>
+      <button class="btn sm ghost" id="termMulti" title="MultiExec: هر چه تایپ یا ارسال کنید هم‌زمان به همه‌ی ترمینال‌های تیک‌خورده می‌رود">MultiExec</button>
       <div class="term-tools">
         <button class="btn sm ghost" id="termFontM" title="کوچک کردن متن">A−</button><button class="btn sm ghost" id="termFontP" title="بزرگ کردن متن">A+</button>
         <label class="chk" title="رنگی کردن کلمه‌های مهم مثل error، up/down، IP و نام اینترفیس‌ها"><input type="checkbox" id="termHl" ${TP.highlight ? "checked" : ""}>رنگ کلمه‌ها</label>
         <label class="chk" title="متن انتخاب‌شده خودکار کپی شود (کلیک راست = چسباندن)"><input type="checkbox" id="termCs" ${TP.copySel ? "checked" : ""}>کپی با انتخاب</label>
         <label class="chk" title="مصرف CPU، RAM، دیسک و شبکه‌ی سرورهای لینوکس، هر ۳ ثانیه (از یک کانال جدا روی همان اتصال؛ ترمینال دست نمی‌خورد)"><input type="checkbox" id="termSt" ${TP.stats ? "checked" : ""}>نوار منابع</label>
       </div></div>
+      <div class="term-snips" id="termSnips" hidden></div>
+      <div class="term-multi" id="termMultiBar" hidden></div>
       <div class="term-stage" id="termStage"></div>
       <div class="term-stats" id="termStats" hidden></div>
       <div class="term-status" id="termStatus"></div>`;
     $("#sshBody").after(r);
     $("#termNew").onclick = () => termConnectDlg();
+    $("#termMulti").onclick = () => termMultiToggle();
+    $("#termSnipBtn").onclick = () => { const b = $("#termSnips"); b.hidden = !b.hidden; if (!b.hidden) termSnipsRender(); };
     $("#termFontM").onclick = () => termFont(-1);
     $("#termFontP").onclick = () => termFont(1);
     $("#termHl").onchange = (e) => { TP.highlight = e.target.checked; saveTP(); };
@@ -133,19 +139,24 @@ function termHide() { const r = $("#termRoot"); if (r) r.hidden = true; }
 function termRenderTabs() {
   const box = $("#termTabs"); if (!box) return;
   box.innerHTML = TERM.tabs.map((t) => `<div class="term-tab ${t.id === TERM.active ? "on" : ""} ${t.closed ? "dead" : ""}" data-tid="${t.id}" title="${esc(t.host + ":" + t.port)}">
-    <span class="dot" style="background:${t.color}"></span><span class="tt">${esc(t.title)}</span>${t.recording ? `<span class="rec" title="متن این نشست ضبط می‌شود">●</span>` : ""}
+    ${TERM.multi ? `<input type="checkbox" class="tm-chk" data-tm="${t.id}" ${TERM.multiSel.has(t.id) ? "checked" : ""} ${t.closed ? "disabled" : ""} title="در MultiExec">` : ""}<span class="dot" style="background:${t.color}"></span><span class="tt">${esc(t.title)}</span>${t.proto && t.proto !== "ssh" ? `<span class="tag ${t.proto === "telnet" ? "warn" : "info"} tp">${t.proto === "telnet" ? "Telnet" : "COM"}</span>` : ""}${t.recording ? `<span class="rec" title="متن این نشست ضبط می‌شود">●</span>` : ""}
     <button class="x" data-tclose="${t.id}" title="بستن"><svg><use href="#i-x"/></svg></button></div>`).join("");
-  $$("[data-tid]", box).forEach((el) => (el.onclick = (e) => { if (!e.target.closest("[data-tclose]")) termActivate(el.dataset.tid); }));
+  $$("[data-tid]", box).forEach((el) => (el.onclick = (e) => { if (!e.target.closest("[data-tclose]") && !e.target.closest("[data-tm]")) termActivate(el.dataset.tid); }));
+  $$("[data-tm]", box).forEach((c) => (c.onchange = () => { c.checked ? TERM.multiSel.add(c.dataset.tm) : TERM.multiSel.delete(c.dataset.tm); termMultiBar(); }));
+  termMultiBar();
   $$("[data-tclose]", box).forEach((b) => (b.onclick = () => termCloseTab(b.dataset.tclose)));
   termStatus(); termStatsRender();
 }
 function termStatus() {
   const t = TERM.tabs.find((x) => x.id === TERM.active), el = $("#termStatus"); if (!el) return;
-  el.innerHTML = t ? `<span class="dot" style="background:${t.color}"></span><span class="ltr">${esc(t.user ? t.user + "@" : "")}${esc(t.host)}:${t.port}</span>
+  el.innerHTML = t ? `<span class="dot" style="background:${t.color}"></span>${t.proto === "serial"
+      ? `<span class="ltr">${esc(t.host)} · ${esc(t.info || "")}</span><span class="tag info">کابل کنسول</span>${t.closed ? "" : `<button class="btn sm" id="termBrk" title="ارسال سیگنال Break (مثلاً برای Password Recovery روتر Cisco در ۶۰ ثانیه‌ی اول روشن شدن)">Break</button>`}`
+      : `<span class="ltr">${esc(t.user ? t.user + "@" : "")}${esc(t.host)}:${t.port}</span>${t.proto === "telnet" ? `<span class="tag warn" title="یوزر، رمز و همه‌ی متن‌ها روی شبکه خوانا منتقل می‌شوند">Telnet — بدون رمزنگاری</span>` : ""}`}
     ${t.kind === "adhoc" ? `<span class="tag mute">موقت</span>` : ""}${t.recording ? `<span class="tag warn">ضبط روشن</span>` : ""}
     ${t.closed ? `<span class="tag err">قطع: ${esc(t.reason || "")}</span><button class="btn sm" id="termRe">اتصال دوباره</button>` : `<span class="tag ok">وصل</span>`}
     <span class="muted ltr" style="margin-inline-start:auto">${t.cols}×${t.rows}</span>` : "";
   const re = $("#termRe"); if (re) re.onclick = () => termReconnect(t);
+  const bk = $("#termBrk"); if (bk) bk.onclick = async () => { const r = await api("term_break", t.id); if (!r.ok) toast(r.error, "error"); else toast("Break فرستاده شد", "ok"); t.term.focus(); };
 }
 function termActivate(id) {
   TERM.active = id;
@@ -165,29 +176,71 @@ function termFitActive() { termFit(TERM.tabs.find((x) => x.id === TERM.active));
 async function termConnectDlg(preset) {
   const devs = SSH.devices.filter((d) => d.has_password && d.username);
   const p = preset || {};
+  const serialOk = !(S.state && (S.state.hidden_modes || []).includes("serial"));
+  const mode0 = p.serial ? "serial" : p.adhoc ? "adhoc" : "dev";
+  const tel = p.protocol === "telnet";
   const res = await openModal({
-    title: "اتصال ترمینال SSH", wide: false,
-    body: `<div class="seg" id="tcMode" style="margin-bottom:12px"><button data-v="dev" class="${p.adhoc ? "" : "on"}">دستگاه ذخیره‌شده</button><button data-v="adhoc" class="${p.adhoc ? "on" : ""}">اتصال موقت</button></div>
-      <div id="tcDev" ${p.adhoc ? "hidden" : ""}>${devs.length ? `<label class="field"><span>دستگاه</span><select id="tcDevSel">${devs.map((d) => `<option value="${d.id}" ${d.id === p.device_id ? "selected" : ""}>${esc(d.name)} — ${esc(d.host)}${d.personal ? " (شخصی)" : ""}</option>`).join("")}</select></label>
+    title: "اتصال ترمینال", wide: false,
+    body: `<div class="seg" id="tcMode" style="margin-bottom:12px"><button data-v="dev" class="${mode0 === "dev" ? "on" : ""}">دستگاه ذخیره‌شده</button><button data-v="adhoc" class="${mode0 === "adhoc" ? "on" : ""}">اتصال موقت (SSH / Telnet)</button>${serialOk ? `<button data-v="serial" class="${mode0 === "serial" ? "on" : ""}">کابل کنسول (COM)</button>` : ""}</div>
+      <div id="tcDev" ${mode0 === "dev" ? "" : "hidden"}>${devs.length ? `<label class="field"><span>دستگاه</span><select id="tcDevSel">${devs.map((d) => `<option value="${d.id}" ${d.id === p.device_id ? "selected" : ""}>${esc(d.name)} — ${esc(d.host)}${d.protocol === "telnet" ? " (Telnet)" : ""}${d.personal ? " (شخصی)" : ""}</option>`).join("")}</select></label>
         <p class="hint">یوزر و رمز ذخیره‌شده‌ی دستگاه استفاده می‌شود و به مرورگر نمی‌آید. برای تجهیزات Cisco با «ورود به enable»، enable خودکار زده می‌شود.</p>`
         : `<div class="empty">دستگاهی با یوزر و رمز ذخیره‌شده ندارید؛ از «اتصال موقت» استفاده کنید یا در تب «دستگاه‌ها» دستگاه بسازید.</div>`}</div>
-      <div id="tcAd" ${p.adhoc ? "" : "hidden"}><div class="form-grid">
+      <div id="tcAd" ${mode0 === "adhoc" ? "" : "hidden"}><div class="form-grid">
+        <label class="field"><span>پروتکل</span><select id="tcProto"><option value="ssh">SSH</option><option value="telnet" ${tel ? "selected" : ""}>Telnet</option></select></label>
         <label class="field"><span>آدرس</span><input id="tcHost" class="ltr" value="${esc(p.host || "")}" placeholder="10.0.0.1"></label>
-        <label class="field"><span>پورت</span><input id="tcPort" class="ltr" value="${esc(p.port || 22)}"></label>
+        <label class="field"><span>پورت</span><input id="tcPort" class="ltr" value="${esc(p.port || (tel ? 23 : 22))}"></label>
         <label class="field"><span>یوزر</span><input id="tcUser" class="ltr" value="${esc(p.username || "")}" autocomplete="off"></label>
         <label class="field"><span>رمز</span><input id="tcPass" type="password" class="ltr" autocomplete="off"></label>
         <label class="field"><span>نوع دستگاه</span><select id="tcType">${typeOptions(p.device_type || "linux")}</select></label>
-        <label class="chk" style="align-self:end"><input type="checkbox" id="tcLegacy" ${p.legacy ? "checked" : ""}>الگوریتم‌های قدیمی (دستگاه‌های قدیمی)</label>
-      </div><p class="hint">اتصال موقت ذخیره نمی‌شود؛ فقط در تاریخچه ثبت می‌شود. بار اول اثر انگشت کلید دستگاه برای تأیید نشان داده می‌شود.</p></div>`,
+        <label class="chk tcSsh" style="align-self:end"><input type="checkbox" id="tcLegacy" ${p.legacy ? "checked" : ""}>الگوریتم‌های قدیمی (دستگاه‌های قدیمی)</label>
+      </div><p class="hint tcSsh">اتصال موقت ذخیره نمی‌شود؛ فقط در تاریخچه ثبت می‌شود. بار اول اثر انگشت کلید دستگاه برای تأیید نشان داده می‌شود.</p>
+      <p class="hint warn-text tcTel">Telnet رمزنگاری ندارد و یوزر و رمز روی شبکه خوانا می‌روند. یوزر و رمز اختیاری است: اگر وارد کنید، وقتی دستگاه «Username:» و «Password:» بپرسد خودکار وارد می‌شود.</p></div>
+      <div id="tcSer" ${mode0 === "serial" ? "" : "hidden"}><div class="form-grid">
+        <label class="field wide"><span>پورت</span><div class="row" style="gap:6px"><select id="tcCom" class="ltr" style="flex:1"></select><button class="btn sm ghost" id="tcComRe" type="button" title="تازه کردن فهرست">↻</button></div></label>
+        <label class="field"><span>سرعت (Baud)</span><select id="tcBaud" class="ltr"></select></label>
+        <label class="field"><span>بیت داده</span><select id="tcBits" class="ltr">${[8, 7, 6, 5].map((x) => `<option ${x === (p.bits || 8) ? "selected" : ""}>${x}</option>`).join("")}</select></label>
+        <label class="field"><span>Parity</span><select id="tcPar" class="ltr">${[["N", "None"], ["E", "Even"], ["O", "Odd"], ["M", "Mark"], ["S", "Space"]].map(([v, t]) => `<option value="${v}" ${v === (p.parity || "N") ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+        <label class="field"><span>Stop bits</span><select id="tcStop" class="ltr">${["1", "1.5", "2"].map((x) => `<option ${x === String(p.stop || "1") ? "selected" : ""}>${x}</option>`).join("")}</select></label>
+        <label class="field"><span>Flow control</span><select id="tcFlow" class="ltr">${[["none", "None"], ["xonxoff", "XON/XOFF"], ["rtscts", "RTS/CTS"], ["dsrdtr", "DSR/DTR"]].map(([v, t]) => `<option value="${v}" ${v === (p.flow || "none") ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      </div><p class="hint">کابل کنسول (USB یا RJ45-DB9) را وصل کنید؛ بعد از نصب درایور، پورت آن در «Ports (COM &amp; LPT)» ویندوز و همین فهرست دیده می‌شود. تنظیم رایج Cisco و بیشتر روترها و مودم‌ها: 9600 8N1 بدون Flow control.</p>
+      <div id="tcComNone" class="empty" hidden>هیچ پورت سریالی پیدا نشد. کابل را وصل کنید و درایور آن را نصب کنید؛ فهرست خودکار تازه می‌شود.</div></div>`,
     foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">اتصال</button>`,
     onOpen: (m, close) => {
-      $$("#tcMode button", m).forEach((b) => (b.onclick = () => { $$("#tcMode button", m).forEach((x) => x.classList.toggle("on", x === b)); $("#tcDev", m).hidden = b.dataset.v !== "dev"; $("#tcAd", m).hidden = b.dataset.v === "dev"; }));
-      $("[data-r='0']", m).onclick = () => close(null);
+      let timer = null, ports = null;
+      const loadPorts = async () => {
+        const r = await api("serial_ports"); if (!r.ok || !m.isConnected) return;
+        if (!$("#tcBaud", m).options.length) $("#tcBaud", m).innerHTML = r.bauds.map((b) => `<option ${b === (p.baud || 9600) ? "selected" : ""}>${b}</option>`).join("");
+        const sig = JSON.stringify(r.ports); if (sig === ports) return; ports = sig;
+        const cur = $("#tcCom", m).value || p.port;
+        $("#tcCom", m).innerHTML = r.ports.map((x) => `<option value="${esc(x.port)}" ${x.port === cur ? "selected" : ""}>${esc(x.port)}${x.desc ? " — " + esc(x.desc) : ""}</option>`).join("");
+        $("#tcComNone", m).hidden = !!r.ports.length;
+        if (!r.available) { $("#tcComNone", m).hidden = false; $("#tcComNone", m).textContent = tt("کتابخانه‌ی pyserial نصب نیست."); }
+      };
+      const setMode = (v) => {
+        $$("#tcMode button", m).forEach((x) => x.classList.toggle("on", x.dataset.v === v));
+        $("#tcDev", m).hidden = v !== "dev"; $("#tcAd", m).hidden = v !== "adhoc"; $("#tcSer", m).hidden = v !== "serial";
+        clearInterval(timer); timer = null;
+        if (v === "serial") { loadPorts(); timer = setInterval(() => (m.isConnected ? loadPorts() : clearInterval(timer)), 2000); }   // کابل تازه وصل‌شده خودکار دیده شود
+      };
+      const protoUi = () => { const t = $("#tcProto", m).value === "telnet"; $$(".tcSsh", m).forEach((x) => (x.hidden = t)); $$(".tcTel", m).forEach((x) => (x.hidden = !t)); };
+      $("#tcProto", m).onchange = () => { const pp = $("#tcPort", m); if (["22", "23", ""].includes(pp.value.trim())) pp.value = $("#tcProto", m).value === "telnet" ? 23 : 22; protoUi(); };
+      protoUi();
+      $$("#tcMode button", m).forEach((b) => (b.onclick = () => setMode(b.dataset.v)));
+      $("#tcComRe", m).onclick = () => { ports = null; loadPorts(); };
+      setMode(mode0);
+      $("[data-r='0']", m).onclick = () => { clearInterval(timer); close(null); };
       $("[data-r='1']", m).onclick = () => {
+        if (!$("#tcSer", m).hidden) {
+          const port = $("#tcCom", m).value; if (!port) return toast("پورت سریال انتخاب نشده است", "error");
+          clearInterval(timer);
+          return close({ serial: { port, baud: Number($("#tcBaud", m).value) || 9600, bits: Number($("#tcBits", m).value), parity: $("#tcPar", m).value, stop: $("#tcStop", m).value, flow: $("#tcFlow", m).value } });
+        }
+        clearInterval(timer);
         if (!$("#tcAd", m).hidden) {
           const host = $("#tcHost", m).value.trim(); if (!host) return toast("آدرس را وارد کنید", "error");
-          close({ adhoc: { host, port: Number($("#tcPort", m).value) || 22, username: $("#tcUser", m).value.trim(), password: $("#tcPass", m).value, device_type: $("#tcType", m).value, legacy: $("#tcLegacy", m).checked } });
-        } else { const s = $("#tcDevSel", m); if (!s) return; close({ device_id: Number(s.value) }); }
+          const proto = $("#tcProto", m).value;
+          close({ adhoc: { protocol: proto, host, port: Number($("#tcPort", m).value) || (proto === "telnet" ? 23 : 22), username: $("#tcUser", m).value.trim(), password: $("#tcPass", m).value, device_type: $("#tcType", m).value, legacy: $("#tcLegacy", m).checked } });
+        } else { const sel = $("#tcDevSel", m); if (!sel) return; close({ device_id: Number(sel.value) }); }
       };
       const pw = $("#tcPass", m); if (pw) pw.onkeydown = (e) => { if (e.key === "Enter") $("[data-r='1']", m).click(); };
     },
@@ -202,6 +255,7 @@ async function hostKeyConfirm(c) {
 }
 /* اتصال قابل لغو: نوار «در حال اتصال… [لغو]» (Esc هم لغو می‌کند)؛ شناسه‌ی تلاش را رابط می‌سازد */
 function connLabel(target) {
+  if (target.serial) return target.serial.port + " (" + target.serial.baud + ")";
   if (target.adhoc) return target.adhoc.host + (target.adhoc.port ? ":" + target.adhoc.port : "");
   const d = (SSH.devices || []).find((x) => x.id === target.device_id); return d ? (d.name || d.host) : "";
 }
@@ -226,7 +280,7 @@ async function termOpen(target, accept) {
   if (!r.ok) return toast(r.error, r.cancelled ? "warn" : "error");
   if (r.confirm) { if (await hostKeyConfirm(r.confirm)) return termOpen(target, r.confirm.fingerprint); return; }
   const s = r.session;
-  s.user = target.adhoc ? target.adhoc.username : ((SSH.devices.find((d) => d.id === target.device_id) || {}).username || "");
+  s.user = target.serial ? "" : target.adhoc ? target.adhoc.username : ((SSH.devices.find((d) => d.id === target.device_id) || {}).username || "");
   s.target = target.adhoc ? { adhoc: { ...target.adhoc, password: "" } } : target;
   await termAttach(s);
 }
@@ -245,7 +299,7 @@ async function termAttach(s) {
   const t = { ...s, el, term, fit, next: 0, dec: new TextDecoder("utf-8"), fg: false, pend: "", color: TCOLORS[TERM.seq++ % TCOLORS.length], cols: term.cols, rows: term.rows, out: "", sending: false };
   TERM.tabs.push(t);
   // ورودی: تجمیع و ارسال ترتیبی
-  term.onData((d) => { if (!t.closed) { t.out += d; termFlush(t); } });
+  term.onData((d) => termInput(t, d));
   term.onResize(({ cols, rows }) => { t.cols = cols; t.rows = rows; termStatus(); clearTimeout(t._rz); t._rz = setTimeout(() => !t.closed && api("term_resize", t.id, cols, rows), 150); });
   term.onSelectionChange(() => { if (TP.copySel && term.hasSelection()) termCopy(term.getSelection()); });
   term.attachCustomKeyEventHandler((e) => {
@@ -261,6 +315,79 @@ async function termAttach(s) {
   }, true);
   termActivate(t.id);
   termPoll(t);
+}
+/* ورودی کاربر؛ در MultiExec به همه‌ی ترمینال‌های تیک‌خورده‌ی باز هم می‌رود */
+function termInput(t, d) {
+  if (t.closed) return;
+  const targets = TERM.multi && TERM.multiSel.has(t.id) ? TERM.tabs.filter((x) => !x.closed && TERM.multiSel.has(x.id)) : [t];
+  for (const x of targets) { x.out += d; termFlush(x); }
+}
+function termMultiToggle() {
+  TERM.multi = !TERM.multi;
+  if (TERM.multi) TERM.multiSel = new Set(TERM.tabs.filter((x) => !x.closed).map((x) => x.id));
+  $("#termMulti").classList.toggle("warn", TERM.multi);
+  termRenderTabs();
+  const t = TERM.tabs.find((x) => x.id === TERM.active); if (t) t.term.focus();
+}
+function termMultiBar() {
+  const b = $("#termMultiBar"); if (!b) return;
+  if (!TERM.multi) { b.hidden = true; return; }
+  const n = TERM.tabs.filter((x) => !x.closed && TERM.multiSel.has(x.id)).length;
+  b.hidden = false;
+  b.innerHTML = `<b>MultiExec روشن است</b><span>هر چه در یکی از ترمینال‌های تیک‌خورده تایپ کنید هم‌زمان به ${num(n)} ترمینال می‌رود.</span><button class="btn sm" id="tmOff">خاموش</button>`;
+  $("#tmOff").onclick = termMultiToggle;
+}
+TERM.multi = false; TERM.multiSel = new Set();
+function termSnips() { return (S.settings && S.settings.ui && S.settings.ui.term_snips) || []; }
+function termSnipsRender() {
+  const box = $("#termSnips"); if (!box) return;
+  const list = termSnips();
+  box.innerHTML = `<div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">${list.length ? list.map((x, i) => `<button class="btn sm ghost ltr" data-sn="${i}" title="${esc(x.text.slice(0, 300))}">${esc(x.name)}</button>`).join("")
+      : `<span class="muted">هنوز دستوری ذخیره نشده است.</span>`}<button class="btn sm" id="snEdit" style="margin-inline-start:auto">ویرایش دستورها…</button></div>`;
+  $$("[data-sn]", box).forEach((b) => (b.onclick = () => termSnipSend(list[Number(b.dataset.sn)])));
+  $("#snEdit").onclick = termSnipsEdit;
+}
+async function termSnipSend(x) {
+  const t = TERM.tabs.find((y) => y.id === TERM.active);
+  if (!t || t.closed) return toast("ترمینال فعالی باز نیست", "warn");
+  let txt = x.text.replace(/\r\n/g, "\n");
+  const lines = txt.split("\n");
+  const many = TERM.multi && TERM.multiSel.has(t.id) ? TERM.tabs.filter((y) => !y.closed && TERM.multiSel.has(y.id)).length : 1;
+  if (lines.length > 1 || many > 1) {
+    const ok = await confirm2({ title: "ارسال دستور", confirm: "ارسال",
+      body: `<p>${many > 1 ? `به ${num(many)} ترمینال (MultiExec)` : "به ترمینال فعال"} فرستاده می‌شود:</p><pre class="ltr paste-prev" data-no-i18n>${esc(txt.slice(0, 3000))}</pre>` });
+    t.term.focus(); if (!ok) return;
+  }
+  txt = lines.join("\r") + (x.enter !== false ? "\r" : "");
+  termInput(t, txt);
+  t.term.focus();
+}
+function termSnipsEdit() {
+  const list = termSnips().map((x) => ({ ...x }));
+  openModal({ title: "دستورهای ذخیره‌شده‌ی ترمینال", wide: true,
+    body: `<p class="hint">هر دستور یک دکمه در نوار ترمینال می‌شود. متن چندخطی خط‌به‌خط فرستاده می‌شود. این فهرست فقط برای حساب شماست.</p><div id="snList"></div>
+      <button class="btn sm" id="snAdd" style="margin-top:8px">+ دستور تازه</button>`,
+    foot: `<button class="btn ghost" data-x="0">انصراف</button><button class="btn primary" id="snSave">ذخیره</button>`,
+    onOpen: (m, close) => {
+      const draw = () => {
+        $("#snList", m).innerHTML = list.map((x, i) => `<div class="form-grid" style="border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:8px">
+          <label class="field"><span>نام دکمه</span><input data-k="name" data-i="${i}" value="${esc(x.name || "")}" maxlength="60"></label>
+          <label class="chk" style="align-self:end"><input type="checkbox" data-k="enter" data-i="${i}" ${x.enter !== false ? "checked" : ""}>Enter در پایان</label>
+          <label class="field wide"><span>متن</span><textarea class="ltr code-edit" data-k="text" data-i="${i}" style="min-height:54px">${esc(x.text || "")}</textarea></label>
+          <div class="row" style="gap:6px"><button class="btn sm ghost" data-up="${i}" ${i ? "" : "disabled"}>↑</button><button class="btn sm danger-ghost" data-del="${i}">حذف</button></div></div>`).join("") || `<div class="empty">خالی</div>`;
+        $$("[data-k]", m).forEach((el) => (el.oninput = el.onchange = () => { const x = list[Number(el.dataset.i)]; x[el.dataset.k] = el.type === "checkbox" ? el.checked : el.value; }));
+        $$("[data-del]", m).forEach((b) => (b.onclick = () => { list.splice(Number(b.dataset.del), 1); draw(); }));
+        $$("[data-up]", m).forEach((b) => (b.onclick = () => { const i = Number(b.dataset.up); [list[i - 1], list[i]] = [list[i], list[i - 1]]; draw(); }));
+      };
+      draw();
+      $("#snAdd", m).onclick = () => { list.push({ name: "", text: "", enter: true }); draw(); const ts = $$("textarea", m); if (ts.length) ts[ts.length - 1].focus(); };
+      $("[data-x]", m).onclick = () => close();
+      $("#snSave", m).onclick = async () => {
+        const items = list.filter((x) => String(x.text || "").trim());
+        const r = await api("term_snips_save", items); if (!r.ok) return toast(r.error, "error");
+        S.settings.ui = S.settings.ui || {}; S.settings.ui.term_snips = r.items; close(); toast("ذخیره شد", "ok"); termSnipsRender();
+      };
+    } });
 }
 async function termCopy(s) { try { await navigator.clipboard.writeText(s); } catch (_) { /* بدون دسترسی clipboard */ } }
 async function termPaste(t) {
@@ -330,6 +457,7 @@ async function termCloseTab(id) {
 async function termReconnect(t) {
   api("term_close", t.id);
   if (t.target && t.target.adhoc) return termConnectDlg({ ...t.target.adhoc, adhoc: true });
+  if (t.target && t.target.serial) return termOpen(t.target);
   if (t.target) return termOpen(t.target);
   termConnectDlg();
 }

@@ -8,6 +8,7 @@ AutoKRP itself is licensed under the [MIT License](LICENSE). It bundles or depen
 | Vazirmatn font | `ui/fonts/` | SIL Open Font License 1.1 (`ui/fonts/OFL.txt`) |
 | xterm.js and addon-fit | `ui/vendor/` | MIT (`ui/vendor/xterm-LICENSE.txt`) |
 | IANA port registry data via npm `port-numbers` | `ui/ports_iana.js` | BSD-2-Clause (notice kept in the file) |
+| IEEE MAC vendor registry (MA-L and IAB), from the `netaddr` package data | `autokrp/oui.dat` | Public IEEE Registration Authority data; netaddr is BSD-3-Clause |
 | MIB files | `assets/mibs/src/` | Copyright of their respective vendors/authors; redistributed for SNMP interoperability |
 
 ## Python dependencies (installed by pip and packed into the exe)
@@ -24,6 +25,7 @@ AutoKRP itself is licensed under the [MIT License](LICENSE). It bundles or depen
 | ldap3 | LGPL-3.0 |
 | sqlcipher3 (SQLCipher) | zlib / BSD-style |
 | truststore | MIT |
+| pyserial | BSD-3-Clause |
 | pystray | LGPL-3.0 |
 | Pillow | MIT-CMU (HPND) |
 | Jinja2, lark | BSD-3-Clause / MIT |
