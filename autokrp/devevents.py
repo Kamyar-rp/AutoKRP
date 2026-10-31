@@ -18,10 +18,9 @@ import socketserver
 import threading
 import time
 from collections import deque
-from datetime import datetime
 from pathlib import Path
 
-from . import atrest, paths
+from . import atrest
 
 log = logging.getLogger(__name__)
 DEFAULTS = {"trap_enabled": False, "trap_port": 162, "syslog_enabled": False, "syslog_port": 514, "syslog_tcp": True,
@@ -602,11 +601,9 @@ class DevEvents:
         if t:
             rec["tid"], rec["tname"] = t["id"], t.get("name") or t["host"]
         try:
-            d = paths.data_dir() / "monitor" / "events"
-            d.mkdir(parents=True, exist_ok=True)
-            line = atrest._enc_line(json.dumps(rec, ensure_ascii=False, separators=(",", ":"))) + "\n"
-            with self._wlock, open(d / f"e_{time.strftime('%Y%m%d', time.localtime(now))}.log", "a", encoding="utf-8") as f:
-                f.write(line)
+            from . import tsdb                  # 1.35: فایل روزانه‌ی رمزشده یا جدول akrp_ev در MySQL (محل ذخیره‌ی مانیتورینگ)
+            with self._wlock:
+                tsdb.store().put([("ev", 0, rec)])
         except Exception:  # noqa
             self.stats["errors"] += 1
             log.exception("event write")
@@ -646,17 +643,40 @@ class DevEvents:
     def query(self, since, until, kinds=None, sev=None, q="", src=None, tids=None, limit=2000):
         """جدیدترین‌ها اول؛ فقط فایل‌های روزانه‌ی همان بازه، خط‌به‌خط (حافظه‌ی محدود: حداکثر limit ردیف)،
         حداکثر SCAN_CAP خط در هر جستجو و یک جستجو در هر لحظه (کاربر فقط‌خواندنی هم می‌تواند جستجو کند)."""
-        from . import trange
-        d = paths.data_dir() / "monitor" / "events"
+        from . import tsdb
+        S = tsdb.store()
         out, counts, total, scanned, partial = [], {"trap": 0, "syslog": 0, "crit": 0, "warn": 0, "info": 0, "ok": 0}, 0, 0, False
         ql = (q or "").lower()
         if not self._qlock.acquire(timeout=30):
             raise EventsError("جستجوی دیگری در حال اجراست؛ کمی بعد دوباره امتحان کنید.")
         try:
-            for day in reversed(trange.days(since, until, "%Y%m%d")):
-                f = d / f"e_{day}.log"
-                if not f.exists():
-                    continue
+            def keep(r, line_l):
+                nonlocal total
+                if not since <= r.get("t", 0) <= until:
+                    return False
+                if kinds and r.get("k") not in kinds:
+                    return False
+                if tids is not None and r.get("tid") not in tids:
+                    return False
+                if src and r.get("src") != src:
+                    return False
+                if ql and ql not in line_l:
+                    return False
+                counts[r.get("k")] = counts.get(r.get("k"), 0) + 1
+                counts[r.get("sev")] = counts.get(r.get("sev"), 0) + 1
+                if sev and r.get("sev") not in sev:
+                    return False
+                total += 1
+                return True
+            # MySQL (اگر داده آنجاست): فیلتر نوع/هدف/منبع در خود پایگاه داده
+            for r in S.ev_mysql(since, until, kinds, tids, src):
+                scanned += 1
+                if scanned > SCAN_CAP:
+                    partial = True
+                    break
+                if keep(r, json.dumps(r, ensure_ascii=False).lower() if ql else "") and len(out) < limit:
+                    out.append(r)
+            for f in ([] if partial else S.files.ev_days(since, until)):
                 recs = deque(maxlen=max(0, limit - len(out)))     # جدیدترین‌های همین روز (فایل به ترتیب زمان است)
                 for line in atrest.iter_log_lines(f):
                     scanned += 1
@@ -667,41 +687,26 @@ class DevEvents:
                         r = json.loads(line)
                     except ValueError:
                         continue
-                    if not since <= r.get("t", 0) <= until:
-                        continue
-                    if kinds and r.get("k") not in kinds:
-                        continue
-                    if tids is not None and r.get("tid") not in tids:
-                        continue
-                    if src and r.get("src") != src:
-                        continue
-                    if ql and ql not in line.lower():
-                        continue
-                    counts[r.get("k")] = counts.get(r.get("k"), 0) + 1
-                    counts[r.get("sev")] = counts.get(r.get("sev"), 0) + 1
-                    if sev and r.get("sev") not in sev:
-                        continue
-                    total += 1
-                    if recs.maxlen:
+                    if keep(r, line.lower() if ql else "") and recs.maxlen:
                         recs.append(r)
                 out.extend(reversed(recs))
                 if partial:
                     break
         finally:
             self._qlock.release()
+        out.sort(key=lambda r: r.get("t", 0), reverse=True)
         return {"rows": out[:limit], "total": total, "counts": counts, "partial": partial}
 
     def purge(self):
         kd = self.cfg()["keep_days"]
         if not kd:
             return
-        d = paths.data_dir() / "monitor" / "events"
-        if not d.exists():
-            return
+        from . import tsdb
+        S = tsdb.store()
         lim = time.time() - (kd + 1) * 86400
-        for f in d.glob("e_*.log"):
+        S.purge("ev", lim)                       # فایل‌های روزانه و ردیف‌های MySQL
+        if S.mysql is not None:
             try:
-                if datetime.strptime(f.stem[2:], "%Y%m%d").timestamp() < lim:
-                    f.unlink()
-            except (ValueError, OSError):
-                continue
+                S.mysql.drop_before("akrp_ev", lim)
+            except Exception:  # noqa
+                log.exception("events partitions")

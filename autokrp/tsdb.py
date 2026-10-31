@@ -3,7 +3,7 @@
 
 نوع رکوردها:
   sd — SNMP دقیق (هر ۱ یا ۵ دقیقه، برای هر هدف)      sh — SNMP ساعتی (برای هر هدف)
-  pm — Ping/TCP/HTTP دقیقه‌ای (همه‌ی هدف‌ها در یک رکورد)  ph — Ping/TCP/HTTP ساعتی
+  pm — Ping/TCP/HTTP دقیقه‌ای (همه‌ی هدف‌ها در یک رکورد)  ph — Ping/TCP/HTTP ساعتی                         ev — رخداد Trap/Syslog (1.35؛ monitor/events/e_*.log یا جدول akrp_ev)
 هر رکورد یک dict با کلید «t» (شروع بازه) است.
 
 فایل: همان قالب نسخه‌های قبل (monitor/m_*.log، monitor/h_*.log، monitor/snmp/<id>/f_*.log و h_*.log)، رمزشده.
@@ -29,9 +29,11 @@ from . import atrest, paths
 
 log = logging.getLogger(__name__)
 
-KINDS = ("sd", "sh", "pm", "ph")
+KINDS = ("sd", "sh", "pm", "ph", "ev")      # ev = رخداد Trap/Syslog (1.35)
 ZPFX = "AKRZ:"
-TABLE = {"sd": "akrp_ts_d", "pm": "akrp_ts_d", "sh": "akrp_ts_h", "ph": "akrp_ts_h"}
+TABLE = {"sd": "akrp_ts_d", "pm": "akrp_ts_d", "sh": "akrp_ts_h", "ph": "akrp_ts_h", "ev": "akrp_ev"}
+EV_K = {"trap": 1, "syslog": 2}
+EV_SEV = {"crit": 1, "warn": 2, "info": 3, "ok": 4}
 KCODE = {"sd": 1, "sh": 1, "pm": 2, "ph": 2}
 DAY, MONTH = 86400, "month"
 FUTURE_DAYS, FUTURE_MONTHS = 3, 2
@@ -92,13 +94,17 @@ class FileTS:
             return self._tdir(tid) / f"h_{_month(t)}.log"
         if kind == "pm":
             return self.base() / f"m_{_day(t)}.log"
+        if kind == "ev":
+            d = self.base() / "events"
+            d.mkdir(exist_ok=True)
+            return d / f"e_{_day(t)}.log"
         return self.base() / f"h_{_month(t)}.log"
 
     @staticmethod
     def encode(kind, rec):
         if kind in ("sd", "sh"):
             return zenc(rec)
-        return atrest._enc_line(json.dumps(rec, separators=(",", ":")))
+        return atrest._enc_line(json.dumps(rec, separators=(",", ":"), ensure_ascii=kind != "ev"))
 
     def put(self, items):
         groups = {}
@@ -157,6 +163,19 @@ class FileTS:
             for d in sd.iterdir():
                 if d.is_dir() and d.name.isdigit():
                     out += [("sd", int(d.name), f) for f in d.glob("f_*.log")] + [("sh", int(d.name), f) for f in d.glob("h_*.log")]
+        ev = b / "events"
+        if ev.exists():
+            out += [("ev", 0, f) for f in ev.glob("e_*.log")]
+        return out
+
+    def ev_days(self, since, until):
+        """فایل‌های روزانه‌ی رخداد این بازه، جدیدترین روز اول."""
+        d = self.base() / "events"
+        out = []
+        for n in reversed(_days(since, until, "%Y%m%d")):
+            for p in (d / f"e_{n}.log", d / f"e_{n}.log.mig"):
+                if p.exists():
+                    out.append(p)
         return out
 
     @staticmethod
@@ -164,7 +183,7 @@ class FileTS:
         """پایان بازه‌ی زمانی یک فایل (برای پاک کردن)."""
         stem = p.name.split(".")[0][2:]
         try:
-            if kind in ("sd", "pm"):
+            if kind in ("sd", "pm", "ev"):
                 return datetime.strptime(stem, "%Y%m%d").timestamp() + 86400
             m = datetime.strptime(stem, "%Y%m")
             nxt = datetime(m.year + (m.month == 12), m.month % 12 + 1, 1)
@@ -198,7 +217,7 @@ class FileTS:
         """{kind: {tid: bytes}} و حجم روز کامل قبل."""
         out = {k: {} for k in KINDS}
         y = _day(time.time() - 86400)
-        day = {"sd": 0, "pm": 0}
+        day = {"sd": 0, "pm": 0, "ev": 0}
         days_pm, names = 0, []
         for k, tid, p in self.files():
             try:
@@ -225,6 +244,7 @@ class MySqlTS:
         self.conf = dict(conf)
         self.create = create          # False: فقط خواندن داده‌ی موجود (محل نوشتن فایل است)؛ جدول ساخته نمی‌شود
         self.absent = False
+        self.missing = set()          # جدول‌هایی که (در حالت فقط‌خواندنی) وجود ندارند
         self.down_until = 0.0         # پس از خطای اتصال، خواندن‌ها ۳۰ ثانیه منتظر MySQL نمی‌مانند (رابط کند نشود)
         self.mode = self.conf.get("mode", "cols")
         self._be = MySQLBackend(self.conf)
@@ -293,15 +313,20 @@ class MySqlTS:
     def _ensure(self):
         c = self.cn.cursor()
         now = int(time.time())
-        for table, monthly in (("akrp_ts_d", False), ("akrp_ts_h", True)):
+        for table, monthly in (("akrp_ts_d", False), ("akrp_ts_h", True), ("akrp_ev", False)):
             c.execute("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s", (table,))
             exists = c.fetchone()[0]
             if not exists and not self.create:
-                self.absent = True
+                self.missing.add(table)
+                self.absent = len(self.missing) == 3
                 continue
             if not exists:
                 cols = ("(k TINYINT UNSIGNED NOT NULL, tid INT UNSIGNED NOT NULL, t INT UNSIGNED NOT NULL, h INT UNSIGNED NOT NULL,"
                         " d MEDIUMTEXT NOT NULL, PRIMARY KEY (k, tid, t, h)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                if table == "akrp_ev":      # رخدادها: فیلتر نوع/سطح/هدف/منبع در SQL؛ متن کامل در d (تابع حالت)
+                    cols = ("(t INT UNSIGNED NOT NULL, h INT UNSIGNED NOT NULL, k TINYINT UNSIGNED NOT NULL, sev TINYINT UNSIGNED NOT NULL,"
+                            " tid INT UNSIGNED NULL, src VARCHAR(64) NOT NULL DEFAULT '', d MEDIUMTEXT NOT NULL,"
+                            " PRIMARY KEY (t, h), KEY ix_tid (tid, t), KEY ix_src (src, t)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
                 first = self._pname(now, monthly)
                 part = (f" PARTITION BY RANGE (t) (PARTITION pold VALUES LESS THAN ({self._bound(first) - (0 if monthly else DAY)}),"
                         f" PARTITION pmax VALUES LESS THAN MAXVALUE)")
@@ -324,7 +349,7 @@ class MySqlTS:
         """پارتیشن‌های امروز و چند روز/ماه آینده ساخته شوند (از pmax جدا می‌شوند)."""
         c = c or self.cn.cursor()
         now = int(time.time())
-        for table, monthly in (("akrp_ts_d", False), ("akrp_ts_h", True)):
+        for table, monthly in (("akrp_ts_d", False), ("akrp_ts_h", True), ("akrp_ev", False)):
             have = self.partitioned.get(table) or []
             if "pmax" not in have:
                 continue
@@ -389,8 +414,12 @@ class MySqlTS:
                     self.q.task_done()
 
     def _write(self, batch, spill=True):
-        rows = {"akrp_ts_d": [], "akrp_ts_h": []}
+        rows = {"akrp_ts_d": [], "akrp_ts_h": [], "akrp_ev": []}
         for kind, tid, rec in batch:
+            if kind == "ev":
+                rows["akrp_ev"].append((int(rec["t"]), secrets.randbelow(2 ** 31), EV_K.get(rec.get("k"), 0), EV_SEV.get(rec.get("sev"), 3),
+                                        rec.get("tid"), "" if self.mode == "blob" else str(rec.get("src") or "")[:64], self.encode(rec)))   # حالت «رمز کامل»: منبع هم فقط در متن رمزشده
+                continue
             rows[TABLE[kind]].append((KCODE[kind], int(tid), int(rec["t"]), secrets.randbelow(2 ** 31), self.encode(rec)))
 
         def go(cn):
@@ -398,8 +427,10 @@ class MySqlTS:
             cn.begin()                    # همه یا هیچ (تلاش دوباره ردیف تکراری نمی‌سازد)
             try:
                 for table, rs in rows.items():
+                    sql = ("INSERT INTO akrp_ev (t, h, k, sev, tid, src, d) VALUES (%s, %s, %s, %s, %s, %s, %s)" if table == "akrp_ev"
+                           else f"INSERT INTO {table} (k, tid, t, h, d) VALUES (%s, %s, %s, %s, %s)")  # nosec B608 — نام جدول ثابت
                     for i in range(0, len(rs), BATCH):
-                        c.executemany(f"INSERT INTO {table} (k, tid, t, h, d) VALUES (%s, %s, %s, %s, %s)", rs[i:i + BATCH])  # nosec B608
+                        c.executemany(sql, rs[i:i + BATCH])
                 cn.commit()
             except Exception:
                 try:
@@ -456,7 +487,7 @@ class MySqlTS:
 
     # ---- خواندن
     def get(self, kind, tid, since, until):
-        if self._skip():
+        if self._skip() or TABLE[kind] in self.missing:
             return []
 
         def go(cn):
@@ -471,6 +502,46 @@ class MySqlTS:
             except Exception:  # noqa — ردیف خراب/کلید دیگر
                 continue
         return out
+
+    def ev_iter(self, since, until, kinds=None, tids=None, src=None, page=2000):
+        """رخدادها جدیدترین اول، صفحه‌به‌صفحه (keyset روی t و h؛ حافظه‌ی محدود). فیلتر نوع/هدف/منبع در SQL."""
+        if self._skip() or "akrp_ev" in self.missing or (tids is not None and not tids):
+            return
+        where, args = ["t BETWEEN %s AND %s"], [int(since), int(until) + 1]
+        if kinds:
+            ks = [EV_K[k] for k in kinds if k in EV_K]
+            if not ks:
+                return
+            where.append("k IN (" + ",".join(["%s"] * len(ks)) + ")")
+            args += ks
+        if tids is not None:
+            ts = [int(x) for x in list(tids)[:5000]]
+            where.append("tid IN (" + ",".join(["%s"] * len(ts)) + ")")
+            args += ts
+        if src and self.mode != "blob":        # در حالت blob منبع را devevents بعد از رمزگشایی فیلتر می‌کند
+            where.append("src=%s")
+            args.append(str(src)[:64])
+        last = None
+        while True:
+            w, a = list(where), list(args)
+            if last:
+                w.append("(t < %s OR (t = %s AND h < %s))")
+                a += [last[0], last[0], last[1]]
+
+            def go(cn, w=w, a=a):
+                c = cn.cursor()
+                c.execute("SELECT t, h, d FROM akrp_ev WHERE " + " AND ".join(w) + " ORDER BY t DESC, h DESC LIMIT %s",  # nosec B608 — فقط نگه‌دارنده‌ها
+                          (*a, int(page)))
+                return c.fetchall()
+            rows = self._run(go) or []
+            for t, h, d in rows:
+                try:
+                    yield self.decode(d)
+                except Exception:  # noqa
+                    continue
+            if len(rows) < page:
+                return
+            last = (rows[-1][0], rows[-1][1])
 
     # ---- پاک کردن
     def drop_before(self, table, before):
@@ -488,10 +559,13 @@ class MySqlTS:
 
     def purge(self, kind, before, tid=None):
         """DELETE دسته‌ای (هر بار حداکثر DEL_BATCH ردیف تا قفل طولانی نشود)."""
-        if self._skip():
+        if self._skip() or TABLE[kind] in self.missing:
             return
-        sql = f"DELETE FROM {TABLE[kind]} WHERE k=%s" + (" AND tid=%s" if tid is not None else "") + " AND t < %s LIMIT %s"  # nosec B608
-        args = (KCODE[kind],) + ((int(tid),) if tid is not None else ()) + (int(before), DEL_BATCH)
+        if kind == "ev":
+            sql, args = "DELETE FROM akrp_ev WHERE t < %s LIMIT %s", (int(before), DEL_BATCH)
+        else:
+            sql = f"DELETE FROM {TABLE[kind]} WHERE k=%s" + (" AND tid=%s" if tid is not None else "") + " AND t < %s LIMIT %s"  # nosec B608
+            args = (KCODE[kind],) + ((int(tid),) if tid is not None else ()) + (int(before), DEL_BATCH)
         for _ in range(2000):
             n = self._run(lambda cn: cn.cursor().execute(sql, args))
             if not n or n < DEL_BATCH:
@@ -502,7 +576,7 @@ class MySqlTS:
             self.purge(kind, 2 ** 32 - 1, tid)
 
     def drop_missing(self, alive):
-        if self._skip():
+        if self._skip() or "akrp_ts_h" in self.missing:
             return
 
         def go(cn):
@@ -521,23 +595,33 @@ class MySqlTS:
         if self._sizes[1] is not None and time.time() - self._sizes[0] < max_age:
             return self._sizes[1]
         if self._skip():
-            return {"by": {k: {} for k in KINDS}, "day": {"sd": 0, "pm": 0}, "days_pm": 0, "oldest": None}
+            return {"by": {k: {} for k in KINDS}, "day": {"sd": 0, "pm": 0, "ev": 0}, "days_pm": 0, "oldest": None}
 
         def go(cn):
             c = cn.cursor()
             out = {k: {} for k in KINDS}
             for table, kinds in (("akrp_ts_d", {1: "sd", 2: "pm"}), ("akrp_ts_h", {1: "sh", 2: "ph"})):
+                if table in self.missing:
+                    continue
                 c.execute(f"SELECT k, tid, SUM(LENGTH(d)) + COUNT(*) * 24 FROM {table} GROUP BY k, tid")  # nosec B608
                 for k, tid, n in c.fetchall():
                     if k in kinds:
                         out[kinds[k]][int(tid)] = int(n or 0)
             y0 = int(time.time() // DAY - 1) * DAY
-            c.execute("SELECT k, SUM(LENGTH(d)) + COUNT(*) * 24 FROM akrp_ts_d WHERE t >= %s AND t < %s GROUP BY k", (y0, y0 + DAY))
-            day = {"sd": 0, "pm": 0}
-            for k, n in c.fetchall():
-                day["sd" if k == 1 else "pm"] = int(n or 0)
-            c.execute("SELECT MIN(t) FROM akrp_ts_h")
-            mn = c.fetchone()[0]
+            day = {"sd": 0, "pm": 0, "ev": 0}
+            if "akrp_ts_d" not in self.missing:
+                c.execute("SELECT k, SUM(LENGTH(d)) + COUNT(*) * 24 FROM akrp_ts_d WHERE t >= %s AND t < %s GROUP BY k", (y0, y0 + DAY))
+                for k, n in c.fetchall():
+                    day["sd" if k == 1 else "pm"] = int(n or 0)
+            try:
+                c.execute("SELECT SUM(LENGTH(d)) + COUNT(*) * 40 FROM akrp_ev")
+                out["ev"][0] = int(c.fetchone()[0] or 0)
+            except Exception:  # noqa — جدول هنوز ساخته نشده (نصب فقط‌خواندنی)
+                pass
+            mn = None
+            if "akrp_ts_h" not in self.missing:
+                c.execute("SELECT MIN(t) FROM akrp_ts_h")
+                mn = c.fetchone()[0]
             return {"by": out, "day": day, "days_pm": 0, "oldest": _month(mn) if mn else None}
         r = self._run(go)
         self._sizes = (time.time(), r)
@@ -614,6 +698,15 @@ class Store:
         for r in self.readers():
             r.drop_missing(alive)
 
+    def ev_mysql(self, *a, **k):
+        """رخدادهای MySQL (اگر هست)، جدیدترین اول؛ فایل‌ها را devevents خودش خط‌به‌خط می‌خواند."""
+        if self.mysql is None:
+            return
+        try:
+            yield from self.mysql.ev_iter(*a, **k)
+        except Exception as e:  # noqa
+            log.warning("tsdb events read: %s", e)
+
     def sizes(self):
         tot = self.files.sizes()
         if self.mysql is not None:
@@ -622,8 +715,8 @@ class Store:
                 for k in KINDS:
                     for tid, n in m["by"][k].items():
                         tot["by"][k][tid] = tot["by"][k].get(tid, 0) + n
-                for k in ("sd", "pm"):
-                    tot["day"][k] += m["day"][k]
+                for k in ("sd", "pm", "ev"):
+                    tot["day"][k] += m["day"].get(k, 0)
                 if m["oldest"] and (not tot["oldest"] or m["oldest"] < tot["oldest"]):
                     tot["oldest"] = m["oldest"]
             except Exception as e:  # noqa
@@ -655,6 +748,7 @@ class Store:
             todo += [(("sd" if p.name.startswith("f_") else "sh"), int(p.parent.name), p)
                      for p in (b / "snmp").glob("*/*.log.mig")] if (b / "snmp").exists() else []
             todo += [(("pm" if p.name.startswith("m_") else "ph"), 0, p) for p in b.glob("*.log.mig")]
+            todo += [("ev", 0, p) for p in (b / "events").glob("*.log.mig")] if (b / "events").exists() else []
             self.mig["files"] = len(todo)
             now = time.time()
             for kind, tid, p in todo:

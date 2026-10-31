@@ -2,6 +2,60 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.36.0] — 2026-10-31
+
+### Added
+- **Vendor display templates** for **Cisco** (Catalyst / Nexus / ISR), **Juniper** (EX / MX / SRX), **Extreme** (EXOS) and **FortiGate**. An SNMP device without a chosen template gets its vendor's template automatically once the vendor is detected (sysObjectID). A template picked by hand, or a server/PC/storage icon, still wins.
+- **Summary blocks** for the SNMP detail page, ordered and switched on/off per template:
+  - indicators, including a warning when the device restarted in the last 24 hours
+  - hardware health tiles for temperature, fans, power supplies and sensors
+  - CPU per stack member or module, and memory pools
+  - Juniper component table (Routing Engines, FPC, PIC, fans, PSUs) with state, temperature and CPU, from the same `jnxOperatingTable` that was already read
+  - busiest ports, with in/out bars
+  - ports with errors or discards
+  - alarms and device details
+- New card fields: **hardware health** and **ports with errors**.
+- FortiGate **active sessions** are now kept in history, with a 24-hour sessions chart.
+- The demo mode includes Juniper, Extreme and FortiGate devices (by device type or name).
+
+### Changed
+- Card values are shown as separate chips, so mixed right-to-left and left-to-right text no longer wraps into one jumbled line. Latin device and component names keep Latin digits.
+- No new SNMP OIDs are read; the new blocks only display data the app already collects.
+
+## [1.35.0] — 2026-10-31
+
+### Added
+- **Table view** on the Monitoring page, next to cards (in the style of PRTG): one row per target, with these columns:
+  - status, name, address, group, policy
+  - response time, 24-hour availability, CPU, memory, temperature, disk, uptime
+  - ports up, traffic of the display ports with a small chart, alerts, last check, interval, method
+
+  The table can be sorted, filtered (problems / down / alerts / maintenance / paused), searched and filtered by group. It is paged at 25 to 200 per page.
+- **Customize mode**: change columns and their order, page size, display templates of selected devices and the display ports of each SNMP device. Nothing is saved until **Apply**; **Cancel** discards everything.
+- **Saved views** per user (layout, columns, filter, search, group, sort).
+- **Device display templates**: what is shown, and in which order, on the card and on the SNMP detail page (sections and summary charts).
+  - Five built-in templates: switch, router/link, firewall, server, generic. A device without a template gets one automatically from its icon.
+  - Admins can copy and edit templates.
+  - Templates only change the display; what is read is still set by the monitoring policy.
+- **Display ports**: up to 4 ports per SNMP device whose traffic is shown in the table, the card and the NOC. By default these are the watched ports, otherwise the fastest ports that are up. A short in-memory history feeds the small charts.
+- **NOC dashboards**: named dashboards (admins) with:
+  - their own targets (all, groups or individual targets)
+  - a tiles, table or mixed layout
+  - large tiles for important devices
+  - up to 12 uplink traffic charts
+  - optional problems column and recent-events feed
+
+  Each dashboard has a fixed address (`#noc/<id>`) that opens directly after sign-in. `#noc/rotate` cycles through dashboards that have a rotation time.
+- **Trap/Syslog events in MySQL/MariaDB** (table `akrp_ev`, daily partitions), using the same "monitoring data location" setting as chart data.
+  - Type, target and source are filtered in the database; message text follows the database mode (the source address is hidden too in "fully encrypted" mode).
+  - Existing event files are moved in the background, and searches read both files and MySQL.
+
+### Changed
+- The Monitoring page now refreshes with `mon_rows` every 5 s: only changed targets are sent (about 24 KB instead of about 0.5 MB with 500 targets). The full list is reloaded only when targets, policies or templates change.
+- New targets get their first check within 10 s (was up to 30 s).
+- The 24-hour availability bar on cards is cached per minute (cheaper with many targets).
+- MySQL reset also removes `akrp_ev`.
+
 ## [1.34.0] — 2026-10-31
 
 ### Added

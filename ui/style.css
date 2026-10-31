@@ -555,6 +555,34 @@ td.nowrap { white-space: nowrap; }
 .mon-cap { margin: -6px 0 14px; padding: 10px 12px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); line-height: 1.8; }
 .sn-polnote { margin: 8px 0; padding: 8px 10px; border-radius: 8px; background: var(--info-soft, var(--warn-soft)); font-size: 13px; }
 .cap-tbl td, .cap-tbl th { padding: 4px 8px; }
+/* 1.35: نمای کارت/جدول مانیتورینگ و حالت ویرایش */
+.mv-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.mv-bar input[type=search] { min-width: 200px; flex: 1; max-width: 320px; }
+.mv-tbl td { vertical-align: middle; }
+.mv-tbl tr.mv-r { cursor: pointer; }
+.mv-tbl tr.st-down td:first-child, .mv-tbl tr.st-down td.c-status { box-shadow: inset 3px 0 0 var(--err); }
+.mv-tbl tr.st-down { background: var(--err-soft); }
+.mv-tbl tr.st-alarm { background: var(--warn-soft); }
+.mv-tbl tr.st-unreachable { background: color-mix(in srgb, var(--faint) 12%, transparent); }
+.mv-tbl th.sorted { color: var(--acc, var(--info)); }
+.mv-nm { display: inline-flex; gap: 6px; align-items: center; }
+.mv-nm .mon-svg { width: 18px; height: 18px; }
+.mv-pct { display: inline-block; width: 46px; height: 6px; border-radius: 3px; background: var(--line2); margin-inline-end: 6px; vertical-align: middle; overflow: hidden; }
+.mv-pct i { display: block; height: 100%; }
+.mv-pct i.ok { background: var(--ok); } .mv-pct i.warn { background: var(--warn); } .mv-pct i.err { background: var(--err); }
+.c-warn { color: var(--warn); } .c-err { color: var(--err); }
+.mv-port { display: flex; gap: 8px; align-items: center; white-space: nowrap; font-size: 12px; }
+.mv-pn { max-width: 120px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.mv-spark { width: 90px; height: 22px; }
+.mv-spark polyline { fill: none; stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+.mv-spark .in { stroke: var(--info); } .mv-spark .out { stroke: var(--ok); }
+.mv-pager { display: flex; gap: 10px; align-items: center; justify-content: center; margin: 12px 0; }
+.mv-edit { margin-bottom: 12px; padding: 12px; border: 1px dashed var(--info); }
+.mv-edit h4 { margin: 0 0 6px; }
+.mv-edit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.mv-cols { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow: auto; }
+.mv-col { display: flex; gap: 4px; align-items: center; } .mv-col > span, .mv-col > label { flex: 1; }
+.mv-edit-foot { gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
 .sn-det > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .sn-det textarea { width: 100%; }
 .sn-th input { width: 100px; }
@@ -681,6 +709,31 @@ body.noc-on { overflow: hidden; }
 .noc-ev.e-down span:last-child, .noc-ev.e-alarm span:last-child { color: var(--err); }
 .noc-ev.e-up span:last-child, .noc-ev.e-clear span:last-child { color: var(--ok); }
 @media (max-width: 1100px) { .noc-body { grid-template-columns: 1fr; } }
+/* 1.35: داشبوردهای NOC */
+#noc select#nocDash { font-size: 15px; max-width: 240px; }
+.noc-rot { height: 3px; background: var(--line2); border-radius: 2px; overflow: hidden; margin-top: -6px; }
+.noc-rot i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 1s linear; }
+.noc-body.noc-d { grid-template-columns: 1fr; }
+.noc-body.noc-d.w-prob { grid-template-columns: minmax(260px, 22%) 1fr; }
+.noc-body.noc-d.w-charts, .noc-body.noc-d.w-feed { grid-template-columns: 1fr minmax(300px, 30%); }
+.noc-body.noc-d.w-prob.w-charts, .noc-body.noc-d.w-prob.w-feed { grid-template-columns: minmax(240px, 20%) 1fr minmax(300px, 28%); }
+.noc-body.noc-d.noc-mixed.w-charts { grid-template-columns: minmax(240px, 20%) 1fr minmax(380px, 40%); }
+.noc-main, .noc-side { overflow: auto; min-height: 0; }
+.noc-side { display: flex; flex-direction: column; gap: 12px; }
+.noc-side .chart-card { margin-bottom: 10px; }
+.noc-bt { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); grid-auto-rows: minmax(88px, auto); gap: 10px; }
+.noc-tile { --st: var(--faint); background: color-mix(in srgb, var(--st) 14%, var(--panel)); border: 1px solid var(--line2); border-inline-start: 6px solid var(--st);
+  border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.noc-tile.big { grid-column: span 2; grid-row: span 2; }
+.noc-th { display: flex; gap: 8px; align-items: center; } .noc-th b { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.noc-th .mon-svg { width: 24px; height: 24px; flex: none; }
+.noc-tm { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.noc-tm b { color: var(--text); font-size: 18px; }
+.noc-tile.big .noc-tm { font-size: 15px; }
+.noc-tp .mv-port { font-size: 14px; } .noc-tile.big .mv-spark { width: 160px; height: 34px; }
+.noc-tile.s-up { --st: var(--ok); } .noc-tile.s-slow, .noc-tile.s-warn { --st: var(--warn); } .noc-tile.s-crit, .noc-tile.s-down { --st: var(--err); }
+.noc-tile.s-down { animation: monPulse 1.6s ease-out infinite; } .noc-tile.s-unreachable { --st: #a77bdb; } .noc-tile.s-maint { --st: var(--info); }
+.noc-tbl { font-size: 15px; } .noc-tbl td { padding: 8px 10px; }
 
 /* 1.24 سلامت سرور */
 .health-panel { margin-bottom: 16px; }
@@ -745,3 +798,32 @@ body.nsee-monitor [data-need-tool="monitor"],
 body.nsee-term [data-need-tool="term"],
 body.nsee-offline [data-need-tool="offline"],
 body.nsee-nettools [data-need-tool="nettools"] { display: none !important; }
+
+/* 1.36: بلوک‌های «خلاصه»ی قالب سازنده‌ها */
+.sn-blk { margin: 14px 0 4px; }
+.sn-blk > h3 { margin: 0 0 8px; font-size: 14px; }
+.kpi.kpi-warn { border-color: color-mix(in srgb, var(--warn) 60%, transparent); }
+.kpi.kpi-warn span { color: var(--warn); }
+.sn-health { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.sn-hcard { background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; padding: 10px 12px; border-top: 3px solid var(--ok); }
+.sn-hcard.warn { border-top-color: var(--warn); } .sn-hcard.err { border-top-color: var(--err); }
+.sn-hhead { display: flex; align-items: center; gap: 6px; } .sn-hhead .muted { margin-inline-start: auto; }
+.sn-hdot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.sn-hcard.warn .sn-hdot { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+.sn-hcard.err .sn-hdot { background: var(--err); box-shadow: 0 0 0 3px var(--err-soft); }
+.sn-hnum { font-size: 22px; font-weight: 700; margin-top: 4px; } .sn-hnum span { font-size: 12.5px; font-weight: 400; color: var(--muted); }
+.sn-hcard.warn .sn-hnum span { color: var(--warn); } .sn-hcard.err .sn-hnum span { color: var(--err); }
+.sn-hbad { margin-top: 6px; font-size: 12.5px; line-height: 1.7; color: var(--err); }
+.sn-mods { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 6px 18px; margin-bottom: 6px; }
+.sn-mod { display: flex; align-items: center; gap: 8px; } .sn-mod > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sn-top { display: flex; flex-direction: column; gap: 6px; }
+.sn-trow { display: grid; grid-template-columns: 110px minmax(80px, 1fr) minmax(120px, 2fr) 170px 48px; align-items: center; gap: 10px; font-size: 13px; }
+.sn-tn { font-weight: 600; } .sn-ta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sn-tbars { display: flex; flex-direction: column; gap: 3px; } .sn-tbars i { display: block; height: 6px; border-radius: 3px; min-width: 2px; }
+.sn-tbars i.in { background: var(--info); } .sn-tbars i.out { background: var(--ok); }
+.sn-okline { padding: 8px 12px; border-radius: 10px; background: var(--ok-soft); color: var(--ok); font-size: 13px; }
+@media (max-width: 720px) { .sn-trow { grid-template-columns: 90px 1fr 130px; } .sn-trow .sn-ta, .sn-trow .sn-tbars { display: none; } }
+.mon-snmp { display: flex; flex-wrap: wrap; gap: 4px 6px; width: 100%; }
+.mon-snmp .mv-f { white-space: nowrap; display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 6px; background: var(--line2); }
+.mon-snmp .mv-f:has(> .tag) { background: none; padding: 0; }
+[dir=rtl] .sn-mod .ltr, [dir=rtl] .sn-hbad .ltr, [dir=rtl] .sn-ta.ltr, [dir=rtl] .mon-main > b.ltr, [dir=rtl] td.ltr.sn-cn { text-align: right; }

@@ -274,7 +274,16 @@ def _m17(c):
                       (name, json.dumps(data, ensure_ascii=False), time.time()))
 
 
-MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17]
+def _m18(c):
+    """1.35: قالب‌های نمایش و داشبوردهای NOC (mon_layouts) و قالب هر هدف (tpl: خالی = خودکار از آیکن)."""
+    c.execute("CREATE TABLE IF NOT EXISTS mon_layouts(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, name TEXT, data TEXT,"
+              " owner TEXT DEFAULT '', created REAL)")
+    have = {r[1] for r in c.execute("PRAGMA table_info(mon_targets)")}
+    if "tpl" not in have:
+        c.execute("ALTER TABLE mon_targets ADD COLUMN tpl TEXT DEFAULT ''")
+
+
+MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17, _m18]
 # ستون‌هایی که مهاجرت‌ها اضافه می‌کنند؛ هر بار باز شدن بررسی می‌شود و اگر نباشد اضافه می‌شود
 # (پایگاه داده‌ای که شماره‌ی نسخه‌اش جلوتر از ستون‌هایش است، مثلاً بازگردانی فایل قدیمی، دیگر خطا نمی‌دهد)
 REQUIRED_COLUMNS = {
@@ -284,7 +293,7 @@ REQUIRED_COLUMNS = {
     "history": {"user": "TEXT"},
     "ips": {c: "TEXT" for c in INTEL_FIELDS},
     "mon_targets": {"snmp": "TEXT", "cred_id": "INTEGER", "parent_id": "INTEGER", "cert_days": "INTEGER DEFAULT 0",
-                    "policy_id": "INTEGER"},
+                    "policy_id": "INTEGER", "tpl": "TEXT DEFAULT ''"},
     "mon_events": {"kind": "TEXT DEFAULT 'down'"},
 }
 ACTOR = threading.local()   # نام کاربر جاری هر رشته (API یا اجرای ابزار)؛ برای ستون user تاریخچه
@@ -1216,7 +1225,7 @@ class Store:
 
     # ------------------------------------------------------------ مانیتورینگ
     MON_FIELDS = ("name", "host", "kind", "port", "url", "interval", "threshold", "timeout", "slow_ms", "icon", "grp",
-                  "owner", "enabled", "notify", "notes", "snmp", "cred_id", "parent_id", "cert_days", "policy_id")
+                  "owner", "enabled", "notify", "notes", "snmp", "cred_id", "parent_id", "cert_days", "policy_id", "tpl")
 
     def mon_targets(self):
         with self._lock:
@@ -1260,6 +1269,38 @@ class Store:
 
     # پنجره‌های نگهداری
     MAINT_FIELDS = ("name", "scope", "kind", "start", "end", "days", "t_from", "t_to", "enabled", "owner", "note")
+
+    # ---- قالب نمایش و داشبورد NOC (1.35)
+    def lay_list(self, kind):
+        with self._lock:
+            out = []
+            for r in self.db.execute("SELECT * FROM mon_layouts WHERE kind=? ORDER BY id", (kind,)).fetchall():
+                d = dict(r)
+                try:
+                    d["data"] = json.loads(d.get("data") or "{}")
+                except ValueError:
+                    d["data"] = {}
+                out.append(d)
+            return out
+
+    def lay_save(self, lid, kind, name, data, owner=""):
+        with self._lock:
+            js = json.dumps(data, ensure_ascii=False)
+            if lid:
+                self.db.execute("UPDATE mon_layouts SET name=?, data=? WHERE id=? AND kind=?", (name, js, int(lid), kind))
+                return int(lid)
+            return self.db.execute("INSERT INTO mon_layouts(kind, name, data, owner, created) VALUES(?, ?, ?, ?, ?)",
+                                   (kind, name, js, owner, time.time())).lastrowid
+
+    def lay_delete(self, lid, kind):
+        with self._lock:
+            if kind == "tpl":
+                self.db.execute("UPDATE mon_targets SET tpl='' WHERE tpl=?", (str(int(lid)),))
+            self.db.execute("DELETE FROM mon_layouts WHERE id=? AND kind=?", (int(lid), kind))
+
+    def mon_set_tpl(self, ids, tpl):
+        with self._lock:
+            self.db.executemany("UPDATE mon_targets SET tpl=? WHERE id=?", [(tpl, int(i)) for i in ids])
 
     # ---- سیاست پایش (1.34)
     def pol_list(self):

@@ -2163,7 +2163,7 @@ function renderSettings() {
         ${[["auto", "خودکار (هسته‌ها منهای یک، حداکثر ۸)"], ["0", "خاموش (درون خود برنامه، یک هسته)"], ...Array.from({ length: 16 }, (_, i) => [String(i + 1), `${num(i + 1)} کارگر`])]
           .map(([v, n]) => `<option value="${v}" ${String(M.snmp_workers === undefined ? "auto" : M.snmp_workers) === v ? "selected" : ""}>${n}</option>`).join("")}</select>
         <small class="hint">فقط وقتی هدف SNMP فعالی هست اجرا می‌شوند. هر کارگر حدود ۵۰ مگابایت RAM می‌گیرد؛ با بسته شدن برنامه بسته می‌شوند.</small></label>
-      <label class="field"><span>محل ذخیره‌ی داده‌ی نمودارها</span><select data-path="monitor.ts_backend">
+      <label class="field"><span>محل ذخیره‌ی داده‌ی نمودارها و Trap/Syslog</span><select data-path="monitor.ts_backend">
         <option value="file" ${(M.ts_backend || "file") === "file" ? "selected" : ""}>فایل‌های رمزشده در پوشه‌ی داده (پیش‌فرض)</option>
         <option value="mysql" ${M.ts_backend === "mysql" ? "selected" : ""}>MySQL / MariaDB (همان پایگاه داده‌ی برنامه)</option></select>
         <small class="hint">فقط وقتی پایگاه داده‌ی برنامه MySQL است. داده‌ی قبلی خودکار و در پس‌زمینه به MySQL منتقل می‌شود؛ اگر MySQL در دسترس نباشد داده موقتاً در فایل نوشته و بعداً منتقل می‌شود. قالب مثل حالت پایگاه داده: «خوانا» = JSON خوانا، «رمز ستون‌ها» و «رمز کامل» = فشرده و رمزشده.</small></label></div>

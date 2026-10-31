@@ -20,6 +20,8 @@ FEATURE_API = {
                 "mon_maint_list", "mon_maint_save", "mon_maint_delete", "mon_parent_group", "mon_noc",
                 "mon_events_query", "mon_events_status", "mon_events_cfg_save", "mon_topo", "mon_topo_scan", "mon_topo_apply",
                 "mon_pol_list", "mon_pol_save", "mon_pol_delete", "mon_capacity", "mon_ts_migrate",
+                "mon_rows", "mon_tpl_list", "mon_tpl_save", "mon_tpl_delete", "mon_tpl_set", "mon_show_ports",
+                "mon_noc_list", "mon_noc_save", "mon_noc_delete",
                 # 1.27.1: MIB سازنده‌ها ← نوع دستگاه خودکار
                 "mib_list", "mib_upload", "mib_delete", "mib_compile", "mib_types"},
     "term": {"term_open", "term_break", "serial_ports", "term_snips_save", "term_read", "term_write", "term_resize", "term_close", "term_list", "term_stats", "conn_cancel",
@@ -83,7 +85,7 @@ PUBLIC = {"get_state", "security_status", "security_unlock", "security_check_pas
 READ = {"app_close_choice", "mon_list", "mon_state", "mon_report", "mon_snmp_live", "mon_snmp_series", "mon_icons", "mon_sound_get", "mon_check_now",
         "get_run", "list_ips", "repeat_ips", "ip_detail", "get_stats", "list_history", "history_view", "jobs_list", "get_about", "security_lock",
         "security_change_own", "whoami", "asset_list", "asset_get", "asset_changes", "asset_history",
-        "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list"}
+        "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list", "mon_rows", "mon_tpl_list", "mon_noc_list"}
 # اپراتور (به‌علاوه‌ی READ). چک ابزار داخل خود متدها یا در check_tools انجام می‌شود.
 OPERATOR = {"net_oui", "net_rdap", "net_trace_start", "net_locate_targets", "net_locate_start", "net_job", "net_job_cancel",
             "start_run", "cancel_run", "decide", "job_run", "pick_csv", "ips_action",
@@ -92,7 +94,9 @@ OPERATOR = {"net_oui", "net_rdap", "net_trace_start", "net_locate_targets", "net
 OPERATOR_MON = {"mon_save", "mon_delete", "mon_toggle", "mon_icon_upload", "mon_snmp_watch", "snmp_cred_list", "snmp_cred_save",
                 "snmp_cred_delete", "snmp_test", "snmp_walk", "mon_maint_save", "mon_maint_delete", "mon_parent_group",
                 # 1.27.1: فهرست نوع‌های دستگاه از MIB برای فرم هدف (بارگذاری MIB فقط ادمین)
-                "mib_types"}
+                "mib_types",
+                # 1.35: قالب نمایش و پورت‌های نمایشی هدف‌هایی که خودش اجازه‌ی ویرایش دارد
+                "mon_tpl_set", "mon_show_ports"}
 # اپراتوری که «ترمینال و انتقال فایل» دارد
 OPERATOR_TERM = {"xfer_open", "xfer_conns", "xfer_ls", "xfer_mkdir", "xfer_delete", "xfer_rename", "xfer_close",
                  "xfer_put_begin", "xfer_put", "xfer_get", "xfer_local", "local_ls", "xfer_jobs", "xfer_cancel", "xfer_clear", "xfer_clear_one",
@@ -106,7 +110,7 @@ OPERATOR_SSH = {"ssh_save_device", "ssh_delete_devices", "ssh_list", "cred_list"
 # متدهای SSH که با خاموش بودن ابزار SSH برای همه بسته‌اند
 SSH_RUN = {"ssh_start", "ssh_test", "ssh_preview", "backup_now", "fgu_start", "term_open", "xfer_open", "tftp_start"}
 # درخواست‌های دوره‌ای رابط؛ «فعالیت کاربر» حساب نمی‌شوند (قفل خودکار)
-POLL = {"net_job", "mon_state", "mon_snmp_live", "asset_scan_status", "term_read", "term_stats", "xfer_jobs", "get_state", "get_run", "ssh_job", "fgu_job", "js_error", "ui_perf", "security_status", "ui_touch", "whoami"}
+POLL = {"net_job", "mon_state", "mon_rows", "mon_snmp_live", "asset_scan_status", "term_read", "term_stats", "xfer_jobs", "get_state", "get_run", "ssh_job", "fgu_job", "js_error", "ui_perf", "security_status", "ui_touch", "whoami"}
 
 
 def enabled_tools(settings):
@@ -137,7 +141,7 @@ ACCESS_KEYS = TOOLS + FEATURES                     # همه‌ی ابزارها 
 ACCESS_TITLES = {**TOOL_TITLES, **FEATURE_TITLES, "ssh": "ارتباط با دستگاه‌ها (SSH/Telnet)"}
 NO_VIEW = {"term"}                                  # بخش‌هایی که «دیدن» ندارند (view = none)
 _MON_VIEW = {"mon_list", "mon_report", "mon_snmp_live", "mon_snmp_series", "mon_icons", "mon_sound_get", "mon_check_now",
-             "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list"}
+             "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list", "mon_rows", "mon_tpl_list", "mon_noc_list"}
 _ASSET_VIEW = {"asset_list", "asset_get", "asset_changes", "asset_history", "asset_scan_status"}
 _SSH_VIEW = {"ssh_list", "ssh_jobs", "ssh_job", "ssh_job_results", "ssh_output", "ssh_export_output", "text_chunk",
              "backup_overview", "backup_versions", "backup_view", "backup_diff", "backup_export", "backup_export_latest"}

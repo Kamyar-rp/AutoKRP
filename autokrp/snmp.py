@@ -23,7 +23,7 @@ import re
 import threading
 import time
 import zlib
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
 from . import atrest
 
@@ -69,6 +69,9 @@ OLD_BUSY = {"m1": "1.3.6.1.4.1.9.2.1.57.0", "m5": "1.3.6.1.4.1.9.2.1.58.0"}
 # Juniper: JUNIPER-MIB::jnxOperatingTable («صفر یعنی نامعلوم یا نامربوط»؛ سند Juniper «Health monitoring with SNMP»: CPU و حافظه‌ی Routing Engine)
 JNX_OP = {"descr": "1.3.6.1.4.1.2636.3.1.13.1.5", "state": "1.3.6.1.4.1.2636.3.1.13.1.6", "temp": "1.3.6.1.4.1.2636.3.1.13.1.7",
           "cpu": "1.3.6.1.4.1.2636.3.1.13.1.8", "buffer": "1.3.6.1.4.1.2636.3.1.13.1.11", "memory": "1.3.6.1.4.1.2636.3.1.13.1.15"}
+# JUNIPER-MIB::jnxOperatingState: unknown(1) running(2) ready(3) reset(4) runningAtFullSpeed(5) down(6) standby(7)
+JNX_STATE = {1: "unknown", 2: "running", 3: "ready", 4: "reset", 5: "runningAtFullSpeed", 6: "down", 7: "standby"}
+JNX_LEVEL = {1: "unknown", 2: "ok", 3: "ok", 4: "warn", 5: "warn", 6: "down", 7: "ok"}
 # MikroTik: MIKROTIK-MIB::mtxrGaugeTable (unit: celsius(1) rpm(2) dV(3) dA(4) dW(5) status(6)) و mtxrHl* قدیمی.
 # طبق راهنمای رسمی MikroTik (Health) دما در SNMP «ضرب در ۱۰» است؛ ولتاژ dV.
 MT_GAUGE = {"name": "1.3.6.1.4.1.14988.1.1.3.100.1.2", "value": "1.3.6.1.4.1.14988.1.1.3.100.1.3", "unit": "1.3.6.1.4.1.14988.1.1.3.100.1.4"}
@@ -567,6 +570,13 @@ async def collect(cl, cred, host, port, cfg, timeout=3, retries=1):
                 top = max(mems, key=lambda p: p["pct"])
                 out["mem"] = {"pct": top["pct"], "used": top["used"], "total": top["total"], "items": mems, "src": "JUNIPER-MIB (jnxOperatingBuffer)"}
             out["extra"]["_jnx"] = r                         # دما از همین جدول (بدون خواندن دوباره)
+            comps = []                                       # 1.36: قطعه‌ها از همین جدول (فقط نمایش)
+            for i in sorted(r[JNX_OP["descr"]], key=lambda x: oid_t(x))[:64]:
+                stv = r[JNX_OP["state"]].get(i)
+                comps.append({"name": str(r[JNX_OP["descr"]][i] or i)[:80], "state": JNX_STATE.get(stv, str(stv or "")),
+                              "level": JNX_LEVEL.get(stv, "unknown"), "temp": r[JNX_OP["temp"]].get(i) or None,
+                              "cpu": r[JNX_OP["cpu"]].get(i)})
+            out["extra"]["components"] = comps
         elif vendor == "extreme":
             r = await g([EX["cpu"]])
             if r.get(EX["cpu"]) is not None:
@@ -914,7 +924,8 @@ def clean_cfg(c):
     ext = clean_pol_fields(c)
     return {"vendor": vendor, "collect": {k: 1 if col.get(k, True) else 0 for k in ("cpu", "mem", "disk", "env", "if")},
             "th": th, "after": after, "retries": retries, "watch": watch, "oids": oids,
-            "if_hist": ext["hist"]["if"], "profile": prof, **ext}
+            "if_hist": ext["hist"]["if"], "profile": prof, **ext,
+            "show_ports": [str(x).strip()[:80] for x in (c.get("show_ports") or [])[:4] if str(x).strip()]}
 
 
 PORTS = ("all", "up", "watch", "none")       # تاریخچه‌ی کدام پورت‌ها: همه (فعال)، فقط وصل، فقط پیگیری‌شده، هیچ
@@ -1047,6 +1058,9 @@ class SnmpRuntime:
         from . import tsdb
         self.ts = tsdb.store()
         self.pool = None        # کارگرهای SNMP (snmppool)؛ None = درون برنامه
+        self.vendors = {}       # 1.36: tid → سازنده‌ی تشخیص‌داده‌شده (برای قالب نمایش خودکار)
+        self.vendor_new = False
+        self.phist = {}         # 1.35: tid → {پورت نمایشی: deque[(t، ورودی، خروجی)]} برای نمودار کوچک جدول و NOC
         self._prof_sig = None
         self._sem = None
 
@@ -1233,6 +1247,9 @@ class SnmpRuntime:
         self.prev[tid] = {"t": now, "up": up, "c": cnt}
         temps = [x["value"] for x in raw["temps"] if x.get("value") is not None]
         disks = [x["pct"] for x in raw["disks"] if x.get("pct") is not None]
+        if raw.get("vendor") and self.vendors.get(tid) != raw["vendor"]:
+            self.vendors[tid] = raw["vendor"]
+            self.vendor_new = True
         live = {"t": now, "sys": raw["sys"], "vendor": raw["vendor"], "rtt": raw["rtt"], "errors": raw["errors"],
                 "uptime_s": round(up / 100) if up is not None else None, "cpu": raw["cpu"], "mem": raw["mem"],
                 "disks": raw["disks"], "temps": raw["temps"], "fans": raw["fans"], "psus": raw["psus"],
@@ -1245,8 +1262,55 @@ class SnmpRuntime:
         live["alarms"] = [{"key": k, **v} for k, v in (self.alarms.get(tid) or {}).items() if v["level"] in ("warn", "crit")]
         live["level"] = "crit" if any(a["level"] == "crit" for a in live["alarms"]) else "warn" if live["alarms"] else "ok"
         self.live[tid] = live
+        self._port_hist(tid, cfg, ifs, now)
         self._accumulate(tid, cfg, live, now)
         return events
+
+    # ---- پورت‌های نمایشی (1.35): انتخاب کاربر، وگرنه پیگیری‌شده‌ها، وگرنه سریع‌ترین پورت‌های وصل
+    PH_LEN = 60
+
+    @staticmethod
+    def show_names(cfg, ifs, n=2):
+        pick = [x for x in (cfg.get("show_ports") or []) if any(i["name"] == x for i in ifs)][:4]
+        if pick:
+            return pick
+        n = max(0, min(4, int(cfg.get("_tpl_ports", n) if cfg.get("_tpl_ports") is not None else n)))
+        if not n:
+            return []
+        w = set(cfg.get("watch") or [])
+        cand = [x for x in ifs if x["name"] in w and x["oper"] == 1]
+        if len(cand) < n:
+            rest = [x for x in ifs if x["oper"] == 1 and x["type"] not in (24, 1, 53, 135, 136) and x not in cand]
+            rest.sort(key=lambda x: (-(x["speed"] or 0), -((x["in_bps"] or 0) + (x["out_bps"] or 0))))
+            cand += rest
+        return [x["name"] for x in cand[:n]]
+
+    def _port_hist(self, tid, cfg, ifs, now):
+        names = self.show_names(cfg, ifs)
+        with self._lock:
+            ring = self.phist.setdefault(tid, {})
+            for k in [k for k in ring if k not in names]:
+                del ring[k]
+            for x in ifs:
+                if x["name"] in names:
+                    ring.setdefault(x["name"], deque(maxlen=self.PH_LEN)).append((round(now), x["in_bps"], x["out_bps"]))
+            ring["_order"] = names
+
+    def port_rows(self, tid):
+        lv = self.live.get(tid)
+        with self._lock:
+            ring = dict(self.phist.get(tid) or {})
+        if not lv:
+            return []
+        by = {x["name"]: x for x in lv["ifs"]}
+        out = []
+        for n in ring.get("_order") or []:
+            x = by.get(n)
+            if not x:
+                continue
+            out.append({"n": n, "a": (x.get("alias") or "")[:40], "in": x["in_bps"], "out": x["out_bps"], "sp": x["speed"],
+                        "u": x["util"], "o": x["oper"], "h": [[a, b] for _, a, b in list(ring.get(n) or [])[-30:]]})
+        return out
 
     # ---- هشدارها
     def _checks(self, cfg, live):
@@ -1349,7 +1413,7 @@ class SnmpRuntime:
         return events
 
     def clear(self, tid):
-        for d in (self.live, self.prev, self.alarms):
+        for d in (self.live, self.prev, self.alarms, self.phist):
             d.pop(tid, None)
         with self._lock:
             self._acc5.pop(tid, None)
@@ -1370,6 +1434,9 @@ class SnmpRuntime:
                 v["temp"] = live["temp_max"]
             if live["rtt"] is not None:
                 v["rtt"] = live["rtt"]
+            ses = (live.get("extra") or {}).get("sessions")
+            if isinstance(ses, (int, float)):
+                v["ses"] = ses                  # 1.36: نمودار نشست‌های فایروال
         ports = cfg.get("ports") or "all"
         if hist.get("if", 1) and ports != "none":
             n = 0
@@ -1531,8 +1598,43 @@ def fmt_up(s):
 _DEMO = {}
 
 
+def _demo_vendor(t, cfg):
+    v = cfg.get("vendor") or "auto"
+    if v in ("juniper", "extreme", "fortinet"):
+        return v
+    n = (t.get("name") or "").lower()
+    for k, ven in (("juniper", "juniper"), ("jnp", "juniper"), ("extreme", "extreme"), ("exos", "extreme"), ("forti", "fortinet"), ("fw", "fortinet")):
+        if k in n:
+            return ven
+    return "cisco"
+
+
+def _demo_ports(st, rnd, names, up_down=(), admin_off=(), err=(), uplinks=None, sp=1_000_000_000, fast=()):
+    """پورت‌های ساختگی با شمارنده‌های پیوسته (Demo)."""
+    ifs = []
+    for i, name in enumerate(names, 1):
+        oper = 2 if i in up_down or i in admin_off else 1
+        speed = 10_000_000_000 if i in fast else sp
+        o = st["oct"].setdefault(name, [rnd.randint(10 ** 9, 10 ** 11), rnd.randint(10 ** 9, 10 ** 11)])
+        if oper == 1:
+            base = (6e8 if i in fast else 4e7) if i in (uplinks or {}) else 2e6
+            o[0] += int(base * rnd.uniform(0.3, 1.6) * 60 / 8)
+            o[1] += int(base * rnd.uniform(0.3, 1.6) * 60 / 8)
+        e = st["err"].setdefault(name, 0)
+        if i in err:
+            st["err"][name] = e + rnd.randint(0, 40)
+        ifs.append({"idx": i, "name": name, "descr": name, "alias": (uplinks or {}).get(i, ""), "type": 6,
+                    "admin": 2 if i in admin_off else 1, "oper": oper, "speed": speed, "in": o[0], "out": o[1], "bits": 64,
+                    "err": st["err"][name], "disc": 0})
+    return ifs
+
+
 def demo_raw(t, cfg):
-    """دستگاه سیسکوی ساختگی با ۲۴ پورت برای حالت Demo (مقدارها تصادفی ولی پیوسته)."""
+    """دستگاه ساختگی برای حالت Demo (مقدارها تصادفی ولی پیوسته): Cisco (پیش‌فرض)، Juniper، Extreme یا FortiGate
+    از روی «نوع دستگاه» یا نام هدف."""
+    ven = _demo_vendor(t, cfg)
+    if ven != "cisco":
+        return _demo_other(t, cfg, ven)
     st = _DEMO.setdefault(t["id"], {"t0": time.time() - 86400 * 12, "oct": {}, "err": {}})
     now = time.time()
     rnd = random.Random(int(now // 60) ^ int(t["id"]))  # nosec B311 — داده‌ی نمایشی
@@ -1559,12 +1661,70 @@ def demo_raw(t, cfg):
                     "objid": "1.3.6.1.4.1.9.1.2494", "uptime": int((now - st["t0"]) * 100), "contact": "noc@example.local",
                     "name": (t.get("name") or "switch").replace(" ", "-"), "location": "Demo rack"},
             "vendor": "cisco", "rtt": round(rnd.uniform(2, 15), 1), "errors": [],
-            "cpu": {"value": cpu, "items": [{"name": "Switch 1", "s5": cpu, "m1": cpu, "m5": cpu - 2}], "src": "CISCO-PROCESS-MIB"},
+            "cpu": {"value": cpu, "items": [{"name": "Switch 1", "s5": cpu, "m1": cpu, "m5": cpu - 2},
+                                            {"name": "Switch 2", "s5": round(cpu * 0.6), "m1": round(cpu * 0.6), "m5": round(cpu * 0.55)}],
+                    "src": "CISCO-PROCESS-MIB"},
             "mem": {"pct": 41.5, "used": 3.4e9, "total": 8.2e9, "items": [{"name": "Processor", "type": 2, "used": 3.4e9, "total": 8.2e9, "pct": 41.5},
                                                                      {"name": "lsmpi_io", "type": 3, "used": 6.2e6, "total": 6.3e6, "pct": 98.4}],
                     "src": "CISCO-ENHANCED-MEMPOOL-MIB"},
             "disks": [], "temps": [{"name": "Switch 1 - Inlet Temp Sensor", "value": round(rnd.uniform(30, 36), 0), "thr": 56, "state": "ok"},
                                    {"name": "Switch 1 - Hotspot Temp Sensor", "value": round(rnd.uniform(48, 55), 0), "thr": 125, "state": "ok"}],
-            "fans": [{"name": "Switch 1 - FAN - T1 1", "state": "ok"}, {"name": "Switch 1 - FAN - T1 2", "state": "ok"}],
-            "psus": [{"name": "Sw1, PS1 Normal, RPS NotExist", "state": "ok"}], "sensors": [], "ifs": ifs, "extra": {},
+            "fans": [{"name": "Switch 1 - FAN - T1 1", "state": "ok"}, {"name": "Switch 1 - FAN - T1 2", "state": "ok"},
+                     {"name": "Switch 2 - FAN - T1 1", "state": "ok"}, {"name": "Switch 2 - FAN - T1 2", "state": "ok"}],
+            "psus": [{"name": "Sw1, PS1 Normal, RPS NotExist", "state": "ok"}, {"name": "Sw2, PS1 Normal, RPS NotExist", "state": "ok"}], "sensors": [], "ifs": ifs, "extra": {},
             "oids": [{"oid": o["oid"], "raw": rnd.randint(0, 100) if o["type"] != "text" else "ok", "tn": "Gauge32"} for o in cfg["oids"]]}
+
+
+def _demo_other(t, cfg, ven):
+    st = _DEMO.setdefault(t["id"], {"t0": time.time() - 86400 * 37, "oct": {}, "err": {}})
+    now = time.time()
+    rnd = random.Random(int(now // 60) ^ int(t["id"]))  # nosec B311 — داده‌ی نمایشی
+    busy = 45 if "busy" in (t.get("name") or "").lower() else 0
+    nm = (t.get("name") or ven).replace(" ", "-")
+    up = int((now - st["t0"]) * 100)
+    base = {"rtt": round(rnd.uniform(2, 15), 1), "errors": [], "disks": [], "sensors": [], "extra": {}, "fans": [], "psus": [], "temps": [],
+            "oids": [{"oid": o["oid"], "raw": rnd.randint(0, 100) if o["type"] != "text" else "ok", "tn": "Gauge32"} for o in cfg["oids"]]}
+    if ven == "juniper":
+        ifs = _demo_ports(st, rnd, [f"ge-0/0/{i}" for i in range(24)] + [f"xe-0/1/{i}" for i in range(4)],
+                          up_down=(6, 18), admin_off=(20,), err=(11,), uplinks={25: "Core-Uplink-A", 26: "Core-Uplink-B"}, fast=(25, 26, 27, 28))
+        cpu = round(rnd.uniform(6, 22) + busy)
+        comps = [("Routing Engine 0", 2, 42, cpu), ("Routing Engine 1", 7, 39, 2), ("FPC: EX4300-48T @ 0/*/*", 2, 37, round(cpu * 0.8)),
+                 ("PIC: 48x 10/100/1000 Base-T @ 0/0/*", 2, 0, 0), ("PIC: 4x 10G SFP+ @ 0/1/*", 2, 0, 0),
+                 ("Fan Tray 0 Fan 0", 2, 0, 0), ("Fan Tray 0 Fan 1", 5, 0, 0), ("Power Supply 0", 2, 0, 0), ("Power Supply 1", 6, 0, 0)]
+        temps = [{"name": n, "value": tv + rnd.randint(-1, 2), "thr": None, "state": "ok"} for n, s_, tv, c in comps if tv]
+        return {**base, "sys": {"descr": "Juniper Networks, Inc. ex4300-48t Ethernet Switch, kernel JUNOS 21.4R3-S5 (Demo)",
+                                "objid": "1.3.6.1.4.1.2636.1.1.1.2.63", "uptime": up, "contact": "noc@example.local", "name": nm, "location": "Demo rack"},
+                "vendor": "juniper", "ifs": ifs, "temps": temps,
+                "cpu": {"value": cpu, "items": [{"name": "Routing Engine 0", "s5": None, "m1": cpu, "m5": None}], "src": "JUNIPER-MIB (jnxOperatingCPU)"},
+                "mem": {"pct": 54.0, "used": 1.1e9, "total": 2.0e9, "items": [{"name": "Routing Engine 0", "type": 2, "used": 1.1e9, "total": 2.0e9, "pct": 54.0}],
+                        "src": "JUNIPER-MIB (jnxOperatingBuffer)"},
+                "extra": {"components": [{"name": n, "state": JNX_STATE[s_], "level": JNX_LEVEL[s_], "temp": tv or None, "cpu": c}
+                                         for n, s_, tv, c in comps]}}
+    if ven == "extreme":
+        ifs = _demo_ports(st, rnd, [f"1:{i}" for i in range(1, 49)] + [f"1:{i}" for i in range(49, 53)],
+                          up_down=(9, 33, 40), admin_off=(41,), err=(22, 30), uplinks={49: "To-Core-1", 50: "To-Core-2"}, fast=(49, 50, 51, 52))
+        cpu = round(rnd.uniform(4, 18) + busy)
+        return {**base, "sys": {"descr": "ExtremeXOS (X465-48T) version 32.6.1.6 32.6.1.6 by release-manager (Demo)",
+                                "objid": "1.3.6.1.4.1.1916.2.411", "uptime": up, "contact": "noc@example.local", "name": nm, "location": "Demo rack"},
+                "vendor": "extreme", "ifs": ifs,
+                "cpu": {"value": cpu, "items": [], "src": "EXTREME-SOFTWARE-MONITOR-MIB"},
+                "mem": {"pct": 38.2, "used": 1.5e9, "total": 3.9e9, "items": [{"name": "Slot 1", "type": 2, "used": 1.5e9, "total": 3.9e9, "pct": 38.2}],
+                        "src": "EXTREME-SOFTWARE-MONITOR-MIB"},
+                "temps": [{"name": "System", "value": 38 + rnd.randint(0, 3), "thr": None, "state": "ok"}],
+                "fans": [{"name": f"Fan {i}", "state": "ok"} for i in range(1, 7)],
+                "psus": [{"name": "PSU 1", "state": "ok"}, {"name": "PSU 2", "state": "warn"}]}
+    # FortiGate
+    names = ["wan1", "wan2", "dmz", "internal1", "internal2", "internal3", "internal4", "port1", "port2", "port3", "port4", "x1", "x2", "ha"]
+    ifs = _demo_ports(st, rnd, names, up_down=(2, 10), admin_off=(11,), err=(7,), uplinks={1: "ISP-A", 12: "Core-Trunk"}, fast=(12, 13))
+    cpu = round(rnd.uniform(9, 30) + busy)
+    ses = int(42000 + 15000 * abs(((now / 3600) % 24) - 12) / 12 + rnd.randint(-900, 900))
+    return {**base, "sys": {"descr": "FortiGate-200F v7.4.4,build2662,240514 (GA.F) (Demo)", "objid": "1.3.6.1.4.1.12356.101.1.2006",
+                            "uptime": up, "contact": "noc@example.local", "name": nm, "location": "Demo rack"},
+            "vendor": "fortinet", "ifs": ifs,
+            "cpu": {"value": cpu, "items": [], "src": "FORTINET-FORTIGATE-MIB"},
+            "mem": {"pct": 47.0, "used": 3.7e9, "total": 7.9e9, "items": [], "src": "FORTINET-FORTIGATE-MIB"},
+            "disks": [{"name": "disk", "used": 9.1e10, "total": 2.4e11, "pct": 37.9}],
+            "sensors": [{"name": "PS1 Status", "value": "1", "state": "ok"}, {"name": "PS2 Status", "value": "0", "state": "crit"},
+                        {"name": "Fan 1", "value": "5400", "state": "ok"}, {"name": "Fan 2", "value": "5520", "state": "ok"},
+                        {"name": "CPU On-die Temperature", "value": str(52 + rnd.randint(0, 4)), "state": "ok"}],
+            "extra": {"sessions": ses, "version": "v7.4.4,build2662,240514 (GA.F)"}}

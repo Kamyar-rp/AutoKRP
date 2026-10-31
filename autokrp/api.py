@@ -2989,7 +2989,8 @@ class Api:
             t["can_edit"] = self._mon_admin() or (t["mine"] and self._mon_can_add())
         out = {"targets": ts, "icons": list(ICONS), "max": MAX_TARGETS, "cfg": self._mon_cfg(), "seq": self._mon.seq,
                "can_add": self._mon_can_add(), "admin": self._mon_admin(), "desktop": not paths.is_server(),
-               "policies": [{"id": p["id"], "name": p["name"]} for p in self._store.pol_list()]}
+               "policies": [{"id": p["id"], "name": p["name"]} for p in self._store.pol_list()],
+               "templates": self._tpl_brief(), "cfg_rev": self._mon.cfg_rev}
         if self._mon_admin():
             cap = self._mon.capacity()
             out["capacity"] = {k: cap[k] for k in ("targets", "per_min", "need_per_min", "late")}
@@ -3013,6 +3014,7 @@ class Api:
     def mon_save(self, target):
         from .monitor import MAX_TARGETS, MonitorError, clean_target
         t = target if isinstance(target, dict) else {}
+        old = None
         if t.get("id"):
             old = self._mon_get(t["id"], edit=True)
             owner = old.get("owner") or ""
@@ -3038,6 +3040,7 @@ class Api:
             if pid not in {p["id"] for p in self._store.pol_list()}:
                 raise ConnectorError("سیاست پایش پیدا نشد.")
             c["policy_id"] = pid
+        c["tpl"] = self._tpl_ok(t.get("tpl", (old or {}).get("tpl") if t.get("id") else ""))
         tid = self._store.mon_save(c)
         self._mon.state.pop(tid, None)
         self._mon.reload()
@@ -3088,25 +3091,36 @@ class Api:
         return {"count": len(done), "skipped": len(mine) - len(done)}
 
     @_safe
-    def mon_noc(self):
-        """نمای NOC (هر چند ثانیه): وضعیت فشرده‌ی همه‌ی هدف‌های قابل دیدن + رخدادهای اخیر.
+    def mon_noc(self, dash=None):
+        """نمای NOC (هر چند ثانیه): وضعیت فشرده‌ی هدف‌های قابل دیدن + رخدادهای اخیر.
+        1.35: dash = شناسه‌ی داشبورد (چیدمان، هدف‌ها، نمودارها)؛ ردیف‌های کامل جدول/کاشی هم برمی‌گردند.
         عمداً در POLL نیست: صفحه‌ی NOC باز = فعالیت (نشست مانیتور دیواری منقضی نشود)."""
         if "monitor" not in perms.enabled_features(self._settings):
             return {"targets": [], "alerts": [], "disabled": True}
+        from .monviews import in_scope
+        D = self._noc_dash(dash) if dash else None
         now = time.time()
         out = []
+        eff = self._mon.targets()
         for t in self._store.mon_targets():
-            if not self._mon_visible(t):
+            if not self._mon_visible(t) or (D and not in_scope(t, D)):
                 continue
             st = self._mon.state.get(t["id"]) or {}
             lv = self._mon.snmp.live.get(t["id"]) if t.get("kind") == "snmp" else None
             out.append({"id": t["id"], "name": t.get("name") or t["host"], "grp": t.get("grp") or "", "icon": t.get("icon"),
                         "status": (st.get("status") or "unknown") if t.get("enabled") else "paused", "since": st.get("since"),
                         "rtt": st.get("rtt"), "maint": st.get("maint") or "", "cause": st.get("cause") or "", "err": st.get("err") or "",
-                        "level": (lv or {}).get("level") or "", "alarms": [a.get("msg") for a in (lv or {}).get("alarms") or []][:3]})
+                        "level": (lv or {}).get("level") or "", "alarms": [a.get("msg") for a in (lv or {}).get("alarms") or []][:3],
+                        "kind": t.get("kind"), "host": t.get("host") or "", "url": t.get("url") or "", "port": t.get("port"),
+                        "tpl": ((eff.get(t["id"]) or {}).get("_tpl") or {}).get("card") or []})
         vis = {t["id"] for t in out}
         alerts = [a for a in list(self._mon.alerts) if a["target"] in vis][-30:]
-        return {"targets": out, "alerts": alerts[::-1], "now": now}
+        res = {"targets": out, "alerts": alerts[::-1], "now": now}
+        if D:
+            _, rows = self._mon.rows.changed(0, [t["id"] for t in out])
+            res["rows"], res["dash"] = rows, D
+            res["dash"]["charts"] = [c for c in D["charts"] if c["tid"] in vis]
+        return res
 
     # ---- رخدادهای دستگاه: Trap و Syslog (1.25)
     @_safe
@@ -3421,6 +3435,160 @@ class Api:
         self._store.pol_delete(pid)
         self._mon.reload()
         self._store.add_history("monitor", p["name"], "ok", "سیاست پایش حذف شد")
+        return {}
+
+    # ------------------------------------------------------------ 1.35: ردیف‌ها، قالب نمایش، پورت‌های نمایشی، داشبورد NOC
+    @_safe
+    def mon_rows(self, since=0):
+        """poll سبک صفحه‌ی مانیتورینگ: فقط ردیف‌های تغییرکرده از rev قبلی + فهرست شناسه‌ها (برای حذف‌شده‌ها)."""
+        vis = [t["id"] for t in self._store.mon_targets() if self._mon_visible(t)]
+        rev, rows = self._mon.rows.changed(since, vis)
+        return {"rev": rev, "cfg_rev": self._mon.cfg_rev, "ids": vis, "rows": rows}
+
+    def _tpl_brief(self):
+        from .monviews import BUILTIN_TPL
+        return ([{"id": k, "name": v["name"], "builtin": True} for k, v in BUILTIN_TPL.items()]
+                + [{"id": str(k), "name": v["name"], "builtin": False} for k, v in self._mon.templates().items()])
+
+    def _tpl_ok(self, tpl):
+        tpl = str(tpl or "")
+        if not tpl:
+            return ""
+        from .monviews import BUILTIN_TPL
+        if tpl in BUILTIN_TPL or (tpl.isdigit() and int(tpl) in self._mon.templates()):
+            return tpl
+        raise ConnectorError("قالب نمایش پیدا نشد.")
+
+    @_safe
+    def mon_tpl_list(self):
+        from .monviews import BLOCKS, BUILTIN_TPL, CARD_FIELDS, DEFAULT_BLOCKS, SUM_CHARTS, TABS
+        use = {}
+        for t in self._store.mon_targets():
+            if t.get("tpl"):
+                use[str(t["tpl"])] = use.get(str(t["tpl"]), 0) + 1
+        out = [{"id": k, "name": v["name"], "builtin": True, "vendor": v.get("vendor") or "",
+                "data": {**{x: v[x] for x in ("card", "tabs", "sum_charts", "ports")}, "blocks": list(v.get("blocks") or DEFAULT_BLOCKS)},
+                "used": use.get(k, 0)} for k, v in BUILTIN_TPL.items()]
+        out += [{"id": str(k), "name": v["name"], "builtin": False, "data": v["data"], "used": use.get(str(k), 0)}
+                for k, v in self._mon.templates().items()]
+        return {"templates": out, "can_edit": self._mon_admin(), "fields": list(CARD_FIELDS), "tabs": list(TABS),
+                "charts": list(SUM_CHARTS), "blocks": list(BLOCKS)}
+
+    @_safe
+    def mon_tpl_save(self, tpl):
+        from .monviews import TPL_MAX, ViewError, clean_tpl
+        if not self._mon_admin():
+            raise ConnectorError("قالب‌های نمایش را فقط ادمین تغییر می‌دهد.")
+        p = tpl if isinstance(tpl, dict) else {}
+        name = str(p.get("name") or "").strip()[:60]
+        if not name:
+            raise ConnectorError("نام قالب را وارد کنید.")
+        have = self._store.lay_list("tpl")
+        lid = int(p["id"]) if str(p.get("id") or "").isdigit() else None
+        if lid and lid not in {x["id"] for x in have}:
+            raise ConnectorError("قالب پیدا نشد.")
+        if not lid and len(have) >= TPL_MAX:
+            raise ConnectorError(f"حداکثر {TPL_MAX} قالب نمایش.")
+        try:
+            data = clean_tpl(p.get("data"))
+        except ViewError as e:
+            raise ConnectorError(str(e))
+        lid = self._store.lay_save(lid, "tpl", name, data)
+        self._mon.reload()
+        self._store.add_history("monitor", name, "ok", "قالب نمایش ذخیره شد")
+        return {"id": str(lid)}
+
+    @_safe
+    def mon_tpl_delete(self, lid):
+        if not self._mon_admin():
+            raise ConnectorError("قالب‌های نمایش را فقط ادمین تغییر می‌دهد.")
+        lid = int(lid)
+        x = next((x for x in self._store.lay_list("tpl") if x["id"] == lid), None)
+        if not x:
+            raise ConnectorError("قالب پیدا نشد.")
+        self._store.lay_delete(lid, "tpl")          # هدف‌هایش «خودکار» می‌شوند
+        self._mon.reload()
+        self._store.add_history("monitor", x["name"], "ok", "قالب نمایش حذف شد")
+        return {}
+
+    @_safe
+    def mon_tpl_set(self, ids, tpl):
+        """قالب نمایش چند هدف (حالت ویرایش جدول). فقط هدف‌هایی که کاربر اجازه‌ی ویرایششان را دارد."""
+        tpl = self._tpl_ok(tpl)
+        ok = []
+        for i in [int(x) for x in (ids or [])][:2000]:
+            self._mon_get(i, edit=True)
+            ok.append(i)
+        self._store.mon_set_tpl(ok, tpl)
+        self._mon.reload()
+        return {"n": len(ok)}
+
+    @_safe
+    def mon_show_ports(self, tid, names):
+        """پورت‌های نمایشی یک هدف SNMP (ترافیک در جدول، کارت و NOC؛ حداکثر ۴)؛ خالی = خودکار."""
+        from .snmp import load_cfg
+        t = self._mon_get(tid, edit=True)
+        if t.get("kind") != "snmp":
+            raise ConnectorError("فقط برای هدف SNMP.")
+        cfg = load_cfg(t)
+        cfg["show_ports"] = [str(x).strip()[:80] for x in (names or [])[:4] if str(x).strip()]
+        t["snmp"] = json.dumps(cfg, ensure_ascii=False)
+        self._store.mon_save(t)
+        self._mon.reload()
+        return {"show_ports": cfg["show_ports"]}
+
+    def _noc_dash(self, did):
+        from .monviews import ViewError, clean_noc
+        x = next((x for x in self._store.lay_list("noc") if x["id"] == int(did)), None)
+        if not x:
+            raise ConnectorError("داشبورد پیدا نشد.")
+        try:
+            return {"id": x["id"], "name": x["name"], **clean_noc(x["data"])}
+        except ViewError:
+            return {"id": x["id"], "name": x["name"], **clean_noc({})}
+
+    @_safe
+    def mon_noc_list(self):
+        from .monviews import clean_noc
+        out = []
+        for x in self._store.lay_list("noc"):
+            try:
+                d = clean_noc(x["data"])
+            except Exception:  # noqa
+                d = clean_noc({})
+            out.append({"id": x["id"], "name": x["name"], "data": d})
+        return {"dashboards": out, "can_edit": self._mon_admin()}
+
+    @_safe
+    def mon_noc_save(self, dash):
+        from .monviews import NOC_MAX, ViewError, clean_noc
+        if not self._mon_admin():
+            raise ConnectorError("داشبوردهای NOC را فقط ادمین تغییر می‌دهد.")
+        p = dash if isinstance(dash, dict) else {}
+        name = str(p.get("name") or "").strip()[:60]
+        if not name:
+            raise ConnectorError("نام داشبورد را وارد کنید.")
+        have = self._store.lay_list("noc")
+        lid = int(p["id"]) if str(p.get("id") or "").isdigit() else None
+        if lid and lid not in {x["id"] for x in have}:
+            raise ConnectorError("داشبورد پیدا نشد.")
+        if not lid and len(have) >= NOC_MAX:
+            raise ConnectorError(f"حداکثر {NOC_MAX} داشبورد NOC.")
+        try:
+            data = clean_noc(p.get("data"))
+        except ViewError as e:
+            raise ConnectorError(str(e))
+        lid = self._store.lay_save(lid, "noc", name, data)
+        self._store.add_history("monitor", name, "ok", "داشبورد NOC ذخیره شد")
+        return {"id": lid}
+
+    @_safe
+    def mon_noc_delete(self, lid):
+        if not self._mon_admin():
+            raise ConnectorError("داشبوردهای NOC را فقط ادمین تغییر می‌دهد.")
+        d = self._noc_dash(lid)
+        self._store.lay_delete(int(lid), "noc")
+        self._store.add_history("monitor", d["name"], "ok", "داشبورد NOC حذف شد")
         return {}
 
     @_safe
@@ -4924,6 +5092,12 @@ class Api:
             if value is not None and (not isinstance(value, list) or len(value) > 60
                                       or not all(isinstance(x, str) and len(x) <= 40 for x in value)):
                 raise ConnectorError("مقدار نامعتبر است.")
+        elif key == "mon_views":          # 1.35: نماهای ذخیره‌شده‌ی صفحه‌ی مانیتورینگ (برای هر کاربر)
+            from .monviews import ViewError, clean_views
+            try:
+                value = clean_views(value)
+            except ViewError as e:
+                raise ConnectorError(str(e))
         else:
             raise ConnectorError("کلید نامعتبر است.")
         u = self._current_user()

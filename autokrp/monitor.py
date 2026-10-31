@@ -369,6 +369,11 @@ class Monitor:
         self.snmp = SnmpRuntime(settings, store, demo)
         self.ts = self.snmp.ts              # 1.34: سری زمانی (فایل محلی یا MySQL)
         self._policies = None
+        self._tpls = None
+        self.cfg_rev = 1                    # 1.35: با هر تغییر هدف/سیاست/قالب؛ رابط فهرست کامل را دوباره می‌گیرد
+        self._spark = {}                    # tid → (دقیقه، تعداد، نمودار ۲۴ ساعته)
+        from .monviews import Rows
+        self.rows = Rows(self)
         self._done = deque(maxlen=20000)    # زمان پایان بررسی‌ها (ظرفیت: بررسی در دقیقه)
         self._cfg_at = 0
         self._ts_sig = None
@@ -424,6 +429,8 @@ class Monitor:
     def reload(self):
         self._targets = None
         self._policies = None
+        self._tpls = None
+        self.cfg_rev += 1
         self._maint = None
         if hasattr(self, "events"):
             self.events.invalidate()
@@ -475,10 +482,34 @@ class Monitor:
             self._policies = out
         return self._policies
 
+    def templates(self):
+        """قالب‌های نمایش سفارشی (1.35): {id: {name, data}}."""
+        if self._tpls is None:
+            from .monviews import ViewError, clean_tpl
+            out = {}
+            for x in self.store.lay_list("tpl"):
+                try:
+                    out[x["id"]] = {"name": x["name"], "data": clean_tpl(x["data"])}
+                except ViewError:
+                    continue
+            self._tpls = out
+        return self._tpls
+
     def targets(self):
         if self._targets is None:
-            pols = self.policies()
-            self._targets = {t["id"]: effective(t, pols.get(t.get("policy_id"))) for t in self.store.mon_targets()}
+            from .monviews import resolve_tpl
+            pols, tpls = self.policies(), self.templates()
+            out = {}
+            for t in self.store.mon_targets():
+                e = effective(t, pols.get(t.get("policy_id")))
+                ven = (e.get("_cfg") or {}).get("vendor")
+                if not ven or ven == "auto":
+                    ven = self.snmp.vendors.get(t["id"])
+                e["_tpl"] = resolve_tpl(e, tpls, ven)
+                if e.get("_cfg") is not None:
+                    e["_cfg"]["_tpl_ports"] = e["_tpl"]["ports"]
+                out[t["id"]] = e
+            self._targets = out
         return self._targets
 
     def keep_for(self, t):
@@ -509,8 +540,8 @@ class Monitor:
         return nxt
 
     def _first(self, t, now):
-        """اولین بررسی پس از شروع/ذخیره: پخش در حداکثر ۳۰ ثانیه."""
-        return now + self._phase(t, min(self._iv(t), 30))
+        """اولین بررسی پس از شروع/ذخیره: پخش در حداکثر ۱۰ ثانیه (بعد هر هدف در فاز خودش)."""
+        return now + self._phase(t, min(self._iv(t), 10))
 
     def _active(self):
         v = self.settings.vault
@@ -521,6 +552,9 @@ class Monitor:
     def _loop(self):
         while not self._stop.wait(1.0):
             try:
+                if self.snmp.vendor_new:            # 1.36: سازنده‌ی تازه تشخیص داده شد ← قالب خودکار (یک بار برای همه)
+                    self.snmp.vendor_new = False
+                    self.reload()
                 if time.time() - self._cfg_at > 10:
                     self._cfg_at = time.time()
                     self._sync_cfg()
@@ -1010,18 +1044,26 @@ class Monitor:
         st = self.state.get(t["id"]) or {}
         status = st.get("status", "unknown") if t.get("enabled") else "paused"
         dq = self.minutes.get(t["id"]) or ()
-        # نمودار کوچک: ۴۸ خانه‌ی نیم‌ساعته در ۲۴ ساعت گذشته (درصد در دسترس بودن)
+        # نمودار کوچک: ۴۸ خانه‌ی نیم‌ساعته در ۲۴ ساعت گذشته (درصد در دسترس بودن)؛ 1.35: کش تا دقیقه‌ی بعد
         now = time.time()
-        start = int((now - 86400) // 1800) * 1800
-        bins = [[0, 0] for _ in range(49)]
-        for m, n, ok, *_ in dq:
-            i = int((m - start) // 1800)
-            if 0 <= i < len(bins):
-                bins[i][0] += n
-                bins[i][1] += ok
-        out = {k: v for k, v in t.items() if k != "snmp"}
+        key = (int(now // 60), len(dq), dq[-1][0] if dq else 0, dq[-1][1] if dq else 0)
+        c = self._spark.get(t["id"])
+        if c and c[0] == key:
+            bins = c[1]
+        else:
+            start = int((now - 86400) // 1800) * 1800
+            bins = [[0, 0] for _ in range(49)]
+            for m, n, ok, *_ in list(dq):
+                i = int((m - start) // 1800)
+                if 0 <= i < len(bins):
+                    bins[i][0] += n
+                    bins[i][1] += ok
+            self._spark[t["id"]] = (key, bins)
+        out = {k: v for k, v in t.items() if k != "snmp" and not k.startswith("_")}
         e = self.targets().get(t["id"]) or effective(t, None)
         out["eff_interval"], out["policy"] = e.get("interval"), e.get("_policy") or ""
+        tp = e.get("_tpl") or {}
+        out["tpl_eff"] = {k: tp.get(k) for k in ("id", "name", "auto", "card", "tabs", "sum_charts", "ports", "blocks", "vendor")} if tp else None
         if t.get("kind") == "snmp":
             from .snmp import load_cfg
             out["snmp_sum"] = self.snmp.summary(t["id"])

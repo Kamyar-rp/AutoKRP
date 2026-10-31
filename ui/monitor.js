@@ -172,7 +172,8 @@ function loadMon() {
         if (!r.ok) { toast(r.error, "error"); return; }
         monLoadedAt = Date.now();
         Object.assign(MON, { targets: r.targets, cfg: r.cfg, canAdd: r.can_add, admin: r.admin, desktop: r.desktop, max: r.max,
-          policies: r.policies || [], capacity: r.capacity || null });
+          policies: r.policies || [], capacity: r.capacity || null, templates: r.templates || [], cfgRev: r.cfg_rev });
+        await mvFirstRows();          // 1.35: وضعیت زنده‌ی فشرده (بعد فقط تغییرات)
         if ((MON.tab || "targets") === "targets") renderMon(); else if (!$("#monTabs")) monTabsRender();
       } while (monLoadAgain);
     } finally { monLoading = null; }
@@ -196,52 +197,44 @@ function monTabsRender() {
   monTabsBind();
   if (tab === "events") monEventsRender($("#monSub")); else topoRender($("#monSub"));
 }
-function renderMon() {
+function monChips() {
+  const el = $("#monChips"); if (!el) return;
   const ts = MON.targets, cnt = (s) => ts.filter((t) => t.status === s).length;
+  const al = ts.filter((t) => t.status === "up" && MV.rows[t.id] && (MV.rows[t.id].lvl === "crit" || MV.rows[t.id].lvl === "warn")).length;
+  el.innerHTML = `<span class="mon-chip"><b>${num(ts.length)}</b> هدف</span><span class="mon-chip ok"><b>${num(cnt("up"))}</b> وصل</span>
+      <span class="mon-chip err"><b>${num(cnt("down"))}</b> قطع</span><span class="mon-chip warn"><b>${num(cnt("slow"))}</b> کند</span>
+      ${al ? `<span class="mon-chip warn"><b>${num(al)}</b> هشدار SNMP</span>` : ""}
+      ${cnt("unreachable") ? `<span class="mon-chip unr"><b>${num(cnt("unreachable"))}</b> در دسترس نیست (به‌خاطر قطع پدر)</span>` : ""}
+      ${ts.some((t) => t.maint) ? `<span class="mon-chip mnt"><b>${num(ts.filter((t) => t.maint).length)}</b> در نگهداری</span>` : ""}
+      <span class="mon-chip"><b>${num(cnt("paused") + cnt("unknown"))}</b> متوقف یا در حال بررسی</span>`;
+}
+function monBannerCap() { const el = $("#monCapB"); if (el) el.innerHTML = monCapBanner(); }
+function renderMon() {
   $("#monActions").innerHTML = `${MON.canAdd ? `<button class="btn primary" id="monAdd">+ هدف تازه</button><button class="btn" id="monSnmpP">اعتبارنامه‌های SNMP</button>` : ""}
-    <button class="btn" id="monMaint">پنجره‌های نگهداری</button>${MON.admin ? `<button class="btn" id="monPol" title="بازه، دقت داده، نگهداری و این‌که چه داده‌ای جمع شود">سیاست‌های پایش</button>` : ""}<button class="btn" id="monNoc" title="نمای تمام‌صفحه برای مانیتور دیواری">نمای NOC</button>
+    <button class="btn" id="monMaint">پنجره‌های نگهداری</button>${MON.admin ? `<button class="btn" id="monPol" title="بازه، دقت داده، نگهداری و این‌که چه داده‌ای جمع شود">سیاست‌های پایش</button>` : ""}<button class="btn" id="monNoc" title="نمای تمام‌صفحه برای مانیتور دیواری">نمای NOC</button>${MON.admin ? `<button class="btn" id="monNocD" title="داشبوردهای نام‌دار برای مانیتور دیواری: هدف‌ها، چیدمان، نمودار uplink و چرخش خودکار">داشبوردهای NOC</button>` : ""}
     <button class="btn ghost" id="monMute">${MON.muted ? "صدا: خاموش" : "صدا: روشن"}</button>
     <button class="btn ghost" id="monTest" title="پخش صدای قطعی برای امتحان">امتحان صدا</button>
     ${WEB && "Notification" in window && Notification.permission === "default" ? `<button class="btn ghost" id="monNotif">اعلان مرورگر</button>` : ""}
     ${MON.desktop && MON.admin ? `<button class="btn danger-ghost" id="monQuit" title="بستن کامل برنامه؛ با بستن پنجره، برنامه برای مانیتورینگ در پس‌زمینه می‌ماند">خروج کامل</button>` : ""}`;
-  const groups = {};
-  ts.forEach((t) => (groups[t.grp || ""] = groups[t.grp || ""] || []).push(t));
-  const order = Object.keys(groups).sort((a, b) => (a === "") - (b === "") || a.localeCompare(b, "fa"));
-  const now = Date.now() / 1000;
-  $("#monBody").innerHTML = monTabsHtml() + `<div class="mon-sum">
-      <span class="mon-chip"><b>${num(ts.length)}</b> هدف</span><span class="mon-chip ok"><b>${num(cnt("up"))}</b> وصل</span>
-      <span class="mon-chip err"><b>${num(cnt("down"))}</b> قطع</span><span class="mon-chip warn"><b>${num(cnt("slow"))}</b> کند</span>
-      ${cnt("unreachable") ? `<span class="mon-chip unr"><b>${num(cnt("unreachable"))}</b> در دسترس نیست (به‌خاطر قطع پدر)</span>` : ""}
-      ${ts.some((t) => t.maint) ? `<span class="mon-chip mnt"><b>${num(ts.filter((t) => t.maint).length)}</b> در نگهداری</span>` : ""}
-      <span class="mon-chip"><b>${num(cnt("paused") + cnt("unknown"))}</b> متوقف یا در حال بررسی</span></div>${monCapBanner()}
-    ${ts.length ? order.map((g) => `<div class="mon-group"><h3>${esc(g || "بدون گروه")}</h3><div class="mon-grid">${groups[g].map((t) => {
-      const st = MON_ST[t.status] || MON_ST.unknown;
-      const lv = t.snmp_sum && t.status !== "down" && t.status !== "paused" ? t.snmp_sum.level : "";
-      const why = t.status === "unreachable" && t.cause ? `به‌خاطر قطع «${t.cause}»` : "";
-      return `<div class="mon-card st-${t.status}${t.maint ? " maint" : ""}${lv && lv !== "ok" ? " lv-" + lv : ""}" data-mid="${t.id}" title="${esc([why, t.err, t.maint ? "پنجره‌ی نگهداری: " + t.maint : ""].filter(Boolean).join(" — "))}">
-        <div class="mon-ic">${monIcon(t.icon)}<span class="mon-dot"></span></div>
-        <div class="mon-main"><b class="bidi">${esc(t.name)}</b><span class="ltr muted">${esc(monWhere(t))}</span>${monCertTag(t)}
-          <span class="mon-meta"><span class="tag ${st[0]}">${st[1]}</span>${t.rtt != null && t.status !== "down" && t.status !== "paused" ? `<span class="ltr">${num(t.rtt)} ms</span>` : ""}
-          ${t.since && t.status !== "unknown" ? `<span class="muted">${monDur(now - t.since)}</span>` : ""}${t.owner ? `<span class="tag mute" title="فقط شما و ادمین می‌بینید">شخصی</span>` : ""}${t.maint ? `<span class="tag mnt" title="${esc(t.maint)}">نگهداری</span>` : ""}${why ? `<span class="muted bidi">${esc(why)}</span>` : ""}${t.kind === "snmp" && t.status !== "paused" ? snCardLine(t) : ""}</span></div>
-        <div class="mon-spark" title="۲۴ ساعت گذشته">${t.spark.map((v) => `<i class="${v == null ? "n" : v >= 99.9 ? "g" : v >= 90 ? "y" : "r"}"></i>`).join("")}</div>
-      </div>`; }).join("")}</div></div>`).join("")
-      : `<div class="panel"><div class="empty">هنوز هدفی برای مانیتورینگ نیست. «+ هدف تازه» را بزنید و IP سرور، روتر یا یک آدرس اینترنتی (مثلاً 8.8.8.8) اضافه کنید.</div></div>`}`;
+  $("#monBody").innerHTML = monTabsHtml() + `<div class="mon-sum" id="monChips"></div><div id="monCapB"></div>
+    <div id="mvWrap"><div id="mvBar"></div><div id="mvEdit"></div><div id="mvBody"></div><div id="mvPager"></div></div>`;
+  monChips(); monBannerCap(); mvRenderAll();
   if ($("#monAdd")) $("#monAdd").onclick = () => monEdit();
   if ($("#monSnmpP")) $("#monSnmpP").onclick = () => snmpProfiles();
   $("#monMaint").onclick = () => monMaintList();
   if ($("#monPol")) $("#monPol").onclick = () => monPolicies();
   $("#monNoc").onclick = () => nocOpen();
+  if ($("#monNocD")) $("#monNocD").onclick = () => nocDashboards();
   $("#monMute").onclick = () => monSetMute(!MON.muted);
   $("#monTest").onclick = () => { const m = MON.muted; MON.muted = false; monPlay("down", 1).finally(() => (MON.muted = m)); };
   if ($("#monNotif")) $("#monNotif").onclick = async () => { await Notification.requestPermission(); renderMon(); };
   if ($("#monQuit")) $("#monQuit").onclick = async () => {
     if (await confirm2({ title: "خروج کامل", body: "<p>برنامه کامل بسته می‌شود و مانیتورینگ تا اجرای دوباره متوقف می‌ماند.</p>", confirm: "خروج", danger: true })) api("app_quit");
   };
-  $$("[data-mid]").forEach((c) => (c.onclick = () => monDetail(Number(c.dataset.mid))));
   monTabsBind();
 }
-// پنجره‌ی پنهان یا تازه بارشده (کمتر از ۴ ثانیه پیش) نه
-setInterval(() => { if (S.page === "monitor" && !modalClose && !document.hidden && Date.now() - monLoadedAt > 4000) loadMon(); }, 5000);
+// 1.35: هر ۵ ثانیه فقط تغییرات (mon_rows)؛ فهرست کامل فقط وقتی هدف/سیاست/قالب عوض شده است. پنجره‌ی پنهان یا تازه بارشده نه
+setInterval(() => { if (S.page === "monitor" && Date.now() - monLoadedAt > 4000) mvTick(); }, 5000);
 
 async function monDetail(id) {
   const t = MON.targets.find((x) => x.id === id); if (!t) return;
@@ -655,7 +648,7 @@ async function monCapacityBox(el) {
     lines.push(`کارگرهای SNMP: ${num(w.n)} — خوانده‌شده ${num(w.done)}، اجراشده درون برنامه ${num(w.fallback)}، اجرای دوباره ${num(w.restarts)}، بازیافت ${num(w.recycled)}، timeout ${num(w.timeouts)}.`);
     if (w.degraded) lines.push(w.degraded);
   } else lines.push("کارگرهای SNMP: خاموش (هدف SNMP فعالی نیست یا تنظیم ۰ است؛ خواندن درون خود برنامه).");
-  lines.push(ts.target === "mysql" ? "محل ذخیره‌ی نمودارها: MySQL" : "محل ذخیره‌ی نمودارها: فایل‌های محلی");
+  lines.push(ts.target === "mysql" ? "محل ذخیره‌ی نمودارها و Trap/Syslog: MySQL" : "محل ذخیره‌ی نمودارها و Trap/Syslog: فایل‌های محلی");
   if (my) {
     if (my.error) lines.push(`خطای MySQL: ${my.error}`);
     lines.push(`MySQL: در صف ${num(my.queue)}، نوشته‌شده ${num(my.written)}، موقتاً در فایل ${num(my.spilled)}، پارتیشن‌بندی ${my.partitioned && my.partitioned.akrp_ts_d ? "دارد (پاک کردن سریع)" : "ندارد (پاک کردن با DELETE)"}.`);

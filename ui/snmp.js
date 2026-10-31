@@ -321,14 +321,18 @@ function snCardLine(t) {
 
 /* ---------------------------------------------------------------- جزئیات زنده */
 async function snmpDetail(t) {
-  const D = { t, live: null, tab: "sum", port: null, filter: "", pf: "all", timer: null };
+  // 1.35: ترتیب و نمایش بخش‌ها از «قالب نمایش» دستگاه
+  const TABS = { sum: "خلاصه", ports: "پورت‌ها", hw: "سخت‌افزار", oids: "OIDها و وضعیت‌ها", charts: "نمودارها" };
+  const tabs = ((t.tpl_eff && t.tpl_eff.tabs) || []).filter((k) => TABS[k]);
+  if (!tabs.length) tabs.push("sum", "ports", "hw", "oids", "charts");
+  const D = { t, live: null, tab: tabs[0], port: null, filter: "", pf: "all", timer: null };
   const st = MON_ST[t.status] || MON_ST.unknown;
   const done = openModal({ title: t.name, wide: true,
     body: `<div class="mon-dhead">${monIcon(t.icon, "big")}<div style="flex:1"><div class="ltr">${esc(t.host)}:${esc(String(t.port || 161))} (SNMP)</div>
         <div class="row" style="gap:8px;margin-top:4px;flex-wrap:wrap"><span class="tag ${st[0]}">${st[1]}</span><span id="snHead" class="row" style="gap:8px;flex-wrap:wrap"></span></div>
         ${t.err ? `<div class="muted" style="color:var(--err)">${esc(t.err)}</div>` : ""}</div></div>
-      <div class="tabs" id="snTabs" style="margin-top:10px">${[["sum", "خلاصه"], ["ports", "پورت‌ها"], ["hw", "سخت‌افزار"], ["oids", "OIDها و وضعیت‌ها"], ["charts", "نمودارها"]]
-        .map(([k, n]) => `<button data-t="${k}" class="${k === "sum" ? "on" : ""}">${n}</button>`).join("")}</div>
+      <div class="tabs" id="snTabs" style="margin-top:10px">${tabs
+        .map((k) => `<button data-t="${k}" class="${k === D.tab ? "on" : ""}">${TABS[k]}</button>`).join("")}</div>
       <div id="snBody" style="margin-top:12px"><div class="empty">در حال خواندن…</div></div>`,
     foot: `${t.can_edit ? `<button class="btn danger-ghost" data-a="del">حذف</button><button class="btn" data-a="toggle">${t.enabled ? "توقف بررسی" : "ادامه‌ی بررسی"}</button><button class="btn" data-a="edit">ویرایش</button>` : ""}
       <button class="btn" data-a="now">بررسی همین حالا</button><button class="btn ghost" data-a="close">بستن</button>`,
@@ -378,25 +382,111 @@ function snRender(D) {
   if (D.tab === "oids") return snOids(D, b, L);
   return snCharts(D, b);
 }
-function snSum(D, b, L) {
-  const ifs = L.ifs || [];
-  const ex = L.extra || {};
-  b.innerHTML = `<div class="kpis">
+/* 1.36: بخش «خلاصه» از بلوک‌های قالب نمایش (به همان ترتیب). همه فقط داده‌ای که همین حالا خوانده می‌شود. */
+const SN_BLOCKS = { kpi: "شاخص‌ها", health: "سلامت سخت‌افزار", modules: "ماژول‌ها و پردازنده‌ها", top_ports: "پرترافیک‌ترین پورت‌ها",
+  err_ports: "پورت‌های دارای خطا", alarms: "هشدارها", info: "مشخصات دستگاه" };
+const SN_JNX = { running: "در حال کار", ready: "آماده", standby: "پشتیبان (Standby)", runningAtFullSpeed: "با حداکثر سرعت", reset: "در حال ری‌استارت",
+  down: "خاموش / نیست", unknown: "نامعلوم" };
+function snNameCls(n) { return /^[\x00-\x7F]*$/.test(String(n || "")) ? "ltr" : "bidi"; }   // نام فنی لاتین: ارقام لاتین بمانند
+function snLvShort(lv) { return lv === "crit" ? "err" : lv === "warn" ? "warn" : lv === "ok" ? "ok" : "mute"; }
+function snBlkKpi(L) {
+  const ifs = L.ifs || [], ex = L.extra || {};
+  const up = L.uptime_s, fresh = up !== null && up !== undefined && up < 86400;
+  const st = (L.sensors || []).filter((x) => /temp/i.test(x.name || "") && !isNaN(Number(x.value)) && x.value !== "").map((x) => Number(x.value));
+  const tmax = L.temp_max !== null && L.temp_max !== undefined ? L.temp_max : st.length ? Math.max(...st) : null;
+  return `<div class="kpis">
       <div class="kpi"><b>${L.cpu ? snPct(L.cpu.value) : "—"}</b><span>CPU</span></div>
       <div class="kpi"><b>${L.mem ? snPct(L.mem.pct) : "—"}</b><span>حافظه${L.mem && L.mem.total ? ` (${esc(fmtBytes(L.mem.used))} / ${esc(fmtBytes(L.mem.total))})` : ""}</span></div>
-      <div class="kpi"><b>${L.temp_max === null || L.temp_max === undefined ? "—" : num(L.temp_max) + "°C"}</b><span>بیشترین دما</span></div>
+      <div class="kpi"><b>${tmax === null ? "—" : num(tmax) + "°C"}</b><span>بیشترین دما</span></div>
       ${L.disk_max !== null && L.disk_max !== undefined ? `<div class="kpi"><b>${snPct(L.disk_max)}</b><span>بیشترین مصرف دیسک</span></div>` : ""}
       <div class="kpi"><b>${num(ifs.filter((x) => x.oper === 1).length)} / ${num(L.if_count || ifs.length)}</b><span>پورت وصل</span></div>
       ${ex.sessions !== undefined ? `<div class="kpi"><b>${num(ex.sessions)}</b><span>نشست‌های فعال</span></div>` : ""}
-      ${ex.load1 !== undefined ? `<div class="kpi"><b>${num(ex.load1)}</b><span>Load (۱ دقیقه)</span></div>` : ""}</div>
-    <h3 style="margin:4px 0 6px">هشدارها</h3>
-    ${L.alarms.length ? `<div class="table-wrap inner"><table class="grid"><thead><tr><th>سطح</th><th>مورد</th><th>از</th></tr></thead><tbody>
+      ${ex.load1 !== undefined ? `<div class="kpi"><b>${num(ex.load1)}</b><span>Load (۱ دقیقه)</span></div>` : ""}
+      <div class="kpi ${fresh ? "kpi-warn" : ""}"><b>${up === null || up === undefined ? "—" : esc(snUp(up))}</b><span>${fresh ? "ری‌استارت در ۲۴ ساعت گذشته" : "Uptime"}</span></div></div>`;
+}
+function snBlkHealth(L) {
+  // سنسورهای عمومی (مثل FortiGate) از روی نامشان در دسته‌ی فن/منبع تغذیه/دما نمایش داده می‌شوند (فقط نمایش)
+  const sens = { fans: [], psus: [], temps: [], sensors: [] };
+  ((L.extra || {}).components || []).forEach((c) => {          // Juniper: فن و منبع تغذیه از جدول قطعه‌ها
+    const n = String(c.name || ""), k = /\bfan/i.test(n) ? "fans" : /power supply|\bpsu|\bpem\b/i.test(n) ? "psus" : "";
+    if (k && c.level !== "down" && c.level !== "unknown") sens[k].push({ name: n, state: c.level === "warn" ? "warn" : "ok", value: SN_JNX[c.state] || c.state });
+  });
+  (L.sensors || []).forEach((x) => {
+    const n = String(x.name || "");
+    const k = /\bfan/i.test(n) ? "fans" : /\b(ps\d|psu|power)/i.test(n) ? "psus" : /temp/i.test(n) ? "temps" : "sensors";
+    sens[k].push(k === "temps" && !isNaN(Number(x.value)) ? { ...x, value: Number(x.value) } : x);
+  });
+  const cats = [["temps", "دما"], ["fans", "فن"], ["psus", "منبع تغذیه"], ["sensors", "سنسورها"]]
+    .map(([k, n]) => [n, [...(k === "sensors" ? [] : L[k] || []), ...sens[k]]]).filter(([, a]) => a.length);
+  if (!cats.length) return `<div class="empty">دستگاه اطلاعات سلامت سخت‌افزار برنگرداند.</div>`;
+  return `<div class="sn-health">${cats.map(([n, a]) => {
+    const bad = a.filter((x) => x.state === "warn" || x.state === "crit"), crit = a.some((x) => x.state === "crit");
+    const lv = crit ? "err" : bad.length ? "warn" : "ok";
+    const extra = n === "دما" ? `<span class="muted ltr">${num(Math.max(...a.map((x) => x.value || 0)))}°C</span>` : "";
+    return `<div class="sn-hcard ${lv}"><div class="sn-hhead"><span class="sn-hdot"></span><b>${esc(n)}</b>${extra}</div>
+      <div class="sn-hnum">${num(a.length - bad.length)} / ${num(a.length)} <span>${bad.length ? (crit ? "خراب" : "هشدار") : "سالم"}</span></div>
+      ${bad.length ? `<div class="sn-hbad">${bad.slice(0, 4).map((x) => `<div class="${snNameCls(x.name)}">${esc(x.name)}${x.value !== undefined && x.value !== null && x.value !== "" ? ` <span class="ltr muted">${esc(String(x.value))}</span>` : ""}</div>`).join("")}</div>` : ""}</div>`;
+  }).join("")}</div>`;
+}
+function snBlkModules(L) {
+  const ex = L.extra || {};
+  const bar = (v) => v === null || v === undefined ? `<span class="muted">—</span>` : mvBar(v);
+  const cpus = (L.cpu && L.cpu.items) || [], mems = ((L.mem && L.mem.items) || []).filter((x) => x.type === 2 || (L.mem.items || []).length <= 3);
+  const comps = ex.components || [];
+  let html = "";
+  if (cpus.length) html += `<div class="sn-mods">${cpus.slice(0, 16).map((c) => `<div class="sn-mod"><span class="${snNameCls(c.name)}">${esc(c.name)}</span>${bar(c.m1 ?? c.m5 ?? c.s5)}</div>`).join("")}</div>`;
+  if (mems.length) html += `<div class="sn-mods">${mems.slice(0, 8).map((c) => `<div class="sn-mod"><span><span class="${snNameCls(c.name)}">${esc(c.name)}</span> <span class="muted">(${esc(I18N.t("حافظه"))})</span></span>${mvBar(c.pct, 85, 95)}</div>`).join("")}</div>`;
+  if (comps.length) html += `<div class="table-wrap inner" style="margin-top:8px"><table class="grid"><thead><tr><th>قطعه</th><th>وضعیت</th><th>دما</th><th>CPU</th></tr></thead><tbody>
+    ${comps.map((c) => `<tr><td class="${snNameCls(c.name)}">${esc(c.name)}</td><td><span class="tag ${{ ok: "ok", warn: "warn", down: "mute" }[c.level] || "mute"}">${esc(SN_JNX[c.state] || c.state)}</span></td>
+      <td class="ltr">${c.temp ? num(c.temp) + "°C" : "—"}</td><td>${c.cpu ? mvBar(c.cpu) : `<span class="muted">—</span>`}</td></tr>`).join("")}</tbody></table></div>`;
+  return html || `<div class="empty">اطلاعات ماژول یا پردازنده‌ی جدا برنگشت.</div>`;
+}
+function snBlkTop(L) {
+  const ifs = (L.ifs || []).filter((x) => x.oper === 1 && x.in_bps !== null && x.in_bps !== undefined && x.type !== 24);
+  const top = ifs.sort((a, b) => Math.max(b.in_bps, b.out_bps || 0) - Math.max(a.in_bps, a.out_bps || 0)).slice(0, 6);
+  if (!top.length) return `<div class="empty">ترافیک پورت‌ها هنوز حساب نشده (بعد از دو بار خواندن).</div>`;
+  const mx = Math.max(1, ...top.map((x) => Math.max(x.in_bps || 0, x.out_bps || 0)));
+  return `<div class="sn-top">${top.map((x) => `<div class="sn-trow"><span class="ltr sn-tn">${esc(x.name)}</span><span class="${snNameCls(x.alias)} muted sn-ta">${esc(x.alias || "")}</span>
+    <span class="sn-tbars"><i class="in" style="width:${(100 * (x.in_bps || 0) / mx).toFixed(1)}%"></i><i class="out" style="width:${(100 * (x.out_bps || 0) / mx).toFixed(1)}%"></i></span>
+    <span class="ltr sn-tv">↓${esc(fmtBps(x.in_bps))} ↑${esc(fmtBps(x.out_bps))}</span><span class="ltr muted">${x.util === null || x.util === undefined ? "" : snPct(x.util)}</span></div>`).join("")}</div>`;
+}
+function snBlkErr(L) {
+  const bad = (L.ifs || []).filter((x) => x.admin === 1 && ((x.err_min || 0) > 0 || (x.disc_min || 0) > 0))
+    .sort((a, b) => (b.err_min || 0) + (b.disc_min || 0) - (a.err_min || 0) - (a.disc_min || 0)).slice(0, 10);
+  if (!bad.length) return `<div class="sn-okline">هیچ پورتی خطا یا Discard ندارد.</div>`;
+  return `<div class="table-wrap inner"><table class="grid"><thead><tr><th>پورت</th><th>توضیح</th><th>وضعیت</th><th>خطا/دقیقه</th><th>Discard/دقیقه</th></tr></thead><tbody>
+    ${bad.map((x) => `<tr><td class="ltr">${esc(x.name)}</td><td class="bidi">${esc(x.alias || "")}</td><td><span class="tag ${x.oper === 1 ? "ok" : "err"}">${esc(SN_OPER[x.oper] || x.oper)}</span></td>
+      <td class="ltr c-err">${x.err_min ? num(x.err_min) : "0"}</td><td class="ltr">${x.disc_min ? num(x.disc_min) : "0"}</td></tr>`).join("")}</tbody></table></div>`;
+}
+function snBlkAlarms(L) {
+  return L.alarms.length ? `<div class="table-wrap inner"><table class="grid"><thead><tr><th>سطح</th><th>مورد</th><th>از</th></tr></thead><tbody>
       ${L.alarms.map((a) => `<tr><td>${snLv(a.level)}</td><td class="wrap">${esc(a.msg)}</td><td class="ltr">${fmtDate(a.since)}</td></tr>`).join("")}</tbody></table></div>`
-      : `<div class="empty">هشدار فعالی نیست.</div>`}
-    ${L.errors.length ? `<div class="hint" style="color:var(--warn);margin-top:8px">بخش‌هایی که خوانده نشدند: ${L.errors.map(esc).join(" · ")}</div>` : ""}
-    <div class="hint ltr" style="margin-top:10px;white-space:normal">${esc(L.sys.descr || "")}${L.sys.location ? ` · ${esc(L.sys.location)}` : ""}${ex.version ? ` · ${esc(ex.version)}` : ""}</div>
-    <div class="chart-grid" style="margin-top:12px"><div class="chart-card wide"><div class="chart-head"><h3>CPU و حافظه (٪) — ۲۴ ساعت</h3></div><div class="chart" id="snc1"></div></div></div>`;
-  snChart(D, $("#snc1", b), "24h", [["cpu", "CPU", "info"], ["mem", "حافظه", "acc"]], { pct: true, height: 170 });
+    : `<div class="sn-okline">هشدار فعالی نیست.</div>`;
+}
+function snBlkInfo(L) {
+  const ex = L.extra || {}, s = L.sys || {};
+  return `<div class="hint ltr" style="white-space:normal">${esc(s.descr || "")}${s.location ? ` · ${esc(s.location)}` : ""}${ex.version ? ` · ${esc(ex.version)}` : ""}</div>`;
+}
+function snSum(D, b, L) {
+  const blocks = (D.t.tpl_eff && D.t.tpl_eff.blocks) || ["kpi", "alarms", "info"];
+  const R = { kpi: snBlkKpi, health: snBlkHealth, modules: snBlkModules, top_ports: snBlkTop, err_ports: snBlkErr, alarms: snBlkAlarms, info: snBlkInfo };
+  b.innerHTML = blocks.filter((k) => R[k]).map((k) => k === "kpi" || k === "info" ? R[k](L)
+      : `<div class="sn-blk"><h3>${SN_BLOCKS[k]}</h3>${R[k](L)}</div>`).join("")
+    + (L.errors.length ? `<div class="hint" style="color:var(--warn);margin-top:8px">بخش‌هایی که خوانده نشدند: ${L.errors.map(esc).join(" · ")}</div>` : "")
+    + `<div class="chart-grid" style="margin-top:12px" id="snSumCh"></div>`;
+  // 1.35: نمودارهای خلاصه از قالب نمایش (پیش‌فرض: CPU و حافظه)
+  const want = (D.t.tpl_eff && D.t.tpl_eff.sum_charts) || ["cpu_mem"];
+  const ports = ((typeof MV !== "undefined" && MV.rows[D.t.id]) || {}).ports || [];
+  const C = {
+    cpu_mem: ["CPU و حافظه (٪) — ۲۴ ساعت", [["cpu", "CPU", "info"], ["mem", "حافظه", "acc"]], { pct: true }],
+    traffic: ["ترافیک پورت‌های نمایشی — ۲۴ ساعت", ports.flatMap((p) => [[`if:${p.n}:in`, `${p.n} ↓`, "info"], [`if:${p.n}:out`, `${p.n} ↑`, "ok"]]), { bps: true }],
+    temp: ["بیشترین دما (°C) — ۲۴ ساعت", [["temp", "دما", "warn"]], {}],
+    rtt: ["زمان پاسخ SNMP (ms) — ۲۴ ساعت", [["rtt", "زمان پاسخ", "ok"]], {}],
+    sessions: ["نشست‌های فعال — ۲۴ ساعت", [["ses", "نشست‌ها", "acc"]], {}],
+  };
+  const list = want.filter((k) => C[k] && C[k][1].length);
+  $("#snSumCh", b).innerHTML = list.map((k, i) => `<div class="chart-card wide"><div class="chart-head"><h3>${C[k][0]}</h3></div><div class="chart" id="snc${i + 1}"></div></div>`).join("");
+  list.forEach((k, i) => snChart(D, $(`#snc${i + 1}`, b), "24h", C[k][1].slice(0, 8), { ...C[k][2], height: 170 }));
 }
 function snPorts(D, b, L) {
   const ae = document.activeElement, keep = ae && ae.id === "snPf" ? ae.selectionStart : null;   // نوشتن در جستجو با به‌روزرسانی زنده قطع نشود

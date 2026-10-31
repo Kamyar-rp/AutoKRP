@@ -1,7 +1,7 @@
 """AutoKRP — ابزار خودکارسازی پاسخ امنیتی (Splunk → AbuseIPDB → FortiGate → Redmine)
 Copyright (c) 2026 Kamyar RP — MIT License. Built with the help of Claude (Anthropic).
 """
-__version__ = "1.34.0"
+__version__ = "1.36.0"
 APP_ID = "AutoKRP"
 APP_NAME = "AutoKRP"
 AUTHOR = "Kamyar RP"

@@ -521,7 +521,7 @@ class MySQLBackend:
         with self.cn.cursor() as c:
             c.execute("SELECT DISTINCT TABLE_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s AND COLUMN_NAME='_rid'",
                       (self.conf["database"],))
-            names = {r[0] for r in c.fetchall()} | ({META, BLOB, "akrp_ts_d", "akrp_ts_h"} & self.mysql_tables())   # 1.34: سری زمانی مانیتورینگ
+            names = {r[0] for r in c.fetchall()} | ({META, BLOB, "akrp_ts_d", "akrp_ts_h", "akrp_ev"} & self.mysql_tables())   # 1.34: سری زمانی مانیتورینگ
             for t in sorted(names):
                 if _NAME.match(t):
                     c.execute(f"DROP TABLE IF EXISTS {_q(t)}")
