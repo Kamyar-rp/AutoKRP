@@ -2,6 +2,35 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.34.0] — 2026-10-31
+
+### Added
+- **SNMP worker processes (multi-core)**: SNMP polling now runs in separate worker processes (the same AutoKRP executable started with `--snmpworker`), so it uses several CPU cores. Default is automatic (CPU cores minus one, up to 8); it can be set from 0 (inside the app, as before) to 16 in Settings → Monitoring. Workers only run while there is an active SNMP target.
+  - Workers talk to the app over 127.0.0.1 with a one-time token (the same method as FortiGate Python tasks). Credentials never leave the machine.
+  - On Windows, workers are placed in a Job Object, so they close when the app closes or crashes. They have no window. A crashed or hung worker is restarted, and its in-flight polls are re-run inside the app, so devices are not falsely reported down. Workers are recycled after 50,000 polls or 600 MB of RAM.
+  - Measured on a 2-core Linux test machine with net-snmp agents (54 interfaces each):
+    - 500 devices every 60 s: kept up, about 0.8 core.
+    - 1,000 devices every 60 s: kept up, using both cores.
+    - SNMPv3 (SHA/AES) costs about the same as v2c.
+    - Unresponsive devices do not delay healthy ones.
+- **Monitoring policies**: named profiles that set the check interval, failures before "down", SNMP retries, what to read (CPU, memory, disk, hardware, ports), which port counters to read (traffic, errors, discards), whose port history to store (all enabled / only up / only watched / none), whether to store history for system values, ports and custom OIDs, detailed-data resolution (**1 or 5 minutes**) and retention for detailed and hourly data.
+  - Each target uses a policy or stays "Custom" (its own settings, as before).
+  - Three presets are included: Critical (1 min, 1-minute data), Standard (5 min) and Light (10 min, status and CPU only).
+  - Settings → Monitoring shows disk usage per policy.
+- **Chart data in MySQL/MariaDB** (optional, when the app database is MySQL): monitoring time series go to the tables `akrp_ts_d` and `akrp_ts_h` over a separate connection.
+  - The tables are partitioned by day/month when the server allows it, and old data is removed with `DROP PARTITION`; otherwise batched `DELETE` is used.
+  - The format follows the database mode: readable JSON in "plain", compressed and encrypted otherwise.
+  - Existing local files are moved to MySQL in the background. If MySQL is unreachable, data is written to local files and moved later. Charts always read both.
+- Monitoring page warns admins when targets fall behind schedule or workers keep failing.
+
+### Changed
+- The monitoring target limit is now 2,000 (was 200).
+- Checks are spread evenly over each target's interval instead of starting together.
+- Static SNMP data (port names, descriptions, aliases, speeds, entity names) is cached for about 20 minutes and refreshed on reboot or when ports change. This cuts the work per poll by about a quarter.
+- A device that does not answer the first request is reported after one timeout, without a second "is it alive" query.
+- Ping on Windows uses the system ICMP API (`IcmpSendEcho`) instead of starting `ping.exe` for every check (IPv6 still uses `ping.exe`).
+- MySQL reset also removes the monitoring time-series tables.
+
 ## [1.33.0] — 2026-10-31
 
 ### Added

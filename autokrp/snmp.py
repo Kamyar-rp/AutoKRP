@@ -20,14 +20,12 @@ import logging
 import math
 import random
 import re
-import shutil
 import threading
 import time
 import zlib
 from collections import OrderedDict
-from datetime import datetime
 
-from . import atrest, paths
+from . import atrest
 
 log = logging.getLogger(__name__)
 
@@ -123,6 +121,7 @@ MAX_IFS = 1024           # پورت‌های هر دستگاه در جدول ز�
 MAX_IF_HIST = 256        # پورت‌هایی که سری زمانی ذخیره می‌کنند
 TH_KEYS = ("cpu", "mem", "disk", "temp", "util", "err")
 TH_DEFAULT = {"cpu": [80, 95], "mem": [85, 95], "disk": [85, 95], "temp": [None, None], "util": [80, 95], "err": [10, 100]}
+LOCAL_CONCURRENCY = 64         # 1.34: خواندن هم‌زمان در حلقه‌ی درون برنامه (بدون کارگر)
 MIN_INTERVAL_SNMP = 30         # سند Cisco: poll پرتکرار بار CPU دستگاه را بالا می‌برد
 # مسیرهای مجازی لینوکس در hrStorage (snap همیشه ۱۰۰٪، tmpfs و …) هشدار کاذب دیسک می‌دادند
 _PSEUDO_FS = re.compile(r"^/(snap|run|dev|sys|proc|var/lib/(docker|containers|kubelet)|var/snap)(/|$)")
@@ -196,10 +195,24 @@ class Client:
     """حلقه‌ی asyncio اختصاصی SNMP؛ از هر ترد با run() صدا زده می‌شود."""
     ENGINE_MAX = 64
 
+    STATIC_TTL = 1200          # 1.34: داده‌ی ثابت پورت‌ها/ENTITY (نام، alias، سرعت، نوع) هر ۲۰ دقیقه (± پخش) دوباره خوانده می‌شود
+
     def __init__(self):
         self._loop = None
         self._lock = threading.Lock()
         self._engines = OrderedDict()
+        self.static = {}           # (host, port, fp) → {"t", "up", "rows", "has64"} — فقط داخل حلقه‌ی asyncio
+        self.names = {}            # (host, port, fp) → {"t", "n": {idx: name}}
+
+    def static_key(self, cred, host, port):
+        return (str(host), str(port), self._fp(cred))
+
+    def prune(self, now=None):
+        """کش‌های کهنه (دستگاه حذف‌شده یا خاموش) پاک شوند."""
+        now = now or time.time()
+        for d in (self.static, self.names):
+            for k in [k for k, v in d.items() if now - v["t"] > 3 * self.STATIC_TTL]:
+                d.pop(k, None)
 
     def _ensure(self):
         with self._lock:
@@ -408,18 +421,34 @@ def detect_vendor(objid):
 
 
 async def _names(cl, cred, host, port, idx, timeout, retries):
-    """entPhysicalName برای چند اندیس (حداکثر ۶۴)."""
+    """entPhysicalName برای چند اندیس (حداکثر ۶۴). 1.34: نام‌ها تا STATIC_TTL در کش Client می‌مانند."""
     idx = [str(i) for i in dict.fromkeys(idx) if str(i) not in ("", "0")][:64]
     if not idx:
         return {}
-    g = await cl.aget(cred, host, port, [f"{ENT_NAME}.{i}" for i in idx], timeout, retries)
-    return {i: (g.get(f"{ENT_NAME}.{i}") or "").strip() for i in idx}
+    key = cl.static_key(cred, host, port) if hasattr(cl, "names") else None
+    now = time.time()
+    c = cl.names.get(key) if key else None
+    if c and now - c["t"] > c.get("ttl", Client.STATIC_TTL):
+        c = None
+    have = c["n"] if c else {}
+    miss = [i for i in idx if i not in have]
+    if miss:
+        g = await cl.aget(cred, host, port, [f"{ENT_NAME}.{i}" for i in miss], timeout, retries)
+        have = {**have, **{i: (g.get(f"{ENT_NAME}.{i}") or "").strip() for i in miss}}
+        if key:
+            cl.names[key] = {"t": c["t"] if c else now, "ttl": c["ttl"] if c else Client.STATIC_TTL * random.uniform(0.85, 1.15),  # nosec B311 — پخش زمان
+                             "n": dict(list(have.items())[-512:])}
+    return {i: have.get(i, "") for i in idx}
 
 
 async def collect(cl, cred, host, port, cfg, timeout=3, retries=1):
     """خروجی خام یک بار خواندن (نرخ‌ها در SnmpRuntime از تفاضل حساب می‌شوند)."""
     t0 = time.perf_counter()
-    s = await cl.aget(cred, host, port, list(SYS.values()), timeout, retries)
+    try:
+        s = await cl.aget(cred, host, port, list(SYS.values()), timeout, retries)
+    except SnmpError as e:
+        e.silent = True            # 1.34: دستگاه به همان درخواست اول (system) جواب نداد؛ تلاش دوباره‌ی uptime بی‌فایده است
+        raise
     rtt = round((time.perf_counter() - t0) * 1000, 1)
     vendor = cfg.get("vendor") or "auto"
     if vendor == "auto":
@@ -696,22 +725,59 @@ async def collect(cl, cred, host, port, cfg, timeout=3, retries=1):
                 out["temps"].append({"name": names.get(str(i)) or f"Sensor {i}", "value": round(v, 1), "thr": None, "state": "ok"})
 
     # ---------------- پورت‌ها
-    async def ifs():
-        r = await w(list(IF_T.values()))
-        x = await w(list(IF_X.values()))
-        for i in sorted(r[IF_T["descr"]], key=lambda k: oid_t(k))[:MAX_IFS]:
+    # 1.34: ستون‌های ثابت (نام، توضیح، alias، نوع، سرعت) با کش STATIC_TTL؛ هر بار فقط وضعیت و شمارنده‌ها.
+    # کش با راه‌اندازی دوباره‌ی دستگاه (uptime کمتر)، پایان زمان یا تغییر فهرست پورت‌ها دوباره خوانده می‌شود.
+    cnt = cfg.get("counters") or {}
+    want = {k: bool(cnt.get(k, 1)) for k in ("traffic", "err", "disc")}
+
+    async def if_static():
+        r = await w([IF_T["descr"], IF_T["type"], IF_T["speed"]])
+        x = await w([IF_X["name"], IF_X["hspeed"], IF_X["alias"], IF_X["in64"]])
+        rows = {}
+        for i in r[IF_T["descr"]]:
             hs = x[IF_X["hspeed"]].get(i)
             sp = r[IF_T["speed"]].get(i)
-            speed = hs * 1_000_000 if hs else (sp if sp and sp != 4294967295 else None)
-            in64, out64 = x[IF_X["in64"]].get(i), x[IF_X["out64"]].get(i)
+            rows[i] = {"name": (x[IF_X["name"]].get(i) or r[IF_T["descr"]][i] or str(i))[:80], "descr": (r[IF_T["descr"]][i] or "")[:120],
+                       "alias": (x[IF_X["alias"]].get(i) or "")[:120], "type": r[IF_T["type"]].get(i),
+                       "speed": hs * 1_000_000 if hs else (sp if sp and sp != 4294967295 else None)}
+        ent = {"t": time.time(), "ttl": Client.STATIC_TTL * random.uniform(0.85, 1.15), "up": out["sys"].get("uptime"),  # nosec B311 — پخش زمان
+               "rows": rows, "has64": {i for i in rows if x[IF_X["in64"]].get(i) is not None}}
+        if hasattr(cl, "static"):
+            cl.static[cl.static_key(cred, host, port)] = ent
+        return ent
+
+    async def ifs():
+        key = cl.static_key(cred, host, port) if hasattr(cl, "static") else None
+        st = cl.static.get(key) if key else None
+        up = out["sys"].get("uptime")
+        if st and (time.time() - st["t"] > st["ttl"] or (up is not None and st["up"] is not None and up < st["up"])):
+            st = None
+        if st is None:
+            st = await if_static()
+        cols = [IF_T["admin"], IF_T["oper"]]
+        if want["traffic"]:
+            cols += [IF_X["in64"], IF_X["out64"]]
+            if len(st["has64"]) < len(st["rows"]):
+                cols += [IF_T["in32"], IF_T["out32"]]
+        if want["err"]:
+            cols += [IF_T["inerr"], IF_T["outerr"]]
+        if want["disc"]:
+            cols += [IF_T["indisc"], IF_T["outdisc"]]
+        d = await w(cols)
+        idx = set(d[IF_T["admin"]]) | set(d[IF_T["oper"]])
+        if idx and idx != set(st["rows"]) and st["t"] < time.time() - 300:   # پورت تازه یا حذف‌شده (حداکثر هر ۵ دقیقه)
+            st = await if_static()
+        g = lambda c, i: d.get(c, {}).get(i)  # noqa: E731
+        for i in sorted(st["rows"], key=lambda k: oid_t(k))[:MAX_IFS]:
+            s0 = st["rows"][i]
+            in64, out64 = g(IF_X["in64"], i), g(IF_X["out64"], i)
+            b64 = in64 is not None
+            err = (g(IF_T["inerr"], i) or 0) + (g(IF_T["outerr"], i) or 0) if want["err"] else None
+            disc = (g(IF_T["indisc"], i) or 0) + (g(IF_T["outdisc"], i) or 0) if want["disc"] else None
             out["ifs"].append({
-                "idx": int(i) if i.isdigit() else i, "name": (x[IF_X["name"]].get(i) or r[IF_T["descr"]][i] or str(i))[:80],
-                "descr": (r[IF_T["descr"]][i] or "")[:120], "alias": (x[IF_X["alias"]].get(i) or "")[:120],
-                "type": r[IF_T["type"]].get(i), "admin": r[IF_T["admin"]].get(i), "oper": r[IF_T["oper"]].get(i), "speed": speed,
-                "in": in64 if in64 is not None else r[IF_T["in32"]].get(i), "out": out64 if out64 is not None else r[IF_T["out32"]].get(i),
-                "bits": 64 if in64 is not None else 32,
-                "err": (r[IF_T["inerr"]].get(i) or 0) + (r[IF_T["outerr"]].get(i) or 0),
-                "disc": (r[IF_T["indisc"]].get(i) or 0) + (r[IF_T["outdisc"]].get(i) or 0)})
+                "idx": int(i) if i.isdigit() else i, **s0, "admin": g(IF_T["admin"], i), "oper": g(IF_T["oper"], i),
+                "in": in64 if b64 else g(IF_T["in32"], i), "out": out64 if b64 else g(IF_T["out32"], i),
+                "bits": 64 if b64 else 32, "err": err, "disc": disc})
 
     # ---------------- OIDهای دستی
     async def oids():
@@ -747,6 +813,32 @@ async def collect(cl, cred, host, port, cfg, timeout=3, retries=1):
     if not col.get("disk", True):
         out["disks"] = []
     return out
+
+
+async def poll_raw(cl, cred, host, port, cfg, timeout, retries, budget):
+    """یک بار خواندن کامل با سقف زمان (درون‌برنامه یا در کارگر SNMP). خروجی: {"raw": …} یا
+    {"alive": پیام، "rtt"} وقتی خواندن کامل نشد ولی دستگاه پاسخ می‌دهد (قطع اعلام نشود). خطا: SnmpError."""
+    try:
+        return {"raw": await asyncio.wait_for(collect(cl, cred, host, port, cfg, timeout, retries), budget)}
+    except asyncio.TimeoutError:
+        err = SnmpError("خواندن SNMP بیش از حد طول کشید و متوقف شد")
+    except SnmpError as e:
+        if getattr(e, "silent", False):
+            raise
+        err = e
+    t0 = time.perf_counter()
+    try:
+        r = await asyncio.wait_for(cl.aget(cred, host, port, [SYS["uptime"]], timeout, retries), timeout * (retries + 1) + 5)
+    except (SnmpError, asyncio.TimeoutError):
+        raise err
+    if r.get(SYS["uptime"]) is None:
+        raise err
+    return {"alive": f"خواندن کامل ناموفق بود ولی دستگاه پاسخ می‌دهد: {err}", "rtt": round((time.perf_counter() - t0) * 1000, 1)}
+
+
+def poll_budget(t, cfg):
+    timeout = float(t.get("timeout") or 3)
+    return min(300, max(120, 30 + timeout * (cfg["retries"] + 1) * 10))
 
 
 # ---------------------------------------------------------------------------- پیکربندی هدف
@@ -819,9 +911,47 @@ def clean_cfg(c):
     prof = str(c.get("profile") or "auto")              # 1.27.1: نوع دستگاه از MIB: auto (با sysObjectID) | none | mib<enterprise>
     if prof not in ("auto", "none") and not re.fullmatch(r"mib\d{1,10}", prof):
         prof = "auto"
+    ext = clean_pol_fields(c)
     return {"vendor": vendor, "collect": {k: 1 if col.get(k, True) else 0 for k in ("cpu", "mem", "disk", "env", "if")},
             "th": th, "after": after, "retries": retries, "watch": watch, "oids": oids,
-            "if_hist": 1 if c.get("if_hist", True) else 0, "profile": prof}
+            "if_hist": ext["hist"]["if"], "profile": prof, **ext}
+
+
+PORTS = ("all", "up", "watch", "none")       # تاریخچه‌ی کدام پورت‌ها: همه (فعال)، فقط وصل، فقط پیگیری‌شده، هیچ
+RES = (60, 300)                              # دقت داده‌ی دقیق (ثانیه)
+DETAIL_MIN_DAYS, HOUR_MIN_DAYS, KEEP_MAX_DAYS = 7, 30, 36500
+
+
+def keep_val(v, lo):
+    """None = مثل تنظیمات کلی؛ ۰ = بدون محدودیت؛ وگرنه lo تا KEEP_MAX_DAYS روز."""
+    if v in (None, "", "inherit"):
+        return None
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        raise SnmpError("مدت نگهداری باید عدد (روز) باشد.")
+    if v <= 0:
+        return 0
+    if v < lo:
+        raise SnmpError(f"مدت نگهداری دست‌کم {lo} روز است (یا ۰ = بدون محدودیت).")
+    return min(KEEP_MAX_DAYS, v)
+
+
+def clean_pol_fields(c):
+    """1.34: دقت، نگهداری، شمارنده‌ها، پورت‌ها و تاریخچه (هم برای هدف سفارشی و هم «سیاست پایش»)."""
+    try:
+        res = int(c.get("res") or 300)
+    except (TypeError, ValueError):
+        res = 300
+    hist_in = c.get("hist") if isinstance(c.get("hist"), dict) else {}
+    cnt = c.get("counters") if isinstance(c.get("counters"), dict) else {}
+    return {"res": res if res in RES else 300,
+            "keep_d": keep_val(c.get("keep_d"), DETAIL_MIN_DAYS), "keep_h": keep_val(c.get("keep_h"), HOUR_MIN_DAYS),
+            "ports": c.get("ports") if c.get("ports") in PORTS else "all",
+            "counters": {k: 1 if cnt.get(k, True) else 0 for k in ("traffic", "err", "disc")},
+            "hist": {"sys": 1 if hist_in.get("sys", True) else 0,
+                     "if": 1 if hist_in.get("if", c.get("if_hist", True)) else 0,
+                     "oid": 1 if hist_in.get("oid", True) else 0}}
 
 
 def load_cfg(t):
@@ -874,8 +1004,8 @@ ZPFX = "AKRZ:"
 
 
 def _zline(obj):
-    raw = zlib.compress(json.dumps(obj, separators=(",", ":")).encode("utf-8"), 6)
-    return ZPFX + base64.b64encode(atrest.encrypt(raw)).decode("ascii")
+    from .tsdb import zenc
+    return zenc(obj)
 
 
 def _zread(path):
@@ -912,9 +1042,13 @@ class SnmpRuntime:
         self.live = {}          # tid → داده‌ی زنده برای رابط
         self.prev = {}          # tid → شمارنده‌های قبلی
         self.alarms = {}        # tid → {key: {level, since, msg, value, n_bad, n_ok}}
-        self._acc5, self._acch = {}, {}
-        self._cur5, self._curh = 0, 0
+        self._acc5, self._acch = {}, {}   # 1.34: tid → {"b": شروع بازه، "r": طول بازه، "a": {key: [جمع، تعداد، بیشینه]}}
         self._lock = threading.Lock()
+        from . import tsdb
+        self.ts = tsdb.store()
+        self.pool = None        # کارگرهای SNMP (snmppool)؛ None = درون برنامه
+        self._prof_sig = None
+        self._sem = None
 
     # ---- اعتبارنامه از vault
     def cred_for(self, t):
@@ -932,31 +1066,25 @@ class SnmpRuntime:
         except Exception:  # noqa
             return []
 
-    def poll(self, t, cfg=None):
-        """یک بار خواندن کامل؛ خروجی (ok، rtt، err). وضعیت زنده و هشدارها به‌روز می‌شوند."""
-        cfg = dict(cfg or load_cfg(t))
+    def _cfg(self, t, cfg=None):
+        cfg = dict(cfg or t.get("_cfg") or load_cfg(t))
         cfg["_profiles"] = self.profiles()
-        timeout = float(t.get("timeout") or 3)
-        if self.demo and not str(t.get("host") or "").startswith("127."):
-            raw = demo_raw(t, cfg)
-        else:
-            cred = self.cred_for(t)
-            port = t.get("port") or 161
-            budget = max(120, 30 + timeout * (cfg["retries"] + 1) * 10)
-            try:
-                raw = self.client.run(collect(self.client, cred, t["host"], port, cfg, timeout, cfg["retries"]), min(300, budget))
-            except SnmpError as e:
-                # خواندن کامل ناموفق/طولانی؛ اگر خود دستگاه جواب می‌دهد «قطع» اعلام نشود (هشدار کاذب در محیط واقعی)
-                t0 = time.perf_counter()
-                try:
-                    r = self.client.run(self.client.aget(cred, t["host"], port, [SYS["uptime"]], timeout, cfg["retries"]),
-                                        timeout * (cfg["retries"] + 1) + 5)
-                except SnmpError:
-                    raise e
-                if r.get(SYS["uptime"]) is None:
-                    raise e
-                self._note(t["id"], f"خواندن کامل ناموفق بود ولی دستگاه پاسخ می‌دهد: {e}")
-                return True, round((time.perf_counter() - t0) * 1000, 1), "", []
+        return cfg
+
+    def _demo(self, t):
+        return self.demo and not str(t.get("host") or "").startswith("127.")
+
+    def job(self, t, cfg):
+        """پارامترهای یک بار خواندن (برای کارگر یا حلقه‌ی درون برنامه)."""
+        return {"cred": self.cred_for(t), "host": t["host"], "port": t.get("port") or 161, "timeout": float(t.get("timeout") or 3),
+                "retries": cfg["retries"], "budget": poll_budget(t, cfg)}
+
+    def finish(self, t, cfg, res):
+        """نتیجه‌ی poll_raw → (ok، rtt، err، رویدادها)."""
+        if "alive" in res:
+            self._note(t["id"], res["alive"])
+            return True, res.get("rtt"), "", []
+        raw = res["raw"]
         try:
             events = self.ingest(t, cfg, raw)
         except Exception as e:  # noqa — خطای پردازش نباید دستگاه سالم را «قطع» نشان دهد
@@ -964,6 +1092,56 @@ class SnmpRuntime:
             self._note(t["id"], f"خطای پردازش داده: {e.__class__.__name__}")
             return True, raw.get("rtt"), "", []
         return True, raw["rtt"], "", events
+
+    def poll(self, t, cfg=None):
+        """یک بار خواندن کامل (همگام، درون برنامه)؛ خروجی (ok، rtt، err، رویدادها). خطای دستگاه: SnmpError."""
+        cfg = self._cfg(t, cfg)
+        if self._demo(t):
+            return self.finish(t, cfg, {"raw": demo_raw(t, cfg)})
+        j = self.job(t, cfg)
+        res = self.client.run(poll_raw(self.client, j["cred"], j["host"], j["port"], cfg, j["timeout"], j["retries"], j["budget"]),
+                              j["budget"] + 30)
+        return self.finish(t, cfg, res)
+
+    def submit(self, t, done):
+        """1.34: خواندن بدون اشغال نخ؛ done(cfg, نتیجه یا SnmpError) از نخ دیگری صدا زده می‌شود.
+        با کارگرهای SNMP (چند هسته) یا حلقه‌ی asyncio همین برنامه (اگر کارگری نیست یا از کار افتاد)."""
+        cfg = self._cfg(t)
+        if self._demo(t):
+            done(cfg, {"raw": demo_raw(t, cfg)})
+            return
+        try:
+            j = self.job(t, cfg)
+        except SnmpError as e:
+            done(cfg, e)
+            return
+        send = {k: v for k, v in cfg.items() if k != "_profiles"}
+        pool = self.pool
+        if pool is not None and pool.usable():
+            pool.set_profiles(cfg["_profiles"])
+            pool.submit(t["id"], {**j, "cfg": send}, lambda r: done(cfg, r),
+                        fallback=lambda: self._local(j, cfg, lambda r: done(cfg, r)))
+            return
+        self._local(j, cfg, lambda r: done(cfg, r))
+
+    def _local(self, j, cfg, cb):
+        loop = self.client._ensure()
+
+        async def run():
+            if self._sem is None:
+                self._sem = asyncio.Semaphore(LOCAL_CONCURRENCY)
+            async with self._sem:
+                return await poll_raw(self.client, j["cred"], j["host"], j["port"], cfg, j["timeout"], j["retries"], j["budget"])
+        fut = asyncio.run_coroutine_threadsafe(run(), loop)
+
+        def fin(f):
+            try:
+                cb(f.result())
+            except SnmpError as e:
+                cb(e)
+            except BaseException as e:  # noqa — لغو یا خطای غیرمنتظره: مثل خطای دستگاه گزارش شود
+                cb(SnmpError(f"خطای داخلی SNMP: {e.__class__.__name__}"))
+        fut.add_done_callback(fin)
 
     def _note(self, tid, msg):
         with self._lock:
@@ -1171,126 +1349,125 @@ class SnmpRuntime:
         return events
 
     def clear(self, tid):
-        for d in (self.live, self.prev, self.alarms, self._acc5, self._acch):
+        for d in (self.live, self.prev, self.alarms):
             d.pop(tid, None)
+        with self._lock:
+            self._acc5.pop(tid, None)
+            self._acch.pop(tid, None)
 
     # ---- سری زمانی
     def _series_vals(self, cfg, live):
         v = {}
-        if live["cpu"] and live["cpu"].get("value") is not None:
-            v["cpu"] = live["cpu"]["value"]
-        if live["mem"] and live["mem"].get("pct") is not None:
-            v["mem"] = live["mem"]["pct"]
-        if live["disk_max"] is not None:
-            v["disk"] = live["disk_max"]
-        if live["temp_max"] is not None:
-            v["temp"] = live["temp_max"]
-        if live["rtt"] is not None:
-            v["rtt"] = live["rtt"]
-        if cfg["if_hist"]:
+        hist = cfg.get("hist") or {"sys": 1, "if": cfg.get("if_hist", 1), "oid": 1}
+        if hist.get("sys", 1):
+            if live["cpu"] and live["cpu"].get("value") is not None:
+                v["cpu"] = live["cpu"]["value"]
+            if live["mem"] and live["mem"].get("pct") is not None:
+                v["mem"] = live["mem"]["pct"]
+            if live["disk_max"] is not None:
+                v["disk"] = live["disk_max"]
+            if live["temp_max"] is not None:
+                v["temp"] = live["temp_max"]
+            if live["rtt"] is not None:
+                v["rtt"] = live["rtt"]
+        ports = cfg.get("ports") or "all"
+        if hist.get("if", 1) and ports != "none":
             n = 0
             for x in live["ifs"]:
-                if x["in_bps"] is None or x["type"] == 24 or (x["admin"] != 1 and not x["watch"]):
+                if x["in_bps"] is None and x["err_min"] is None:
+                    continue
+                if x["type"] == 24:              # loopback
+                    continue
+                if ports == "watch" and not x["watch"]:
+                    continue
+                if ports == "up" and x["oper"] != 1 and not x["watch"]:
+                    continue
+                if ports == "all" and x["admin"] != 1 and not x["watch"]:
                     continue
                 n += 1
                 if n > MAX_IF_HIST:
                     break
-                v[f"if:{x['name']}:in"] = x["in_bps"]
-                v[f"if:{x['name']}:out"] = x["out_bps"]
+                if x["in_bps"] is not None:
+                    v[f"if:{x['name']}:in"] = x["in_bps"]
+                    v[f"if:{x['name']}:out"] = x["out_bps"]
                 if x["err_min"]:
                     v[f"if:{x['name']}:err"] = x["err_min"]
-        for o in live["oids"]:
-            if o["chart"] and isinstance(o["value"], (int, float)):
-                v[f"oid:{o['oid']}"] = o["value"]
+        if hist.get("oid", 1):
+            for o in live["oids"]:
+                if o["chart"] and isinstance(o["value"], (int, float)):
+                    v[f"oid:{o['oid']}"] = o["value"]
         return v
 
     def _accumulate(self, tid, cfg, live, now):
         vals = self._series_vals(cfg, live)
+        res = cfg.get("res") or 300
+        out = []
         with self._lock:
-            for acc in (self._acc5, self._acch):
-                a = acc.setdefault(tid, {})
+            for acc, r, kind in ((self._acc5, res, "sd"), (self._acch, 3600, "sh")):
+                b = int(now // r) * r
+                e = acc.get(tid)
+                if e and (e["b"] != b or e["r"] != r):
+                    if e["a"]:
+                        out.append((kind, tid, {"t": e["b"], **self._pack(e["a"])}))
+                    e = None
+                if e is None:
+                    e = acc[tid] = {"b": b, "r": r, "a": {}}
                 for k, x in vals.items():
-                    s = a.setdefault(k, [0.0, 0, None])
-                    s[0] += x
-                    s[1] += 1
-                    s[2] = x if s[2] is None else max(s[2], x)
-
-    def _dir(self, tid):
-        d = paths.data_dir() / "monitor" / "snmp" / str(int(tid))
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+                    s_ = e["a"].setdefault(k, [0.0, 0, None])
+                    s_[0] += x
+                    s_[1] += 1
+                    s_[2] = x if s_[2] is None else max(s_[2], x)
+        if out:
+            self.ts.put(out)
 
     @staticmethod
     def _pack(acc):
         return {"a": {k: round(s[0] / s[1], 3) for k, s in acc.items() if s[1]}, "x": {k: s[2] for k, s in acc.items() if s[1]}}
 
     def flush(self, active=True, force=False):
+        """بازه‌های تمام‌شده (یا همه با force) نوشته شوند."""
         now = time.time()
-        b5, bh = int(now // self.BUCKET) * self.BUCKET, int(now // 3600) * 3600
-        if not self._cur5:
-            self._cur5, self._curh = b5, bh
-        for kind, cur, new in (("5", self._cur5, b5), ("h", self._curh, bh)):
-            if cur == new and not force:
-                continue
-            with self._lock:
-                if kind == "5":
-                    acc, self._acc5 = self._acc5, {}
-                else:
-                    acc, self._acch = self._acch, {}
-            if active:
-                for tid, a in acc.items():
-                    if not a:
-                        continue
-                    name = (f"f_{time.strftime('%Y%m%d', time.localtime(cur))}.log" if kind == "5"
-                            else f"h_{time.strftime('%Y%m', time.localtime(cur))}.log")
-                    try:
-                        with open(self._dir(tid) / name, "a", encoding="ascii") as f:
-                            f.write(_zline({"t": cur, **self._pack(a)}) + "\n")
-                    except Exception:
-                        log.exception("snmp series write")
-            if kind == "5":
-                self._cur5 = new
-            else:
-                self._curh = new
+        out = []
+        with self._lock:
+            for acc, kind in ((self._acc5, "sd"), (self._acch, "sh")):
+                for tid in list(acc):
+                    e = acc[tid]
+                    if force or now >= e["b"] + e["r"]:
+                        if e["a"]:
+                            out.append((kind, tid, {"t": e["b"], **self._pack(e["a"])}))
+                        del acc[tid]
+        if out and active:
+            try:
+                self.ts.put(out)
+            except Exception:
+                log.exception("snmp series write")
 
-    def purge(self, keep_days, hour_days, alive_ids):
-        """keep_days/hour_days = ۰ ← بدون محدودیت (فقط پوشه‌ی هدف حذف‌شده پاک می‌شود)."""
-        base = paths.data_dir() / "monitor" / "snmp"
-        if not base.exists():
-            return
+    def purge(self, keep, alive_ids, glob):
+        """keep: {tid: (روز دقیق، روز ساعتی)} نگهداری مؤثر هر هدف (۰ = بدون محدودیت)؛ glob: همان برای کلی.
+        پوشه/ردیف‌های هدف حذف‌شده همیشه پاک می‌شوند."""
         now = time.time()
-        for d in base.iterdir():
-            if not d.is_dir():
-                continue
-            if not d.name.isdigit() or int(d.name) not in alive_ids:
-                shutil.rmtree(d, ignore_errors=True)     # هدف حذف شده
-                continue
-            for f in d.glob("*.log"):
-                try:
-                    if f.name.startswith("f_"):
-                        old = bool(keep_days) and datetime.strptime(f.stem[2:], "%Y%m%d").timestamp() < now - (keep_days + 1) * 86400
-                    else:
-                        old = bool(hour_days) and datetime.strptime(f.stem[2:], "%Y%m").timestamp() < now - (hour_days + 31) * 86400
-                    if old:
-                        f.unlink()
-                except (ValueError, OSError):
-                    continue
+        self.ts.drop_missing(alive_ids)
+        for tid, (kd, kh) in keep.items():
+            if kd:
+                self.ts.purge("sd", now - (kd + 1) * 86400, tid)
+            if kh:
+                self.ts.purge("sh", now - (kh + 31) * 86400, tid)
 
     def remove_files(self, tid):
-        shutil.rmtree(paths.data_dir() / "monitor" / "snmp" / str(int(tid)), ignore_errors=True)
+        self.ts.drop(tid)
 
-    def series(self, tid, rng, keys, keep_days=0):
+    def series(self, tid, rng, keys, keep_days=0, res=300):
         """{step, times, data: {key: {avg:[], max:[]}}} — rng: بازه‌ی آماده یا {"from", "to"} (trange).
-        داده‌ی ۵ دقیقه‌ای (f_) فقط keep_days روز اخیر؛ بازه‌ی بلندتر یا قدیمی‌تر از داده‌ی ساعتی (h_)."""
+        داده‌ی دقیق (۱ یا ۵ دقیقه) فقط keep_days روز اخیر؛ بازه‌ی بلندتر یا قدیمی‌تر از داده‌ی ساعتی."""
         from . import trange
         now = time.time()
         since, until = trange.resolve(rng, now)
         f_ok = not keep_days or since >= now - keep_days * 86400 + 600
-        step = trange.pick_step(until - since, 300 if f_ok else 3600)
-        d = paths.data_dir() / "monitor" / "snmp" / str(int(tid))
-        if step < 3600 and since < now - 2 * 86400 and not any((d / f"f_{x}.log").exists() for x in trange.days(since, until, "%Y%m%d")):
-            step = trange.pick_step(until - since, 3600)     # داده‌ی ۵ دقیقه‌ای این روزها پاک شده بود (نسخه‌های قبل) ← ساعتی
-        src = "f" if step < 3600 else "h"
+        step = trange.pick_step(until - since, res if f_ok else 3600)
+        if step < 3600 and since < now - 2 * 86400 and not any(self.ts.files.has_day(tid, x) for x in trange.days(since, until, "%Y%m%d")) \
+                and self.ts.mysql is None:
+            step = trange.pick_step(until - since, 3600)     # داده‌ی دقیق این روزها پاک شده بود (نسخه‌های قبل) ← ساعتی
+        src = "sd" if step < 3600 else "sh"
         keys = [str(k) for k in keys][:40]
         start, nb = trange.grid(since, until, step)
         acc = {k: [[0.0, 0, None] for _ in range(nb)] for k in keys}
@@ -1301,31 +1478,21 @@ class SnmpRuntime:
                 return
             for k in keys:
                 if k in rec["a"]:
-                    s = acc[k][i]
-                    s[0] += rec["a"][k]
-                    s[1] += 1
+                    s_ = acc[k][i]
+                    s_[0] += rec["a"][k]
+                    s_[1] += 1
                     mx = rec["x"].get(k, rec["a"][k])
-                    s[2] = mx if s[2] is None else max(s[2], mx)
-        d = paths.data_dir() / "monitor" / "snmp" / str(int(tid))
-        if d.exists():
-            if src == "f":
-                files = [d / f"f_{x}.log" for x in trange.days(since, until, "%Y%m%d")]
-            else:
-                files = [d / f"h_{x}.log" for x in trange.days(since - 3600, until, "%Y%m")]
-            for f in files:
-                if f.exists():
-                    for rec in _zread(f):
-                        if start - step < rec.get("t", 0) <= until:
-                            add(rec["t"], rec)
+                    s_[2] = mx if s_[2] is None else max(s_[2], mx)
+        for rec in self.ts.get(src, int(tid), start - step + 1, until):
+            add(rec["t"], rec)
         with self._lock:                 # بازه‌ی جاری که هنوز نوشته نشده
-            cur = (self._acc5 if src == "f" else self._acch).get(int(tid))
-            ct = self._cur5 if src == "f" else self._curh
-            if cur and ct and ct <= until:
-                add(ct, self._pack(cur))
-        return {"step": step, "since": since, "until": until, "res": "5min" if src == "f" else "hour",
+            cur = (self._acc5 if src == "sd" else self._acch).get(int(tid))
+            if cur and cur["a"] and cur["b"] <= until:
+                add(cur["b"], self._pack(cur["a"]))
+        return {"step": step, "since": since, "until": until, "res": ("1min" if step < 300 else "5min") if src == "sd" else "hour",
                 "times": [start + i * step for i in range(nb)],
-                "data": {k: {"avg": [round(s[0] / s[1], 2) if s[1] else None for s in v],
-                             "max": [round(s[2], 2) if s[2] is not None else None for s in v]} for k, v in acc.items()}}
+                "data": {k: {"avg": [round(s_[0] / s_[1], 2) if s_[1] else None for s_ in v],
+                             "max": [round(s_[2], 2) if s_[2] is not None else None for s_ in v]} for k, v in acc.items()}}
 
     # ---- خروجی برای رابط
     def summary(self, tid):

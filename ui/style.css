@@ -551,6 +551,10 @@ td.nowrap { white-space: nowrap; }
 .sn-edit { border: 1px solid var(--line2); border-radius: 10px; padding: 12px; }
 .sn-sub { border: 1px dashed var(--line2); border-radius: 10px; padding: 10px; margin: 8px 0; }
 .sn-det { margin-top: 10px; }
+/* 1.34: هشدار ظرفیت مانیتورینگ و یادداشت سیاست پایش */
+.mon-cap { margin: -6px 0 14px; padding: 10px 12px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); line-height: 1.8; }
+.sn-polnote { margin: 8px 0; padding: 8px 10px; border-radius: 8px; background: var(--info-soft, var(--warn-soft)); font-size: 13px; }
+.cap-tbl td, .cap-tbl th { padding: 4px 8px; }
 .sn-det > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .sn-det textarea { width: 100%; }
 .sn-th input { width: 100px; }

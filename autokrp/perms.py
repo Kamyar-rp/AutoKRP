@@ -19,6 +19,7 @@ FEATURE_API = {
                 "snmp_cred_list", "snmp_cred_save", "snmp_cred_delete", "snmp_test", "snmp_walk",
                 "mon_maint_list", "mon_maint_save", "mon_maint_delete", "mon_parent_group", "mon_noc",
                 "mon_events_query", "mon_events_status", "mon_events_cfg_save", "mon_topo", "mon_topo_scan", "mon_topo_apply",
+                "mon_pol_list", "mon_pol_save", "mon_pol_delete", "mon_capacity", "mon_ts_migrate",
                 # 1.27.1: MIB سازنده‌ها ← نوع دستگاه خودکار
                 "mib_list", "mib_upload", "mib_delete", "mib_compile", "mib_types"},
     "term": {"term_open", "term_break", "serial_ports", "term_snips_save", "term_read", "term_write", "term_resize", "term_close", "term_list", "term_stats", "conn_cancel",
@@ -82,7 +83,7 @@ PUBLIC = {"get_state", "security_status", "security_unlock", "security_check_pas
 READ = {"app_close_choice", "mon_list", "mon_state", "mon_report", "mon_snmp_live", "mon_snmp_series", "mon_icons", "mon_sound_get", "mon_check_now",
         "get_run", "list_ips", "repeat_ips", "ip_detail", "get_stats", "list_history", "history_view", "jobs_list", "get_about", "security_lock",
         "security_change_own", "whoami", "asset_list", "asset_get", "asset_changes", "asset_history",
-        "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo"}
+        "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list"}
 # اپراتور (به‌علاوه‌ی READ). چک ابزار داخل خود متدها یا در check_tools انجام می‌شود.
 OPERATOR = {"net_oui", "net_rdap", "net_trace_start", "net_locate_targets", "net_locate_start", "net_job", "net_job_cancel",
             "start_run", "cancel_run", "decide", "job_run", "pick_csv", "ips_action",
@@ -136,7 +137,7 @@ ACCESS_KEYS = TOOLS + FEATURES                     # همه‌ی ابزارها 
 ACCESS_TITLES = {**TOOL_TITLES, **FEATURE_TITLES, "ssh": "ارتباط با دستگاه‌ها (SSH/Telnet)"}
 NO_VIEW = {"term"}                                  # بخش‌هایی که «دیدن» ندارند (view = none)
 _MON_VIEW = {"mon_list", "mon_report", "mon_snmp_live", "mon_snmp_series", "mon_icons", "mon_sound_get", "mon_check_now",
-             "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo"}
+             "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list"}
 _ASSET_VIEW = {"asset_list", "asset_get", "asset_changes", "asset_history", "asset_scan_status"}
 _SSH_VIEW = {"ssh_list", "ssh_jobs", "ssh_job", "ssh_job_results", "ssh_output", "ssh_export_output", "text_chunk",
              "backup_overview", "backup_versions", "backup_view", "backup_diff", "backup_export", "backup_export_latest"}

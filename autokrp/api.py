@@ -1795,6 +1795,28 @@ class Api:
                 raise ConnectorError("زمان بی‌کاری ترمینال باید بین 0 و 1440 دقیقه باشد.")
         mo = p.get("monitor")
         if isinstance(mo, dict):
+            if "snmp_workers" in mo:
+                v = mo["snmp_workers"]
+                if v not in ("auto", None, ""):
+                    try:
+                        if not 0 <= int(v) <= 16:
+                            raise ValueError
+                        mo["snmp_workers"] = int(v)
+                    except (TypeError, ValueError):
+                        raise ConnectorError("تعداد کارگرهای SNMP باید «خودکار» یا ۰ تا ۱۶ باشد.")
+                else:
+                    mo["snmp_workers"] = "auto"
+            if "ts_backend" in mo:
+                if mo["ts_backend"] not in ("file", "mysql"):
+                    raise ConnectorError("محل ذخیره‌ی داده‌ی مانیتورینگ نامعتبر است.")
+                if mo["ts_backend"] == "mysql":
+                    from . import dbmysql
+                    try:
+                        has = dbmysql.load_conf() is not None
+                    except Exception:
+                        has = False
+                    if not has:
+                        raise ConnectorError("برای ذخیره‌ی داده‌ی مانیتورینگ در MySQL، اول پایگاه داده‌ی برنامه را MySQL کنید (تنظیمات ← پایگاه داده).")
             for k, lo in (("keep_detail_days", 7), ("keep_hour_days", 30)):
                 if k in mo:
                     try:
@@ -2965,8 +2987,14 @@ class Api:
         for t in ts:
             t["mine"] = bool(t.get("owner")) and t["owner"] == self._uname()
             t["can_edit"] = self._mon_admin() or (t["mine"] and self._mon_can_add())
-        return {"targets": ts, "icons": list(ICONS), "max": MAX_TARGETS, "cfg": self._mon_cfg(), "seq": self._mon.seq,
-                "can_add": self._mon_can_add(), "admin": self._mon_admin(), "desktop": not paths.is_server()}
+        out = {"targets": ts, "icons": list(ICONS), "max": MAX_TARGETS, "cfg": self._mon_cfg(), "seq": self._mon.seq,
+               "can_add": self._mon_can_add(), "admin": self._mon_admin(), "desktop": not paths.is_server(),
+               "policies": [{"id": p["id"], "name": p["name"]} for p in self._store.pol_list()]}
+        if self._mon_admin():
+            cap = self._mon.capacity()
+            out["capacity"] = {k: cap[k] for k in ("targets", "per_min", "need_per_min", "late")}
+            out["capacity"]["degraded"] = (cap.get("workers") or {}).get("degraded") or ""
+        return out
 
     @_safe
     def mon_state(self, since=0):
@@ -2999,6 +3027,17 @@ class Api:
         if c["kind"] == "snmp":
             c["cred_id"] = self._snmp_cred(t.get("cred_id"), owner)
         c["parent_id"] = self._mon_parent_ok(c.get("parent_id"), owner, t.get("id"))
+        pid = t.get("policy_id")
+        if pid in (None, "", 0, "0", "custom"):
+            c["policy_id"] = None
+        else:
+            try:
+                pid = int(pid)
+            except (TypeError, ValueError):
+                raise ConnectorError("سیاست پایش نامعتبر است.")
+            if pid not in {p["id"] for p in self._store.pol_list()}:
+                raise ConnectorError("سیاست پایش پیدا نشد.")
+            c["policy_id"] = pid
         tid = self._store.mon_save(c)
         self._mon.state.pop(tid, None)
         self._mon.reload()
@@ -3325,6 +3364,83 @@ class Api:
                 pass
         out["runs"] = runs
         return out
+
+    # ------------------------------------------------------------ سیاست پایش و ظرفیت (1.34)
+    @_safe
+    def mon_pol_list(self):
+        from .monitor import clean_policy, MonitorError
+        use = self._store.pol_usage()
+        out = []
+        for p in self._store.pol_list():
+            try:
+                d = clean_policy(p["data"])
+            except MonitorError:
+                d = p["data"]
+            out.append({"id": p["id"], "name": p["name"], "data": d, "used": use.get(p["id"], 0)})
+        return {"policies": out, "can_edit": self._mon_admin()}
+
+    @_safe
+    def mon_pol_save(self, pol):
+        """ساخت/ویرایش سیاست (فقط ادمین)."""
+        from .monitor import POLICY_MAX, MonitorError, clean_policy
+        if not self._mon_admin():
+            raise ConnectorError("سیاست‌های پایش را فقط ادمین تغییر می‌دهد.")
+        p = pol if isinstance(pol, dict) else {}
+        name = str(p.get("name") or "").strip()[:60]
+        if not name:
+            raise ConnectorError("نام سیاست را وارد کنید.")
+        pid = int(p["id"]) if p.get("id") else None
+        have = self._store.pol_list()
+        if pid and pid not in {x["id"] for x in have}:
+            raise ConnectorError("سیاست پیدا نشد.")
+        if any(x["name"] == name and x["id"] != pid for x in have):
+            raise ConnectorError("سیاستی با همین نام هست.")
+        if not pid and len(have) >= POLICY_MAX:
+            raise ConnectorError(f"حداکثر {POLICY_MAX} سیاست پایش.")
+        try:
+            data = clean_policy(p.get("data"))
+        except MonitorError as e:
+            raise ConnectorError(str(e))
+        pid = self._store.pol_save(pid, name, data)
+        self._mon.reload()
+        self._store.add_history("monitor", name, "ok", f"سیاست پایش ویرایش شد — هر {data['interval']} ثانیه" if p.get("id")
+                                else f"سیاست پایش ساخته شد — هر {data['interval']} ثانیه")
+        return {"id": pid}
+
+    @_safe
+    def mon_pol_delete(self, pid):
+        if not self._mon_admin():
+            raise ConnectorError("سیاست‌های پایش را فقط ادمین تغییر می‌دهد.")
+        pid = int(pid)
+        p = next((x for x in self._store.pol_list() if x["id"] == pid), None)
+        if not p:
+            raise ConnectorError("سیاست پیدا نشد.")
+        n = self._store.pol_usage().get(pid, 0)
+        if n:
+            raise ConnectorError(f"این سیاست به {n} هدف داده شده؛ اول سیاست آن هدف‌ها را عوض کنید.")
+        self._store.pol_delete(pid)
+        self._mon.reload()
+        self._store.add_history("monitor", p["name"], "ok", "سیاست پایش حذف شد")
+        return {}
+
+    @_safe
+    def mon_capacity(self):
+        """بار بررسی‌ها، کارگرهای SNMP و محل ذخیره‌ی سری زمانی (فقط ادمین)."""
+        if not self._mon_admin():
+            raise ConnectorError("فقط ادمین.")
+        out = self._mon.capacity()
+        out["ts"] = self._mon.ts.status()
+        return out
+
+    @_safe
+    def mon_ts_migrate(self):
+        """انتقال فایل‌های محلی مانیتورینگ به MySQL (همین حالا، در پس‌زمینه)."""
+        if not self._mon_admin():
+            raise ConnectorError("فقط ادمین.")
+        if self._mon.ts.target != "mysql":
+            raise ConnectorError("محل ذخیره‌ی داده‌ی مانیتورینگ MySQL نیست.")
+        threading.Thread(target=self._mon.ts.migrate, kwargs={"min_age": 120}, daemon=True).start()
+        return {}
 
     @_safe
     def mon_icons(self):
@@ -3749,10 +3865,11 @@ class Api:
     def mon_snmp_series(self, tid, rng="24h", keys=None):
         t = self._mon_get(tid)
         keys = [str(k)[:120] for k in (keys or ["cpu", "mem", "temp", "rtt"])][:40]
-        from .monitor import keep_days
-        keep = keep_days(self._settings.get("monitor"))[0]
+        e = self._mon.targets().get(t["id"]) or t
+        keep = self._mon.keep_for(e)[0]
+        res = ((e.get("_cfg") or {}).get("res")) or 300
         try:
-            return self._mon.snmp.series(t["id"], rng if isinstance(rng, dict) else str(rng), keys, keep)
+            return self._mon.snmp.series(t["id"], rng if isinstance(rng, dict) else str(rng), keys, keep, res)
         except ValueError as e:
             return {"ok": False, "error": str(e)}
 

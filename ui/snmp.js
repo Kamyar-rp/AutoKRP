@@ -8,6 +8,35 @@ const SN_VENDORS = [["auto", "تشخیص خودکار"], ["cisco", "Cisco"], ["f
 const SN_TH = [["cpu", "CPU (٪)"], ["mem", "حافظه (٪)"], ["disk", "دیسک (٪)"], ["temp", "دما (°C)"], ["util", "مصرف پورت‌های پیگیری‌شده (٪ سرعت)"], ["err", "خطای پورت‌های پیگیری‌شده (در دقیقه)"]];
 const SN_TH_DEF = { cpu: [80, 95], mem: [85, 95], disk: [85, 95], temp: [null, null], util: [80, 95], err: [10, 100] };
 const SN_SECT = [["cpu", "CPU"], ["mem", "حافظه"], ["disk", "دیسک"], ["env", "دما، فن و منبع تغذیه"], ["if", "پورت‌ها"]];
+/* 1.34: سیاست پایش و تنظیم دقت/ذخیره‌ی داده (مشترک بین فرم هدف و ویرایش سیاست) */
+const POL_PORTS = [["all", "همه‌ی پورت‌های فعال"], ["up", "فقط پورت‌های وصل"], ["watch", "فقط پورت‌های پیگیری‌شده"], ["none", "هیچ پورتی"]];
+const POL_CNT = [["traffic", "ترافیک (ورودی/خروجی)"], ["err", "خطا"], ["disc", "Discard"]];
+const POL_HIST = [["sys", "CPU، حافظه، دیسک، دما و زمان پاسخ"], ["if", "ترافیک و خطای پورت‌ها"], ["oid", "OIDهای دستی و قالب دستگاه"]];
+function polKeep(v) { return v === null || v === undefined ? "" : v; }
+function polDataHtml(c, pfx) {
+  const cnt = c.counters || {}, hist = c.hist || {};
+  const on = (o, k) => (o[k] === undefined ? true : !!o[k]);
+  return `<div class="form-grid">
+      <label class="field"><span>دقت داده‌ی دقیق (نمودار)</span><select id="${pfx}Res"><option value="300" ${Number(c.res || 300) === 300 ? "selected" : ""}>هر ۵ دقیقه</option><option value="60" ${Number(c.res) === 60 ? "selected" : ""}>هر ۱ دقیقه (حجم ۵ برابر)</option></select>
+        <small class="hint">بازه‌های طولانی همیشه از داده‌ی ساعتی خوانده می‌شوند.</small></label>
+      <label class="field"><span>تاریخچه‌ی کدام پورت‌ها</span><select id="${pfx}Ports">${POL_PORTS.map(([k, n]) => `<option value="${k}" ${(c.ports || "all") === k ? "selected" : ""}>${n}</option>`).join("")}</select>
+        <small class="hint">جدول زنده‌ی پورت‌ها همیشه همه را نشان می‌دهد.</small></label>
+      <label class="field"><span>نگهداری داده‌ی دقیق (روز)</span><input id="${pfx}KeepD" type="number" min="0" value="${esc(polKeep(c.keep_d))}" placeholder="مثل تنظیمات کلی">
+        <small class="hint">خالی = مثل تنظیمات کلی · ۰ = بدون محدودیت · وگرنه دست‌کم ۷</small></label>
+      <label class="field"><span>نگهداری داده‌ی ساعتی (روز)</span><input id="${pfx}KeepH" type="number" min="0" value="${esc(polKeep(c.keep_h))}" placeholder="مثل تنظیمات کلی">
+        <small class="hint">خالی = مثل تنظیمات کلی · ۰ = بدون محدودیت · وگرنه دست‌کم ۳۰</small></label></div>
+    <div class="field"><span>شمارنده‌های پورت که خوانده شوند</span><div class="row" style="gap:14px;flex-wrap:wrap">${POL_CNT.map(([k, n]) => `<label class="chk"><input type="checkbox" data-${pfx}cnt="${k}" ${on(cnt, k) ? "checked" : ""}>${n}</label>`).join("")}</div>
+      <small class="hint">وضعیت وصل/قطع پورت‌ها همیشه خوانده می‌شود. هر شمارنده‌ی کمتر = درخواست کمتر به دستگاه.</small></div>
+    <div class="field"><span>ذخیره‌ی تاریخچه (نمودار)</span><div class="row" style="gap:14px;flex-wrap:wrap">${POL_HIST.map(([k, n]) => `<label class="chk"><input type="checkbox" data-${pfx}hist="${k}" ${on(hist, k) ? "checked" : ""}>${n}</label>`).join("")}</div>
+      <small class="hint">بدون تیک = فقط نمایش زنده و هشدار، بدون نمودار و حجم دیسک.</small></div>`;
+}
+function polDataCollect(m, pfx) {
+  const keep = (id) => { const v = $(`#${pfx}${id}`, m).value.trim(); return v === "" ? null : Number(v); };
+  const counters = {}, hist = {};
+  $$(`[data-${pfx}cnt]`, m).forEach((c) => (counters[c.getAttribute(`data-${pfx}cnt`)] = c.checked ? 1 : 0));
+  $$(`[data-${pfx}hist]`, m).forEach((c) => (hist[c.getAttribute(`data-${pfx}hist`)] = c.checked ? 1 : 0));
+  return { res: Number($(`#${pfx}Res`, m).value), ports: $(`#${pfx}Ports`, m).value, keep_d: keep("KeepD"), keep_h: keep("KeepH"), counters, hist };
+}
 const SN_OPER = { 1: "وصل", 2: "قطع", 3: "تست", 4: "نامعلوم", 5: "خواب", 6: "نیست", 7: "قطع (لایه‌ی پایین)" };
 const SN_LV = { ok: ["ok", "سالم"], warn: ["warn", "هشدار"], crit: ["err", "بحرانی"], absent: ["mute", "نیست"] };
 
@@ -136,15 +165,16 @@ function snEditHtml(t) {
     <div class="row" style="gap:6px;margin:8px 0"><button type="button" class="btn" id="snTest">تست اتصال و کشف</button><button type="button" class="btn ghost" id="snBrowse">مرورگر OID…</button></div>
     <div id="snTestOut"></div>
     <div id="snBrowseW" hidden class="sn-sub"></div>
-    <details class="sn-det" open><summary>چه چیزهایی خوانده شود</summary>
-      <div class="row" style="gap:14px;flex-wrap:wrap">${SN_SECT.map(([k, n]) => `<label class="chk"><input type="checkbox" data-col="${k}" ${col(k) ? "checked" : ""}>${esc(n)}</label>`).join("")}
-      <label class="chk"><input type="checkbox" id="snIfHist" ${c.if_hist ? "checked" : ""}>ذخیره‌ی نمودار ترافیک پورت‌ها</label></div></details>
+    <div id="snPolNote" class="sn-polnote" hidden></div>
+    <details class="sn-det sn-polpart" open><summary>چه چیزهایی خوانده شود</summary>
+      <div class="row" style="gap:14px;flex-wrap:wrap">${SN_SECT.map(([k, n]) => `<label class="chk"><input type="checkbox" data-col="${k}" ${col(k) ? "checked" : ""}>${esc(n)}</label>`).join("")}</div></details>
+    <details class="sn-det sn-polpart"><summary>دقت و ذخیره‌ی داده</summary>${polDataHtml(c, "sn")}</details>
     <details class="sn-det"><summary>آستانه‌های هشدار</summary>
       <table class="grid sn-th"><thead><tr><th>مورد</th><th>هشدار (زرد)</th><th>بحرانی (قرمز، صدا و ایمیل)</th></tr></thead><tbody>
       ${SN_TH.map(([k, n]) => `<tr><td>${esc(n)}</td><td><input type="number" step="any" data-thw="${k}" value="${v(th(k)[0])}"></td><td><input type="number" step="any" data-thc="${k}" value="${v(th(k)[1])}"></td></tr>`).join("")}</tbody></table>
       <div class="form-grid" style="margin-top:8px">
         <label class="field"><span>هشدار پس از چند بار پشت‌سرهم</span><input id="snAfter" type="number" min="1" max="20" value="${esc(c.after)}"></label>
-        <label class="field"><span>تلاش دوباره‌ی هر درخواست</span><input id="snRetries" type="number" min="0" max="5" value="${esc(c.retries)}"></label></div>
+        <label class="field sn-polpart"><span>تلاش دوباره‌ی هر درخواست</span><input id="snRetries" type="number" min="0" max="5" value="${esc(c.retries)}"></label></div>
       <p class="hint">خالی = خاموش. وضعیت خود دستگاه (مثلاً منبع تغذیه‌ی خراب یا دمای بحرانی گزارش‌شده) همیشه هشدار می‌دهد. دما به‌طور پیش‌فرض فقط با وضعیت خود دستگاه هشدار می‌دهد (سنسورهای CPU/Hotspot ذاتاً داغ‌اند)؛ اگر عدد بدهید روی همه‌ی سنسورهای دما اعمال می‌شود. پورت‌ها فقط وقتی «پیگیری» شوند هشدار قطع، مصرف و خطا دارند.</p></details>
     <details class="sn-det" ${c.watch.length ? "open" : ""}><summary>پورت‌هایی که هشدار بدهند (${num(c.watch.length)})</summary>
       <textarea id="snWatch" rows="3" class="ltr" placeholder="Gi1/0/1&#10;Te1/1/1">${esc(c.watch.join("\n"))}</textarea>
@@ -274,7 +304,7 @@ function snEditCollect(m) {
   }).filter((o) => o.oid);
   const vsel = $("#snVendor", m).value;               // «نوع دستگاه» از MIB = عمومی + همان نوع (بدون تشخیص خودکار)
   return { vendor: vsel.startsWith("prof:") ? "generic" : vsel, profile: vsel.startsWith("prof:") ? vsel.slice(5) : "auto", collect, th, after: $("#snAfter", m).value, retries: $("#snRetries", m).value,
-    watch: $("#snWatch", m).value.split("\n").map((x) => x.trim()).filter(Boolean), oids, if_hist: $("#snIfHist", m).checked };
+    watch: $("#snWatch", m).value.split("\n").map((x) => x.trim()).filter(Boolean), oids, ...polDataCollect(m, "sn") };
 }
 
 /* ---------------------------------------------------------------- کارت */

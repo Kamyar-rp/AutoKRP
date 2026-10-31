@@ -261,7 +261,20 @@ def _m16(c):
         c.execute("ALTER TABLE mon_targets ADD COLUMN cert_days INTEGER DEFAULT 0")
 
 
-MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16]
+def _m17(c):
+    """1.34: «سیاست پایش» (بازه، دقت داده، نگهداری، چه داده‌ای) و سیاست هر هدف (NULL = سفارشی، مثل قبل)."""
+    c.execute("CREATE TABLE IF NOT EXISTS mon_policies(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, data TEXT, created REAL)")
+    have = {r[1] for r in c.execute("PRAGMA table_info(mon_targets)")}
+    if "policy_id" not in have:
+        c.execute("ALTER TABLE mon_targets ADD COLUMN policy_id INTEGER")
+    if not c.execute("SELECT COUNT(*) FROM mon_policies").fetchone()[0]:
+        from .monitor import POLICY_PRESETS
+        for name, data in POLICY_PRESETS:
+            c.execute("INSERT INTO mon_policies(name, data, created) VALUES(?, ?, ?)",
+                      (name, json.dumps(data, ensure_ascii=False), time.time()))
+
+
+MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17]
 # ستون‌هایی که مهاجرت‌ها اضافه می‌کنند؛ هر بار باز شدن بررسی می‌شود و اگر نباشد اضافه می‌شود
 # (پایگاه داده‌ای که شماره‌ی نسخه‌اش جلوتر از ستون‌هایش است، مثلاً بازگردانی فایل قدیمی، دیگر خطا نمی‌دهد)
 REQUIRED_COLUMNS = {
@@ -270,7 +283,8 @@ REQUIRED_COLUMNS = {
                     "protocol": "TEXT DEFAULT 'ssh'"},
     "history": {"user": "TEXT"},
     "ips": {c: "TEXT" for c in INTEL_FIELDS},
-    "mon_targets": {"snmp": "TEXT", "cred_id": "INTEGER", "parent_id": "INTEGER", "cert_days": "INTEGER DEFAULT 0"},
+    "mon_targets": {"snmp": "TEXT", "cred_id": "INTEGER", "parent_id": "INTEGER", "cert_days": "INTEGER DEFAULT 0",
+                    "policy_id": "INTEGER"},
     "mon_events": {"kind": "TEXT DEFAULT 'down'"},
 }
 ACTOR = threading.local()   # نام کاربر جاری هر رشته (API یا اجرای ابزار)؛ برای ستون user تاریخچه
@@ -1202,7 +1216,7 @@ class Store:
 
     # ------------------------------------------------------------ مانیتورینگ
     MON_FIELDS = ("name", "host", "kind", "port", "url", "interval", "threshold", "timeout", "slow_ms", "icon", "grp",
-                  "owner", "enabled", "notify", "notes", "snmp", "cred_id", "parent_id", "cert_days")
+                  "owner", "enabled", "notify", "notes", "snmp", "cred_id", "parent_id", "cert_days", "policy_id")
 
     def mon_targets(self):
         with self._lock:
@@ -1246,6 +1260,36 @@ class Store:
 
     # پنجره‌های نگهداری
     MAINT_FIELDS = ("name", "scope", "kind", "start", "end", "days", "t_from", "t_to", "enabled", "owner", "note")
+
+    # ---- سیاست پایش (1.34)
+    def pol_list(self):
+        with self._lock:
+            out = []
+            for r in self.db.execute("SELECT * FROM mon_policies ORDER BY id").fetchall():
+                d = dict(r)
+                try:
+                    d["data"] = json.loads(d.get("data") or "{}")
+                except ValueError:
+                    d["data"] = {}
+                out.append(d)
+            return out
+
+    def pol_save(self, pid, name, data):
+        with self._lock:
+            js = json.dumps(data, ensure_ascii=False)
+            if pid:
+                self.db.execute("UPDATE mon_policies SET name=?, data=? WHERE id=?", (name, js, int(pid)))
+                return int(pid)
+            return self.db.execute("INSERT INTO mon_policies(name, data, created) VALUES(?, ?, ?)", (name, js, time.time())).lastrowid
+
+    def pol_delete(self, pid):
+        with self._lock:
+            self.db.execute("UPDATE mon_targets SET policy_id=NULL WHERE policy_id=?", (int(pid),))
+            self.db.execute("DELETE FROM mon_policies WHERE id=?", (int(pid),))
+
+    def pol_usage(self):
+        with self._lock:
+            return {r[0]: r[1] for r in self.db.execute("SELECT policy_id, COUNT(*) FROM mon_targets WHERE policy_id IS NOT NULL GROUP BY policy_id")}
 
     def maint_list(self):
         with self._lock:

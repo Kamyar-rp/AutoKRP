@@ -631,6 +631,9 @@ def main():
     if len(sys.argv) == 3 and sys.argv[1] == "--fgtask":     # 1.29: اجرای plan تسک FortiGate در فرایند جدا
         from autokrp import fgtask_child
         sys.exit(fgtask_child.main(sys.argv[2]))
+    if len(sys.argv) == 3 and sys.argv[1] == "--snmpworker":  # 1.34: کارگر SNMP (چند هسته)
+        from autokrp import snmpworker
+        sys.exit(snmpworker.main(sys.argv[2]))
     ap = argparse.ArgumentParser()
     ap.add_argument("--demo", action="store_true", help="run with sample data (no real connections)")
     ap.add_argument("--debug", action="store_true")

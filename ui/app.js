@@ -2154,10 +2154,20 @@ function renderSettings() {
       <div class="field"><span>&nbsp;</span>${sw("monitor.sound_on_up", M.sound_on_up !== false, "پخش صدا وقتی دوباره وصل شد")}</div></div>
       <p class="hint">فایل MP3، WAV یا OGG تا ۲ مگابایت (رمزشده ذخیره می‌شود). در پس‌زمینه‌ی ویندوز فقط WAV و MP3 پخش می‌شوند؛ برای OGG صدای پیش‌فرض پخش می‌شود. هر کاربر می‌تواند در صفحه‌ی مانیتورینگ صدا را برای مرورگر خودش بی‌صدا کند.</p></div>
     <div class="form"><h3>نگهداری داده‌ی مانیتورینگ</h3><div class="form-grid">
-      ${inp("monitor.keep_detail_days", "داده‌ی دقیق: دقیقه‌ای (Ping/TCP/HTTP) و ۵ دقیقه‌ای SNMP (روز)", { type: "num", hint: "۰ = بدون محدودیت (پیش‌فرض)؛ وگرنه دست‌کم ۷ روز" })}
+      ${inp("monitor.keep_detail_days", "داده‌ی دقیق: دقیقه‌ای (Ping/TCP/HTTP) و ۱ یا ۵ دقیقه‌ای SNMP (روز)", { type: "num", hint: "۰ = بدون محدودیت (پیش‌فرض)؛ وگرنه دست‌کم ۷ روز. هدف‌های SNMP با «سیاست پایش» نگهداری خود سیاست را دارند." })}
       ${inp("monitor.keep_hour_days", "داده‌ی ساعتی و سابقه‌ی قطعی‌ها (روز)", { type: "num", hint: "۰ = بدون محدودیت (پیش‌فرض)؛ وگرنه دست‌کم ۳۰ روز" })}</div>
       <p class="hint">به‌طور پیش‌فرض هیچ داده‌ای پاک نمی‌شود. همه رمزشده (SNMP فشرده) در پوشه‌ی داده‌ی برنامه، فایل جدا برای هر روز یا ماه؛ نمودار فقط فایل‌های همان بازه را می‌خواند، پس حجم زیاد برنامه را کند نمی‌کند. پورت‌های خاموش SNMP ذخیره نمی‌شوند (مگر پیگیری شوند).</p>
       <div id="monStore" class="sum" style="margin-top:8px"><span class="muted">در حال خواندن حجم…</span></div></div>
+    ${isAdmin() ? `<div class="form"><h3>کارایی و محل ذخیره‌ی مانیتورینگ</h3><div class="form-grid">
+      <label class="field"><span>کارگرهای SNMP (فرایند جدا، هر کدام یک هسته)</span><select data-path="monitor.snmp_workers">
+        ${[["auto", "خودکار (هسته‌ها منهای یک، حداکثر ۸)"], ["0", "خاموش (درون خود برنامه، یک هسته)"], ...Array.from({ length: 16 }, (_, i) => [String(i + 1), `${num(i + 1)} کارگر`])]
+          .map(([v, n]) => `<option value="${v}" ${String(M.snmp_workers === undefined ? "auto" : M.snmp_workers) === v ? "selected" : ""}>${n}</option>`).join("")}</select>
+        <small class="hint">فقط وقتی هدف SNMP فعالی هست اجرا می‌شوند. هر کارگر حدود ۵۰ مگابایت RAM می‌گیرد؛ با بسته شدن برنامه بسته می‌شوند.</small></label>
+      <label class="field"><span>محل ذخیره‌ی داده‌ی نمودارها</span><select data-path="monitor.ts_backend">
+        <option value="file" ${(M.ts_backend || "file") === "file" ? "selected" : ""}>فایل‌های رمزشده در پوشه‌ی داده (پیش‌فرض)</option>
+        <option value="mysql" ${M.ts_backend === "mysql" ? "selected" : ""}>MySQL / MariaDB (همان پایگاه داده‌ی برنامه)</option></select>
+        <small class="hint">فقط وقتی پایگاه داده‌ی برنامه MySQL است. داده‌ی قبلی خودکار و در پس‌زمینه به MySQL منتقل می‌شود؛ اگر MySQL در دسترس نباشد داده موقتاً در فایل نوشته و بعداً منتقل می‌شود. قالب مثل حالت پایگاه داده: «خوانا» = JSON خوانا، «رمز ستون‌ها» و «رمز کامل» = فشرده و رمزشده.</small></label></div>
+      <div id="monCap" class="sum" style="margin-top:8px"><span class="muted">در حال خواندن…</span></div></div>` : ""}
     <div class="form" id="evSetBox"></div>
     <div class="form" id="mibSetBox"></div>
     <div class="form"><h3>سلامت سرور</h3><div class="form-grid">
@@ -2181,10 +2191,16 @@ function renderSettings() {
       const el = $("#monStore"); if (!el || !r.ok) { if (el) el.hidden = true; return; }
       const tot = r.minute + r.hour + r.snmp_detail + r.snmp_hour;
       const F = (n) => fmtBytes(n);     // هر خط یک جمله‌ی کامل بدون تگ (ترجمه‌ی رابط الگوی کامل می‌خواهد)
-      el.innerHTML = `<div>${esc(`حجم داده‌های مانیتورینگ: ${F(tot)} (دقیقه‌ای ${F(r.minute)} · ساعتی ${F(r.hour)} · SNMP ۵ دقیقه‌ای ${F(r.snmp_detail)} · SNMP ساعتی ${F(r.snmp_hour)})`)}</div>
+      const pols = Object.entries(r.by_policy || {}).map(([k, v]) => {
+        const p = (MON.policies || []).find((x) => String(x.id) === k);
+        return `${k === "custom" ? "سفارشی" : p ? p.name : "سیاست " + k}: ${F(v.bytes)} (${num(v.targets)} هدف)`;
+      });
+      el.innerHTML = `<div>${esc(`حجم داده‌های مانیتورینگ: ${F(tot)} (دقیقه‌ای ${F(r.minute)} · ساعتی ${F(r.hour)} · SNMP دقیق ${F(r.snmp_detail)} · SNMP ساعتی ${F(r.snmp_hour)})`)}</div>
+        ${pols.length ? `<div>${esc(`حجم SNMP به تفکیک سیاست پایش: ${pols.join(" · ")}`)}</div>` : ""}
         ${r.per_day ? `<div>${esc(`رشد روز گذشته: ${F(r.per_day)} در روز (حدود ${F(r.per_day * 365)} در سال با همین تعداد هدف)`)}</div>` : ""}
         <div>${esc(`پایگاه داده: ${F(r.db)} · پوشه‌ی اجراها: ${F(r.runs)}`)}</div>${r.oldest ? `<div>${esc(`قدیمی‌ترین داده‌ی مانیتورینگ: ${r.oldest}`)}</div>` : ""}`;
     });
+    if ($("#monCap", body)) monCapacityBox($("#monCap", body));
     $$("[data-snd-play]", body).forEach((b) => (b.onclick = () => { const m = MON.muted; MON.muted = false; monPlay(b.dataset.sndPlay, 1).finally(() => (MON.muted = m)); }));
     $$("[data-snd-up]", body).forEach((b) => (b.onclick = () => $(`[data-snd-file="${b.dataset.sndUp}"]`, body).click()));
     $$("[data-snd-file]", body).forEach((f) => (f.onchange = () => monSoundUpload(f.dataset.sndFile, f)));

@@ -171,7 +171,8 @@ function loadMon() {
         if (ic && ic.ok) MON.icons = ic.icons;
         if (!r.ok) { toast(r.error, "error"); return; }
         monLoadedAt = Date.now();
-        Object.assign(MON, { targets: r.targets, cfg: r.cfg, canAdd: r.can_add, admin: r.admin, desktop: r.desktop, max: r.max });
+        Object.assign(MON, { targets: r.targets, cfg: r.cfg, canAdd: r.can_add, admin: r.admin, desktop: r.desktop, max: r.max,
+          policies: r.policies || [], capacity: r.capacity || null });
         if ((MON.tab || "targets") === "targets") renderMon(); else if (!$("#monTabs")) monTabsRender();
       } while (monLoadAgain);
     } finally { monLoading = null; }
@@ -198,7 +199,7 @@ function monTabsRender() {
 function renderMon() {
   const ts = MON.targets, cnt = (s) => ts.filter((t) => t.status === s).length;
   $("#monActions").innerHTML = `${MON.canAdd ? `<button class="btn primary" id="monAdd">+ هدف تازه</button><button class="btn" id="monSnmpP">اعتبارنامه‌های SNMP</button>` : ""}
-    <button class="btn" id="monMaint">پنجره‌های نگهداری</button><button class="btn" id="monNoc" title="نمای تمام‌صفحه برای مانیتور دیواری">نمای NOC</button>
+    <button class="btn" id="monMaint">پنجره‌های نگهداری</button>${MON.admin ? `<button class="btn" id="monPol" title="بازه، دقت داده، نگهداری و این‌که چه داده‌ای جمع شود">سیاست‌های پایش</button>` : ""}<button class="btn" id="monNoc" title="نمای تمام‌صفحه برای مانیتور دیواری">نمای NOC</button>
     <button class="btn ghost" id="monMute">${MON.muted ? "صدا: خاموش" : "صدا: روشن"}</button>
     <button class="btn ghost" id="monTest" title="پخش صدای قطعی برای امتحان">امتحان صدا</button>
     ${WEB && "Notification" in window && Notification.permission === "default" ? `<button class="btn ghost" id="monNotif">اعلان مرورگر</button>` : ""}
@@ -212,7 +213,7 @@ function renderMon() {
       <span class="mon-chip err"><b>${num(cnt("down"))}</b> قطع</span><span class="mon-chip warn"><b>${num(cnt("slow"))}</b> کند</span>
       ${cnt("unreachable") ? `<span class="mon-chip unr"><b>${num(cnt("unreachable"))}</b> در دسترس نیست (به‌خاطر قطع پدر)</span>` : ""}
       ${ts.some((t) => t.maint) ? `<span class="mon-chip mnt"><b>${num(ts.filter((t) => t.maint).length)}</b> در نگهداری</span>` : ""}
-      <span class="mon-chip"><b>${num(cnt("paused") + cnt("unknown"))}</b> متوقف یا در حال بررسی</span></div>
+      <span class="mon-chip"><b>${num(cnt("paused") + cnt("unknown"))}</b> متوقف یا در حال بررسی</span></div>${monCapBanner()}
     ${ts.length ? order.map((g) => `<div class="mon-group"><h3>${esc(g || "بدون گروه")}</h3><div class="mon-grid">${groups[g].map((t) => {
       const st = MON_ST[t.status] || MON_ST.unknown;
       const lv = t.snmp_sum && t.status !== "down" && t.status !== "paused" ? t.snmp_sum.level : "";
@@ -228,6 +229,7 @@ function renderMon() {
   if ($("#monAdd")) $("#monAdd").onclick = () => monEdit();
   if ($("#monSnmpP")) $("#monSnmpP").onclick = () => snmpProfiles();
   $("#monMaint").onclick = () => monMaintList();
+  if ($("#monPol")) $("#monPol").onclick = () => monPolicies();
   $("#monNoc").onclick = () => nocOpen();
   $("#monMute").onclick = () => monSetMute(!MON.muted);
   $("#monTest").onclick = () => { const m = MON.muted; MON.muted = false; monPlay("down", 1).finally(() => (MON.muted = m)); };
@@ -308,6 +310,8 @@ async function monEdit(t0) {
     body: `<div class="form-grid">
       <label class="field"><span>نام</span><input id="meName" value="${esc(t.name || "")}" placeholder="مثلاً روتر مرکزی"></label>
       <div class="field"><span>روش بررسی</span><div class="seg" id="meKind">${[["ping", "Ping"], ["tcp", "پورت TCP"], ["http", "HTTP(S)"], ["snmp", "SNMP"]].map(([v, n]) => `<button type="button" data-v="${v}" class="${t.kind === v ? "on" : ""}">${n}</button>`).join("")}</div></div>
+      <label class="field"><span>سیاست پایش</span><select id="mePol"><option value="">سفارشی (تنظیمات همین هدف)</option>${(MON.policies || []).map((p) => `<option value="${p.id}" ${Number(t.policy_id) === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>
+        <small class="hint">بازه، تعداد شکست، دقت و نگهداری داده و این‌که چه داده‌ای خوانده شود از سیاست می‌آید.</small></label>
       <label class="field" id="meHostW"><span>IP یا نام میزبان</span><input id="meHost" class="ltr" value="${esc(t.kind === "http" ? "" : t.host || "")}" placeholder="192.168.1.1"></label>
       <label class="field" id="mePortW"><span>پورت</span><input id="mePort" class="ltr" value="${esc(t.port || "")}" placeholder="22, 443, 3389…"></label>
       <div class="field wide" id="meSnmpW">${snEditHtml(t)}</div>
@@ -336,6 +340,14 @@ async function monEdit(t0) {
       }));
       vis();
       snEditBind(m, t);
+      const polVis = () => {      // 1.34: با سیاست، فیلدهای همان سیاست غیرفعال و مقدارشان از سیاست
+        const pid = $("#mePol", m).value, p = (MON.policies || []).find((x) => String(x.id) === pid);
+        [$("#meInt", m), $("#meThr", m)].forEach((x) => (x.disabled = !!p));
+        $$(".sn-polpart", m).forEach((d) => { d.hidden = !!p; });
+        const note = $("#snPolNote", m);
+        if (note) { note.hidden = !p; note.textContent = p ? `بازه، تعداد شکست، تلاش دوباره، چه چیزهایی خوانده شود و دقت و نگهداری داده از سیاست «${p.name}» می‌آید.` : ""; }
+      };
+      $("#mePol", m).onchange = polVis; polVis();
       const bindPicks = () => {
         $$("[data-ic]", m).forEach((b) => (b.onclick = () => { icon = b.dataset.ic; $$("[data-ic]", m).forEach((x) => x.classList.toggle("on", x === b)); }));
         $("#meUp", m).onclick = () => $("#meFile", m).click();
@@ -355,7 +367,7 @@ async function monEdit(t0) {
         const body = { id: t.id, name: $("#meName", m).value.trim(), kind: k, host: $("#meHost", m).value.trim(), port: $("#mePort", m).value.trim(),
           url: $("#meUrl", m).value.trim(), cert_days: $("#meCert", m).value || 0, interval: $("#meInt", m).value, threshold: $("#meThr", m).value, timeout: $("#meTo", m).value,
           slow_ms: $("#meSlow", m).value, grp: $("#meGrp", m).value.trim(), icon, notify: $("#meNotify", m).checked, enabled: t.enabled !== 0, notes: t.notes || "",
-          parent_id: $("#meParent", m).value || null };
+          parent_id: $("#meParent", m).value || null, policy_id: $("#mePol", m).value || null };
         if (k === "snmp") { body.snmp = snEditCollect(m); body.cred_id = $("#snCred", m).value; }
         const r = await api("mon_save", body);
         if (!r.ok) return toast(r.error, "error");
@@ -566,4 +578,93 @@ async function monMaintEdit(w0) {
         toast("ذخیره شد", "ok"); close(true);
       };
     } });
+}
+
+/* ---------------------------------------------------------------- 1.34: ظرفیت و سیاست‌های پایش */
+function monCapBanner() {
+  const c = MON.capacity;
+  if (!c) return "";
+  const msgs = [];
+  if (c.degraded) msgs.push(c.degraded);
+  if (c.late > 0 && c.late >= Math.max(2, c.targets * 0.05))
+    msgs.push(`${num(c.late)} هدف از زمان بررسی‌شان عقب افتاده‌اند (لازم: ${num(Math.round(c.need_per_min))} بررسی در دقیقه، انجام‌شده: ${num(c.per_min)}). بازه‌ی بررسی را بیشتر کنید یا کارگرهای SNMP را در تنظیمات ← مانیتورینگ زیاد کنید.`);
+  return msgs.length ? `<div class="mon-cap">${msgs.map((x) => `<div>${esc(x)}</div>`).join("")}</div>` : "";
+}
+function polSummary(d) {
+  const keep = (v) => (v === null || v === undefined ? "مثل کلی" : v === 0 ? "بی‌پایان" : `${num(v)} روز`);
+  return `هر ${monDur(d.interval)} · دقت ${num(Number(d.res) === 60 ? 1 : 5)} دقیقه · نگهداری دقیق ${keep(d.keep_d)}، ساعتی ${keep(d.keep_h)}`;
+}
+async function monPolicies() {
+  const r = await api("mon_pol_list");
+  if (!r.ok) return toast(r.error, "error");
+  const res = await openModal({ title: "سیاست‌های پایش", wide: true,       // یک پنجره در هر لحظه (مثل پنجره‌های نگهداری)
+    body: `<p class="hint">هر هدف یا یک سیاست دارد یا «سفارشی» است. با تغییر یک سیاست، همه‌ی هدف‌های آن از بررسی بعد تغییر می‌کنند. نگهداری و دقت فقط برای SNMP جداست؛ داده‌ی Ping/TCP/HTTP مثل تنظیمات کلی نگه داشته می‌شود.</p>
+      <div id="polList"><div class="table-wrap inner"><table class="grid"><thead><tr><th>نام</th><th>تنظیمات</th><th>هدف‌ها</th><th class="nosort"></th></tr></thead><tbody>
+      ${r.policies.map((p) => `<tr><td><b>${esc(p.name)}</b></td><td>${esc(polSummary(p.data))}</td><td>${num(p.used)}</td>
+        <td class="row" style="gap:4px"><button class="btn sm" data-pe="${p.id}">ویرایش</button><button class="btn sm danger-ghost" data-pd="${p.id}" ${p.used ? "disabled" : ""} title="${p.used ? "اول سیاست هدف‌هایش را عوض کنید" : ""}">حذف</button></td></tr>`).join("")}</tbody></table></div></div>`,
+    foot: `<button class="btn ghost" data-r="0">بستن</button><button class="btn primary" id="polAdd">+ سیاست تازه</button>`,
+    onOpen: (m, close) => {
+      $("[data-r='0']", m).onclick = () => close(null);
+      $("#polAdd", m).onclick = () => close({ edit: null });
+      $$("[data-pe]", m).forEach((b) => (b.onclick = () => close({ edit: r.policies.find((x) => x.id === Number(b.dataset.pe)) })));
+      $$("[data-pd]", m).forEach((b) => (b.onclick = () => close({ del: r.policies.find((x) => x.id === Number(b.dataset.pd)) })));
+    } });
+  if (!res) return;
+  if (res.del) {
+    if (await confirm2({ title: "حذف سیاست", body: `<p>سیاست «${esc(res.del.name)}» حذف شود؟</p>`, confirm: "حذف", danger: true })) {
+      const x = await api("mon_pol_delete", res.del.id);
+      if (!x.ok) toast(x.error, "error"); else { toast("حذف شد", "ok"); loadMon(); }
+    }
+    return monPolicies();
+  }
+  if (await monPolEdit(res.edit)) loadMon();
+  monPolicies();
+}
+async function monPolEdit(p0) {
+  const d = Object.assign({ interval: 300, threshold: 3, retries: 1, res: 300, keep_d: null, keep_h: null, ports: "all",
+    collect: { cpu: 1, mem: 1, disk: 1, env: 1, if: 1 }, counters: { traffic: 1, err: 1, disc: 1 }, hist: { sys: 1, if: 1, oid: 1 } }, (p0 && p0.data) || {});
+  const col = (k) => (d.collect[k] === undefined ? true : !!d.collect[k]);
+  return openModal({ title: p0 ? `ویرایش سیاست «${p0.name}»` : "سیاست پایش تازه", wide: true,
+    body: `<div class="form-grid">
+      <label class="field"><span>نام</span><input id="peName" value="${esc((p0 && p0.name) || "")}" placeholder="مثلاً سوییچ‌های هسته"></label>
+      <label class="field"><span>هر چند ثانیه بررسی شود</span><input id="peInt" type="number" min="10" value="${esc(d.interval)}"><small class="hint">برای SNMP دست‌کم ۳۰ ثانیه اعمال می‌شود.</small></label>
+      <label class="field"><span>قطع پس از چند شکست پشت‌سرهم</span><input id="peThr" type="number" min="1" max="20" value="${esc(d.threshold)}"></label>
+      <label class="field"><span>تلاش دوباره‌ی هر درخواست SNMP</span><input id="peRet" type="number" min="0" max="5" value="${esc(d.retries)}"></label></div>
+      <div class="field"><span>SNMP: چه چیزهایی خوانده شود</span><div class="row" style="gap:14px;flex-wrap:wrap">${SN_SECT.map(([k, n]) => `<label class="chk"><input type="checkbox" data-pecol="${k}" ${col(k) ? "checked" : ""}>${esc(n)}</label>`).join("")}</div></div>
+      ${polDataHtml(d, "pe")}`,
+    foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">ذخیره</button>`,
+    onOpen: (m, close) => {
+      $("[data-r='0']", m).onclick = () => close(false);
+      $("[data-r='1']", m).onclick = async () => {
+        const collect = {}; $$("[data-pecol]", m).forEach((c) => (collect[c.dataset.pecol] = c.checked ? 1 : 0));
+        const data = { interval: $("#peInt", m).value, threshold: $("#peThr", m).value, retries: $("#peRet", m).value, collect, ...polDataCollect(m, "pe") };
+        const r = await api("mon_pol_save", { id: p0 && p0.id, name: $("#peName", m).value.trim(), data });
+        if (!r.ok) return toast(r.error, "error");
+        toast("ذخیره شد", "ok"); close(true);
+      };
+    } });
+}
+
+/* تنظیمات ← مانیتورینگ: وضعیت کارگرها، ظرفیت و محل ذخیره (1.34) */
+async function monCapacityBox(el) {
+  const r = await api("mon_capacity");
+  if (!r.ok) { el.hidden = true; return; }
+  const w = r.workers, ts = r.ts || {}, my = ts.mysql, mg = ts.migrate || {};
+  const lines = [`بررسی‌ها: ${num(r.per_min)} در دقیقه انجام شد؛ لازم برای همه‌ی هدف‌ها حدود ${num(Math.round(r.need_per_min))} در دقیقه. هدف‌های عقب‌افتاده: ${num(r.late)} از ${num(r.targets)}. هسته‌های CPU سیستم: ${num(r.cpu_count || 0)}.`];
+  if (w) {
+    lines.push(`کارگرهای SNMP: ${num(w.n)} — خوانده‌شده ${num(w.done)}، اجراشده درون برنامه ${num(w.fallback)}، اجرای دوباره ${num(w.restarts)}، بازیافت ${num(w.recycled)}، timeout ${num(w.timeouts)}.`);
+    if (w.degraded) lines.push(w.degraded);
+  } else lines.push("کارگرهای SNMP: خاموش (هدف SNMP فعالی نیست یا تنظیم ۰ است؛ خواندن درون خود برنامه).");
+  lines.push(ts.target === "mysql" ? "محل ذخیره‌ی نمودارها: MySQL" : "محل ذخیره‌ی نمودارها: فایل‌های محلی");
+  if (my) {
+    if (my.error) lines.push(`خطای MySQL: ${my.error}`);
+    lines.push(`MySQL: در صف ${num(my.queue)}، نوشته‌شده ${num(my.written)}، موقتاً در فایل ${num(my.spilled)}، پارتیشن‌بندی ${my.partitioned && my.partitioned.akrp_ts_d ? "دارد (پاک کردن سریع)" : "ندارد (پاک کردن با DELETE)"}.`);
+  }
+  if (ts.target === "mysql") lines.push(mg.running ? `انتقال فایل‌های محلی به MySQL در جریان است: ${num(mg.done)} از ${num(mg.files)} فایل.`
+    : `فایل‌های محلی منتظر انتقال: ${num(ts.local_files || 0)}${mg.error ? ` (آخرین خطا: ${mg.error})` : ""}.`);
+  el.innerHTML = lines.map((x) => `<div>${esc(x)}</div>`).join("") + (w ? `<div class="table-wrap inner" style="margin-top:6px"><table class="grid cap-tbl"><thead><tr><th>کارگر</th><th>PID</th><th>وضعیت</th><th>در جریان</th><th>خوانده‌شده</th><th>RAM</th></tr></thead><tbody>
+    ${w.workers.map((x) => `<tr><td>${num(x.slot + 1)}</td><td class="ltr">${esc(x.pid || "—")}</td><td>${esc(x.state === "ok" ? "فعال" : x.state === "starting" ? "در حال شروع" : "اجرای دوباره")}</td><td>${num(x.pending || 0)}</td><td>${num(x.polls || 0)}</td><td>${x.mem ? fmtBytes(x.mem) : "—"}</td></tr>`).join("")}</tbody></table></div>` : "")
+    + (ts.target === "mysql" && !mg.running && ts.local_files ? `<button class="btn sm" id="monMig" style="margin-top:6px">انتقال الان</button>` : "");
+  const b = $("#monMig", el);
+  if (b) b.onclick = async () => { const x = await api("mon_ts_migrate"); if (!x.ok) return toast(x.error, "error"); toast("انتقال در پس‌زمینه شروع شد", "ok"); setTimeout(() => monCapacityBox(el), 2000); };
 }

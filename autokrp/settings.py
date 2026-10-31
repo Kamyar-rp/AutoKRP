@@ -129,7 +129,9 @@ DEFAULTS = {
                 "quiet": {"enabled": False, "from": "23:00", "to": "07:00"},
                 "close_action": "ask", "show_window": True, "server_sound": False,
                 # نگهداری داده (روز؛ ۰ = بدون محدودیت، پیش‌فرض از 1.23.1): دقیقه‌ای/۵ دقیقه‌ای SNMP، و ساعتی + قطعی‌ها
-                "keep_detail_days": 0, "keep_hour_days": 0},
+                "keep_detail_days": 0, "keep_hour_days": 0,
+                # 1.34: کارگرهای SNMP (auto = هسته‌ها منهای یک، حداکثر ۸؛ ۰ = درون برنامه) و محل سری زمانی (file | mysql)
+                "snmp_workers": "auto", "ts_backend": "file"},
     # Trap و Syslog (1.25؛ پیش‌فرض خاموش؛ ادمین در تنظیمات ← مانیتورینگ)
     "events": {"trap_enabled": False, "trap_port": 162, "syslog_enabled": False, "syslog_port": 514, "syslog_tcp": True,
                "bind": "0.0.0.0", "allow_unknown": False, "sources": [], "communities": [], "min_store": 6,  # nosec B104 — گیرنده روی شبکه

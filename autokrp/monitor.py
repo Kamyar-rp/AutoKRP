@@ -30,7 +30,8 @@ KINDS = ("ping", "tcp", "http", "snmp")
 ICONS = ("server", "router", "switch", "firewall", "internet", "pc", "camera", "printer", "wifi", "storage", "phone", "other")
 MIN_INTERVAL = 10
 MIN_INTERVAL_SNMP = 30      # سند Cisco و MikroTik: poll پرتکرار بار CPU دستگاه را بالا می‌برد
-MAX_TARGETS = 200
+MAX_TARGETS = 2000          # 1.34: با کارگرهای SNMP و پخش زمان poll (پیش از آن ۲۰۰)
+WORKER_THREADS = 48
 # 1.23.1: نگهداری بی‌پایان به‌طور پیش‌فرض (خواسته‌ی کاربر: داده‌ی قبلی پاک نشود). ۰ = بدون محدودیت؛
 # ادمین می‌تواند در تنظیمات ← مانیتورینگ سقف بگذارد (keep_detail_days برای دقیقه‌ای/۵ دقیقه‌ای، keep_hour_days برای ساعتی و قطعی‌ها)
 DETAIL_MIN_DAYS, HOUR_MIN_DAYS, KEEP_MAX_DAYS = 7, 30, 36500
@@ -46,6 +47,63 @@ def keep_days(cfg):
             return 0
         return 0 if v <= 0 else max(lo, min(KEEP_MAX_DAYS, v))
     return one("keep_detail_days", DETAIL_MIN_DAYS), one("keep_hour_days", HOUR_MIN_DAYS)
+# 1.34: «سیاست پایش» — بازه، دقت داده‌ی دقیق، نگهداری و این‌که چه داده‌ای جمع/ذخیره شود؛ هدف بدون سیاست = سفارشی
+POLICY_PRESETS = [
+    ("حساس", {"interval": 60, "threshold": 2, "retries": 1, "res": 60, "keep_d": 30, "keep_h": 730,   # دقت ۱ دقیقه: ~۳٫۵MB هر دستگاه در روز
+              "collect": {"cpu": 1, "mem": 1, "disk": 1, "env": 1, "if": 1}, "counters": {"traffic": 1, "err": 1, "disc": 1},
+              "ports": "all", "hist": {"sys": 1, "if": 1, "oid": 1}}),
+    ("معمولی", {"interval": 300, "threshold": 3, "retries": 1, "res": 300, "keep_d": 30, "keep_h": 365,
+                "collect": {"cpu": 1, "mem": 1, "disk": 1, "env": 1, "if": 1}, "counters": {"traffic": 1, "err": 1, "disc": 1},
+                "ports": "all", "hist": {"sys": 1, "if": 1, "oid": 1}}),
+    ("سبک", {"interval": 600, "threshold": 3, "retries": 1, "res": 300, "keep_d": 7, "keep_h": 180,
+             "collect": {"cpu": 1, "mem": 1, "disk": 0, "env": 0, "if": 0}, "counters": {"traffic": 0, "err": 0, "disc": 0},
+             "ports": "none", "hist": {"sys": 1, "if": 0, "oid": 0}}),
+]
+POLICY_MAX = 50
+
+
+def clean_policy(p):
+    """اعتبارسنجی داده‌ی یک سیاست پایش."""
+    from .snmp import clean_pol_fields
+    p = p if isinstance(p, dict) else {}
+
+    def num(k, lo, hi, d):
+        try:
+            v = int(p.get(k) if p.get(k) not in (None, "") else d)
+        except (TypeError, ValueError):
+            raise MonitorError(f"مقدار «{k}» نامعتبر است.")
+        if not lo <= v <= hi:
+            raise MonitorError(f"مقدار «{k}» باید بین {lo} و {hi} باشد.")
+        return v
+    col = p.get("collect") if isinstance(p.get("collect"), dict) else {}
+    try:
+        ext = clean_pol_fields(p)
+    except SnmpError as e:
+        raise MonitorError(str(e))
+    return {"interval": num("interval", MIN_INTERVAL, 86400, 300), "threshold": num("threshold", 1, 20, 3),
+            "retries": num("retries", 0, 5, 1), "collect": {k: 1 if col.get(k, True) else 0 for k in ("cpu", "mem", "disk", "env", "if")},
+            **ext}
+
+
+def effective(t, pol):
+    """هدف با مقدارهای سیاست (اگر دارد). کلیدهای «_cfg» (تنظیم SNMP نهایی) و «_policy» اضافه می‌شوند."""
+    e = dict(t)
+    if pol:
+        lo = MIN_INTERVAL_SNMP if t.get("kind") == "snmp" else MIN_INTERVAL
+        e["interval"] = max(lo, int(pol["interval"]))
+        e["threshold"] = int(pol["threshold"])
+    e["_policy"] = pol.get("_name", "") if pol else ""
+    if t.get("kind") == "snmp":
+        from .snmp import load_cfg
+        cfg = load_cfg(t)
+        if pol:
+            for k in ("retries", "collect", "res", "keep_d", "keep_h", "counters", "ports", "hist"):
+                cfg[k] = pol[k]
+            cfg["if_hist"] = cfg["hist"]["if"]
+        e["_cfg"] = cfg
+    return e
+
+
 ALERT_KEEP = 200
 _HOST_RE = re.compile(r"^[A-Za-z0-9._:\-\[\]%]+$")
 _RTT_RE = re.compile(rb"[=<]\s*(\d+(?:[.,]\d+)?)\s*ms", re.I)
@@ -193,6 +251,15 @@ def maint_applies(w, t):
 
 # ---------------------------------------------------------------- بررسی‌ها
 def check_ping(host, timeout):
+    if os.name == "nt":                      # 1.34: IcmpSendEcho (بدون اجرای ping.exe)؛ IPv6/خطا ← ping.exe
+        from . import icmp
+        try:
+            r = icmp.ping(host, timeout)
+        except Exception:  # noqa
+            log.exception("icmp ping")
+            r = None
+        if r is not None:
+            return r
     exe = netscan._ping_exe()
     if not exe:
         return False, None, "ping در دسترس نیست"
@@ -295,11 +362,17 @@ class Monitor:
         self._busy = set()
         self._lock = threading.Lock()
         self._stop = threading.Event()
-        self._pool = ThreadPoolExecutor(max_workers=24, thread_name_prefix="mon")
+        self._pool = ThreadPoolExecutor(max_workers=WORKER_THREADS, thread_name_prefix="mon")
         self._thread = None
         self._last_purge = 0
         self._maint = None                  # کش پنجره‌های نگهداری
         self.snmp = SnmpRuntime(settings, store, demo)
+        self.ts = self.snmp.ts              # 1.34: سری زمانی (فایل محلی یا MySQL)
+        self._policies = None
+        self._done = deque(maxlen=20000)    # زمان پایان بررسی‌ها (ظرفیت: بررسی در دقیقه)
+        self._cfg_at = 0
+        self._ts_sig = None
+        self._mig_at = 0
         from .devevents import DevEvents
         self.events = DevEvents(self)       # Trap و Syslog (1.25)
         from .topology import Topology
@@ -340,9 +413,17 @@ class Monitor:
         except Exception:
             log.exception("monitor flush")
         self._pool.shutdown(wait=False, cancel_futures=True)
+        pool, self.snmp.pool = self.snmp.pool, None
+        if pool is not None:
+            pool.stop()
+        try:
+            self.ts.flush()
+        except Exception:
+            log.exception("tsdb flush")
 
     def reload(self):
         self._targets = None
+        self._policies = None
         self._maint = None
         if hasattr(self, "events"):
             self.events.invalidate()
@@ -383,10 +464,53 @@ class Monitor:
                 return "wait", p.get("name") or p["host"]
         return None
 
+    def policies(self):
+        if self._policies is None:
+            out = {}
+            for p in self.store.pol_list():
+                try:
+                    out[p["id"]] = {**clean_policy(p["data"]), "_name": p["name"]}
+                except MonitorError:
+                    continue
+            self._policies = out
+        return self._policies
+
     def targets(self):
         if self._targets is None:
-            self._targets = {t["id"]: t for t in self.store.mon_targets()}
+            pols = self.policies()
+            self._targets = {t["id"]: effective(t, pols.get(t.get("policy_id"))) for t in self.store.mon_targets()}
         return self._targets
+
+    def keep_for(self, t):
+        """(روز داده‌ی دقیق، روز ساعتی) مؤثر یک هدف؛ ۰ = بدون محدودیت. فقط SNMP سیاست جدا دارد."""
+        kd, kh = keep_days(self.settings.get("monitor"))
+        cfg = t.get("_cfg") or {}
+        if cfg.get("keep_d") is not None:
+            kd = cfg["keep_d"]
+        if cfg.get("keep_h") is not None:
+            kh = cfg["keep_h"]
+        return kd, kh
+
+    # ---- زمان‌بندی (1.34): هر هدف فاز ثابت خودش را در بازه دارد تا بررسی‌ها پخش شوند (نه همه با هم)
+    @staticmethod
+    def _iv(t):
+        return max(MIN_INTERVAL_SNMP if t.get("kind") == "snmp" else MIN_INTERVAL, int(t.get("interval") or 30))
+
+    @staticmethod
+    def _phase(t, iv):
+        return ((int(t["id"]) * 2654435761) % 4294967296) / 4294967296 * iv
+
+    def _next_slot(self, t, now):
+        iv = self._iv(t)
+        ph = self._phase(t, iv)
+        nxt = (int((now - ph) // iv) + 1) * iv + ph
+        if nxt - now < iv * 0.5:
+            nxt += iv
+        return nxt
+
+    def _first(self, t, now):
+        """اولین بررسی پس از شروع/ذخیره: پخش در حداکثر ۳۰ ثانیه."""
+        return now + self._phase(t, min(self._iv(t), 30))
 
     def _active(self):
         v = self.settings.vault
@@ -397,6 +521,9 @@ class Monitor:
     def _loop(self):
         while not self._stop.wait(1.0):
             try:
+                if time.time() - self._cfg_at > 10:
+                    self._cfg_at = time.time()
+                    self._sync_cfg()
                 if not self._active():
                     if self._ev_sig:
                         self.events.stop()
@@ -406,21 +533,27 @@ class Monitor:
                 for tid, t in list(self.targets().items()):
                     if not t.get("enabled"):
                         continue
-                    st = self.state.setdefault(tid, {"status": "unknown", "since": now, "fails": 0, "next": now, "rtt": None,
-                                                     "err": "", "last": 0, "checks": 0})
+                    st = self.state.setdefault(tid, {"status": "unknown", "since": now, "fails": 0, "next": self._first(t, now),
+                                                     "rtt": None, "err": "", "last": 0, "checks": 0})
                     mw = self.in_maint(t, now)
                     if bool(mw) != bool(st.get("maint")):
                         self._maint_change(t, st, mw, now)
                     if now >= st["next"] and tid not in self._busy:
                         self._busy.add(tid)
-                        st["next"] = now + max(MIN_INTERVAL_SNMP if t.get("kind") == "snmp" else MIN_INTERVAL, int(t.get("interval") or 30))
-                        self._pool.submit(self._run, dict(t))
+                        st["next"] = self._next_slot(t, now)
+                        if t.get("kind") == "snmp":
+                            self._snmp_submit(t)
+                        else:
+                            self._pool.submit(self._run, dict(t))
                 self._events_tick()
                 self._flush()
                 self.snmp.flush(True)
                 if now - self._last_purge > 3600:
                     self._last_purge = now
                     self._purge()
+                if self.ts.target == "mysql" and now - self._mig_at > 900:
+                    self._mig_at = now          # فایل‌های محلی (داده‌ی قبلی یا نوشته‌شده هنگام قطعی MySQL) ← MySQL
+                    threading.Thread(target=self.ts.migrate, args=(self._stop,), name="tsdb-migrate", daemon=True).start()
             except Exception:
                 log.exception("monitor loop")
 
@@ -453,6 +586,87 @@ class Monitor:
             self._result(t, False, None, str(e)[:120])
         finally:
             self._busy.discard(tid)
+            self._done.append(time.time())
+
+    # ---- SNMP بدون اشغال نخ (کارگرها یا حلقه‌ی asyncio)
+    def _snmp_submit(self, t):
+        tid = t["id"]
+
+        def done(cfg, r):
+            try:
+                self._pool.submit(self._snmp_done, t, cfg, r)
+            except RuntimeError:          # در حال بستن برنامه
+                self._busy.discard(tid)
+        try:
+            self.snmp.submit(t, done)
+        except Exception:
+            log.exception("snmp submit")
+            self._busy.discard(tid)
+
+    def _snmp_done(self, t, cfg, r):
+        events = []
+        try:
+            if isinstance(r, Exception):
+                ok, rtt, err = False, None, str(r)
+            else:
+                ok, rtt, err, events = self.snmp.finish(t, cfg, r)
+            self._result(t, ok, rtt, err)
+            if events:
+                self._snmp_events(t, events)
+        except Exception as e:
+            log.exception("monitor snmp result")
+            self._result(t, False, None, str(e)[:120])
+        finally:
+            self._busy.discard(t["id"])
+            self._done.append(time.time())
+
+    def _sync_cfg(self):
+        """کارگرهای SNMP و محل ذخیره‌ی سری زمانی مطابق تنظیمات (هر ۱۰ ثانیه)."""
+        c = self.settings.get("monitor") or {}
+        from . import snmppool
+        has_snmp = any(t.get("kind") == "snmp" and t.get("enabled") for t in self.targets().values())
+        n = 0 if (self.demo or not has_snmp or not self._active()) else snmppool.want_count(c.get("snmp_workers", "auto"))
+        cur = self.snmp.pool
+        if (cur.n if cur else 0) != n:
+            self.snmp.pool = None
+            if cur is not None:
+                threading.Thread(target=cur.stop, daemon=True).start()
+            if n:
+                try:
+                    self.snmp.pool = snmppool.WorkerPool(n).start()
+                except Exception:
+                    log.exception("snmp workers start")
+        want = c.get("ts_backend") or "file"
+        from . import dbmysql
+        try:
+            conf = dbmysql.load_conf()
+        except Exception:
+            conf = None
+        sig = json.dumps([want, conf], sort_keys=True, default=str)
+        if sig != self._ts_sig:
+            self._ts_sig = sig
+            try:
+                self.ts.configure(want, conf)
+            except Exception:
+                log.exception("tsdb configure")
+
+    def capacity(self):
+        """بار بررسی‌ها: در دقیقه (واقعی و لازم)، عقب‌افتاده‌ها، کارگرها."""
+        now = time.time()
+        done = sum(1 for x in list(self._done) if now - x <= 60)
+        need, late, n = 0.0, 0, 0
+        for tid, t in self.targets().items():
+            if not t.get("enabled"):
+                continue
+            n += 1
+            iv = self._iv(t)
+            need += 60.0 / iv
+            st = self.state.get(tid) or {}
+            if st.get("last") and now - st["last"] > 2 * iv + 60 and not st.get("maint"):
+                late += 1
+        pool = self.snmp.pool
+        return {"targets": n, "per_min": done, "need_per_min": round(need, 1), "late": late, "busy": len(self._busy),
+                "workers": pool.status() if pool else None, "cpu_count": os.cpu_count()}
 
     def _cert(self, t):
         """1.31: هشدار نزدیک بودن انقضای گواهی HTTPS (روزی یک بار تا تمدید). قطع حساب نمی‌شود."""
@@ -671,10 +885,6 @@ class Monitor:
         d.mkdir(exist_ok=True)
         return d
 
-    def _append(self, name, rec):
-        with open(self._dir() / name, "a", encoding="utf-8") as f:
-            f.write(atrest._enc_line(json.dumps(rec, separators=(",", ":"))) + "\n")
-
     def _flush(self, force=False):
         now = time.time()
         minute, hour = int(now // 60) * 60, int(now // 3600) * 3600
@@ -692,7 +902,7 @@ class Monitor:
                 dq.append((m, *a))
             if self._active():
                 try:
-                    self._append(f"m_{time.strftime('%Y%m%d', time.localtime(m))}.log", {"t": m, "d": acc})
+                    self.ts.put([("pm", 0, {"t": m, "d": acc})])
                 except Exception:
                     log.exception("monitor minute write")
         if minute != self._cur_min:
@@ -703,7 +913,7 @@ class Monitor:
             h = self._cur_hour
             if self._active():
                 try:
-                    self._append(f"h_{time.strftime('%Y%m', time.localtime(h))}.log", {"t": h, "d": acc})
+                    self.ts.put([("ph", 0, {"t": h, "d": acc})])
                 except Exception:
                     log.exception("monitor hour write")
         if hour != self._cur_hour:
@@ -725,76 +935,74 @@ class Monitor:
     def _warm(self):
         """۲۴ ساعت گذشته‌ی خلاصه‌ی دقیقه‌ای برای نمودار کوچک کارت‌ها."""
         since = time.time() - 86400
-        for day in (since, time.time()):
-            p = self._dir() / f"m_{time.strftime('%Y%m%d', time.localtime(day))}.log"
-            if not p.exists():
-                continue
-            for rec in self._read(p):
-                if rec.get("t", 0) < since:
-                    continue
-                for tid, a in (rec.get("d") or {}).items():
-                    dq = self.minutes.setdefault(int(tid), deque(maxlen=1440))
-                    if dq and dq[-1][0] == rec["t"]:
-                        o = dq.pop()
-                        a = [o[1] + a[0], o[2] + a[1], o[3] + a[2], o[4] + a[3], max(o[5], a[4])]
-                    dq.append((rec["t"], *a))
+        for rec in sorted(self.ts.get("pm", 0, since, time.time() + 60), key=lambda r: r.get("t", 0)):
+            for tid, a in (rec.get("d") or {}).items():
+                dq = self.minutes.setdefault(int(tid), deque(maxlen=1440))
+                if dq and dq[-1][0] == rec["t"]:
+                    o = dq.pop()
+                    a = [o[1] + a[0], o[2] + a[1], o[3] + a[2], o[4] + a[3], max(o[5], a[4])]
+                dq.append((rec["t"], *a))
 
     def _purge(self):
-        """فقط اگر ادمین سقف گذاشته باشد؛ پیش‌فرض هیچ داده‌ای پاک نمی‌شود. پوشه‌ی SNMP هدف حذف‌شده همیشه پاک می‌شود."""
+        """فقط اگر ادمین/سیاست سقف گذاشته باشد؛ پیش‌فرض هیچ داده‌ای پاک نمی‌شود. داده‌ی هدف حذف‌شده همیشه پاک می‌شود."""
         now = time.time()
         kd, kh = keep_days(self.settings.get("monitor"))
         if kd:
-            for f in self._dir().glob("m_*.log"):
-                try:
-                    if datetime.strptime(f.stem[2:], "%Y%m%d").timestamp() < now - (kd + 1) * 86400:
-                        f.unlink()
-                except (ValueError, OSError):
-                    continue
+            self.ts.purge("pm", now - (kd + 1) * 86400)
         if kh:
-            for f in self._dir().glob("h_*.log"):
-                try:
-                    if datetime.strptime(f.stem[2:], "%Y%m").timestamp() < now - (kh + 31) * 86400:
-                        f.unlink()
-                except (ValueError, OSError):
-                    continue
+            self.ts.purge("ph", now - (kh + 31) * 86400)
             self.store.mon_purge_events(now - kh * 86400)
         try:
             self.events.purge()
         except Exception:
             log.exception("events purge")
+        ts = self.targets()
+        keep = {tid: self.keep_for(t) for tid, t in ts.items() if t.get("kind") == "snmp"}
         try:
-            self.snmp.purge(kd, kh, set(self.targets()))
+            self.snmp.purge(keep, set(ts), (kd, kh))
         except Exception:
             log.exception("snmp purge")
+        my = self.ts.mysql
+        if my is not None:
+            try:
+                my.maintain()
+                # پارتیشن کامل فقط وقتی حذف می‌شود که از بلندترین نگهداری همه‌ی هدف‌ها هم قدیمی‌تر باشد
+                ds = [kd] + [k[0] for k in keep.values()]
+                hs = [kh] + [k[1] for k in keep.values()]
+                if all(ds):
+                    my.drop_before("akrp_ts_d", now - (max(ds) + 1) * 86400)
+                if all(hs):
+                    my.drop_before("akrp_ts_h", now - (max(hs) + 31) * 86400)
+            except Exception:
+                log.exception("tsdb partitions")
 
     def storage(self):
-        """حجم داده‌های مانیتورینگ روی دیسک (بایت) و رشد روزانه‌ی تقریبی از روز کامل قبل."""
-        d = self._dir()
-        out = {"minute": 0, "hour": 0, "snmp_detail": 0, "snmp_hour": 0, "minute_days": 0, "oldest": None}
-        y = time.strftime("%Y%m%d", time.localtime(time.time() - 86400))
-        day_m = day_s = 0
-        for f in d.glob("m_*.log"):
-            sz = f.stat().st_size
-            out["minute"] += sz
-            out["minute_days"] += 1
-            if f.stem[2:] == y:
-                day_m = sz
-        for f in d.glob("h_*.log"):
-            out["hour"] += f.stat().st_size
-        old = sorted(f.stem[2:] for f in d.glob("[mh]_*.log"))
-        out["oldest"] = old[0] if old else None
-        sd = d / "snmp"
-        if sd.exists():
-            for f in sd.glob("*/*.log"):
-                sz = f.stat().st_size
-                if f.name.startswith("f_"):
-                    out["snmp_detail"] += sz
-                    if f.stem[2:] == y:
-                        day_s += sz
-                else:
-                    out["snmp_hour"] += sz
-        out["per_day"] = day_m + day_s
-        out["per_day_hour"] = round((out["hour"] + out["snmp_hour"]) / max(1, out["minute_days"])) if out["minute_days"] else 0
+        """حجم داده‌های مانیتورینگ (بایت)، رشد روزانه‌ی تقریبی از روز کامل قبل و حجم هر سیاست پایش."""
+        z = self.ts.sizes()
+        by = z["by"]
+        out = {"minute": sum(by["pm"].values()), "hour": sum(by["ph"].values()), "snmp_detail": sum(by["sd"].values()),
+               "snmp_hour": sum(by["sh"].values()), "minute_days": z["days_pm"], "oldest": z["oldest"]}
+        out["per_day"] = z["day"]["pm"] + z["day"]["sd"]
+        days = 0
+        if z["oldest"]:
+            try:
+                fmt = "%Y%m%d" if len(z["oldest"]) == 8 else "%Y%m"
+                days = max(1, (time.time() - datetime.strptime(z["oldest"], fmt).timestamp()) / 86400)
+            except ValueError:
+                days = 0
+        out["per_day_hour"] = round((out["hour"] + out["snmp_hour"]) / days) if days else 0
+        ts = self.targets()
+        pol = {}
+        for tid in set(by["sd"]) | set(by["sh"]):
+            t = ts.get(tid)
+            if not t:
+                continue
+            k = str(t.get("policy_id") or "custom")
+            p = pol.setdefault(k, {"bytes": 0, "targets": 0})
+            p["bytes"] += by["sd"].get(tid, 0) + by["sh"].get(tid, 0)
+            p["targets"] += 1
+        out["by_policy"] = pol
+        out["backend"] = self.ts.status()
         return out
 
     # ---- خروجی برای رابط
@@ -812,6 +1020,8 @@ class Monitor:
                 bins[i][0] += n
                 bins[i][1] += ok
         out = {k: v for k, v in t.items() if k != "snmp"}
+        e = self.targets().get(t["id"]) or effective(t, None)
+        out["eff_interval"], out["policy"] = e.get("interval"), e.get("_policy") or ""
         if t.get("kind") == "snmp":
             from .snmp import load_cfg
             out["snmp_sum"] = self.snmp.summary(t["id"])
@@ -834,36 +1044,28 @@ class Monitor:
         step = trange.pick_step(until - since, 60 if minute_ok else 3600)
         start, nb = trange.grid(since, until, step)
         src = []
-        if step < 3600 and since < now - 86400 - 120 and not any(
-                (self._dir() / f"m_{day}.log").exists() for day in trange.days(since, until, "%Y%m%d")):
-            step = trange.pick_step(until - since, 3600)     # داده‌ی دقیقه‌ای این روزها نیست (نسخه‌های قبل ۷ روز نگه می‌داشتند) ← ساعتی
-            start, nb = trange.grid(since, until, step)
+        if step < 3600 and since >= now - 86400 - 120:          # ۲۴ ساعت اخیر در حافظه است (۱۴۴۰ دقیقه)
+            for tid in ids:
+                for m, *a in self.minutes.get(tid) or ():
+                    src.append((m, tid, a))
+        elif step < 3600:
+            recs = self.ts.get("pm", 0, start, until)
+            if not recs:      # داده‌ی دقیقه‌ای این روزها نیست (نسخه‌های قبل ۷ روز نگه می‌داشتند) ← ساعتی
+                step = trange.pick_step(until - since, 3600)
+                start, nb = trange.grid(since, until, step)
+            for rec in recs:
+                for tid, a in (rec.get("d") or {}).items():
+                    if int(tid) in ids:
+                        src.append((rec["t"], int(tid), a))
         if step < 3600:
-            if since >= now - 86400 - 120:          # ۲۴ ساعت اخیر در حافظه است (۱۴۴۰ دقیقه)
-                for tid in ids:
-                    for m, *a in self.minutes.get(tid) or ():
-                        src.append((m, tid, a))
-            else:
-                for day in trange.days(since, until, "%Y%m%d"):
-                    p = self._dir() / f"m_{day}.log"
-                    if p.exists():
-                        for rec in self._read(p):
-                            if start <= rec.get("t", 0) <= until:
-                                for tid, a in (rec.get("d") or {}).items():
-                                    if int(tid) in ids:
-                                        src.append((rec["t"], int(tid), a))
             with self._lock:
                 cur = [(self._cur_min, tid, list(a)) for tid, a in self._min_acc.items() if tid in ids]
             res = "minute"
         else:
-            for mo in trange.days(since - 3600, until, "%Y%m"):
-                p = self._dir() / f"h_{mo}.log"
-                if p.exists():
-                    for rec in self._read(p):
-                        if start - 3600 < rec.get("t", 0) <= until:
-                            for tid, a in (rec.get("d") or {}).items():
-                                if int(tid) in ids:
-                                    src.append((rec["t"], int(tid), a))
+            for rec in self.ts.get("ph", 0, start - 3600 + 1, until):
+                for tid, a in (rec.get("d") or {}).items():
+                    if int(tid) in ids:
+                        src.append((rec["t"], int(tid), a))
             with self._lock:
                 cur = [(self._cur_hour, tid, list(a)) for tid, a in self._hour_acc.items() if tid in ids]
             res = "hour"

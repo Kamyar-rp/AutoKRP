@@ -53,7 +53,7 @@ echo Dependency audit: OK
 del "%AUDLOG%" >nul 2>&1
 set ICON=assets\app.ico
 if exist "%ICON%" (set ICONARG=--icon "%ICON%") else (set ICONARG=)
-"%PY%" -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoKRP %ICONARG% --add-data "ui;ui" --add-data "assets\app.png;assets" --add-data "assets\mibs;assets\mibs" --add-data "autokrp\trapdb.json;autokrp" --add-data "autokrp\oui.dat;autokrp" --add-data "autokrp\build_deps.txt;autokrp" --collect-submodules serial --hidden-import pystray._win32 --hidden-import pymysql --hidden-import autokrp.fgtask_child --collect-submodules netmiko --collect-submodules dns --collect-submodules pysnmp --collect-submodules ldap3 --collect-all pysmi --collect-data lark --hidden-import sqlcipher3 --collect-binaries sqlcipher3 app.py || goto :err
+"%PY%" -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoKRP %ICONARG% --add-data "ui;ui" --add-data "assets\app.png;assets" --add-data "assets\mibs;assets\mibs" --add-data "autokrp\trapdb.json;autokrp" --add-data "autokrp\oui.dat;autokrp" --add-data "autokrp\build_deps.txt;autokrp" --collect-submodules serial --hidden-import pystray._win32 --hidden-import pymysql --hidden-import autokrp.fgtask_child --hidden-import autokrp.snmpworker --hidden-import autokrp.snmppool --hidden-import autokrp.tsdb --hidden-import autokrp.icmp --collect-submodules netmiko --collect-submodules dns --collect-submodules pysnmp --collect-submodules ldap3 --collect-all pysmi --collect-data lark --hidden-import sqlcipher3 --collect-binaries sqlcipher3 app.py || goto :err
 if not exist dist\AutoKRP.exe goto :err
 "%PY%" -m pip freeze > dist\AutoKRP-build-requirements.txt
 "%PY%" --version > dist\AutoKRP-build-python.txt
