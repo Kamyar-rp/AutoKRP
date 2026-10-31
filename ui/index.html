@@ -48,7 +48,7 @@
       <button data-page="stats"><svg><use href="#i-chart"/></svg>آمار</button>
       <button data-page="history"><svg><use href="#i-hist"/></svg>تاریخچه</button>
       <button data-page="settings" class="adm-only"><svg><use href="#i-set"/></svg>تنظیمات</button>
-      <button data-page="about"><svg><use href="#i-info"/></svg>درباره</button>
+      <button data-page="about"><svg><use href="#i-info"/></svg>درباره<span class="nav-count warn" id="navAbout" hidden></span></button>
     </nav>
     <div class="side-foot">
       <div class="conn-list" id="sideConn"></div>
@@ -220,15 +220,15 @@
         <div class="ph-actions" id="sshActions"></div>
       </header>
       <div class="tabs big" id="sshTabs">
-        <button data-t="devices" class="on">دستگاه‌ها</button>
-        <button data-t="creds" class="no-ro">اعتبارنامه‌ها</button>
-        <button data-t="run">اجرا</button>
+        <button data-t="devices" class="on" data-need-tool="ssh">دستگاه‌ها</button>
+        <button data-t="creds" class="no-ro" data-need-tool="ssh" data-need-run="ssh">اعتبارنامه‌ها</button>
+        <button data-t="run" data-need-tool="ssh" data-need-run="ssh">اجرا</button>
         <button data-t="term" class="no-ro" data-need-tool="term">ترمینال</button>
         <button data-t="xfer" class="no-ro" data-need-tool="term">انتقال فایل</button>
         <button data-t="net" class="no-ro" data-need-tool="nettools">ابزارهای شبکه</button>
-        <button data-t="backups">پشتیبان کانفیگ</button>
-        <button data-t="fgu" class="adm-only">به‌روزرسانی FortiGate</button>
-        <button data-t="jobs">سابقه</button>
+        <button data-t="backups" data-need-tool="ssh">پشتیبان کانفیگ</button>
+        <button data-t="fgu" class="adm-only" data-need-tool="offline" data-need-run="offline">به‌روزرسانی FortiGate</button>
+        <button data-t="jobs" data-need-tool="ssh">سابقه</button>
       </div>
       <div id="sshBody"></div>
     </section>
@@ -284,6 +284,7 @@
 <script src="trange.js"></script>
 <script src="sshlive.js"></script>
 <script src="nettools.js"></script>
+<script src="access.js"></script>
 <script src="monitor.js"></script>
 <script src="snmp.js"></script>
 <script src="noc.js"></script>

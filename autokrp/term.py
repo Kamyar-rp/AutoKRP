@@ -123,8 +123,22 @@ STOPS = {"1": 1, "1.5": 1.5, "2": 2}
 FLOWS = ("none", "xonxoff", "rtscts", "dsrdtr")
 
 
+_SER_LOCK = threading.Lock()
+_SER_CACHE = [0.0, None]
+SER_CACHE_SECS = 3.0
+
+
 def list_serial():
-    """پورت‌های سریال این کامپیوتر (کابل کنسول USB بعد از نصب درایور در «Ports (COM & LPT)» ویندوز)."""
+    """پورت‌های سریال (با کش ۳ ثانیه‌ای و قفل: شمارش پورت‌ها در ویندوز تا چند ثانیه طول می‌کشد — memdiag 1.32)."""
+    with _SER_LOCK:
+        if _SER_CACHE[1] is not None and time.time() - _SER_CACHE[0] < SER_CACHE_SECS:
+            return [dict(x) for x in _SER_CACHE[1]]
+        out = _list_serial()
+        _SER_CACHE[0], _SER_CACHE[1] = time.time(), out
+        return [dict(x) for x in out]
+
+
+def _list_serial():
     try:
         from serial.tools import list_ports
     except ImportError:

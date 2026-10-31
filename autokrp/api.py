@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import threading
+import uuid
 import time
 from datetime import datetime
 from pathlib import Path
@@ -113,7 +114,7 @@ def _safe(fn):
             return {"ok": False, "error": "ابتدا وارد شوید.", "locked": True}
         if srv and name in SERVER_BLOCK:
             return {"ok": False, "error": "این بخش در حالت سرور در دسترس نیست.", "denied": True}
-        deny = perms.can_call(user, name, self._settings) if v is not None else None
+        deny = perms.can_call(user, name, self._settings, self._levels(user)) if v is not None else None
         if deny:
             return {"ok": False, "error": deny, "denied": True}
         ACTOR.name = user["username"] if user else ""
@@ -341,8 +342,40 @@ class Api:
     def whoami(self):
         return self._me()
 
+    # ------------------------------------------------------------ 1.32: دسترسی با گروه‌ها
+    def _all_users(self):
+        if paths.is_server():
+            from . import serverauth
+            try:
+                return serverauth.load().get("users", [])
+            except Exception:  # noqa — fail-closed: بدون فهرست کاربران هیچ‌کس ادمین اصلی فرض نمی‌شود
+                return [{"superuser": True, "role": "admin"}]
+        v = self._vault
+        return v.users() if v is not None and v.users_enabled() else []
+
+    def _is_super(self, u=None, _cur=True):
+        u = self._current_user() if _cur and u is None else u
+        if u is None:
+            return paths.is_server() is False      # کلاینت بدون کاربر = تک‌کاربره
+        return perms.is_super(u, self._all_users())
+
+    def _levels(self, u=None, _cur=True):
+        u = self._current_user() if _cur and u is None else u
+        return perms.levels(u, self._settings, self._is_super(u, False) if u is not None else not paths.is_server())
+
+    def _level(self, key):
+        return self._levels().get(key, "none")
+
+    def _dev_scope(self):
+        u = self._current_user()
+        return perms.device_scope(u, self._settings, self._is_super(u, False) if u is not None else True)
+
     def _me(self):
         r = self._me0()
+        lv = self._levels()
+        r["access"] = lv
+        r["tools"] = [k for k in perms.TOOLS + perms.USER_PERMS if lv.get(k) == "run"]
+        r["superuser"] = self._is_super()
         r["hidden_modes"] = perms.hidden_modes()        # 1.31: بخش‌های مخصوص حالت دیگر (data-mode در رابط)
         return r
 
@@ -363,6 +396,159 @@ class Api:
         if len(items) > 1 and self._settings.get("security", "remember", default=False):
             self._vault.set_remember(False)
             self._worker.emit("warn", "«باز شدن خودکار» خاموش شد؛ با چند کاربر ممکن نیست", "security")
+
+    # ------------------------------------------------------------ 1.32: پنل دسترسی (فقط ادمین اصلی)
+    def _users_rw(self, fn):
+        """خواندن/تغییر/نوشتن فهرست کاربران (سرور: فایل کاربران با قفل؛ کلاینت: کاربران vault)."""
+        if paths.is_server():
+            from . import serverauth
+            with serverauth.LOCK:
+                data = serverauth.load()
+                data["users"] = fn(data["users"])
+                serverauth.save(data)
+                return data["users"]
+        v = self._vault
+        if not v.users_enabled():
+            raise VaultError("ابتدا کاربران را فعال کنید (حالت تک‌کاربره همه‌ی ابزارها را دارد).")
+        items = fn(v.users())
+        self._save_users(items)
+        return items
+
+    def _mark_super(self, items):
+        """اگر هیچ ادمین فعالی پرچم «ادمین اصلی» ندارد، کاربر جاری (ادمین اصلی فعلی) آن را می‌گیرد."""
+        me = (self._current_user() or {}).get("username", "").lower()
+        ok = lambda x: x.get("role") == "admin" and not x.get("disabled") and x.get("source") != "ad"
+        if not any(x.get("superuser") and ok(x) for x in items):
+            cands = sorted([x for x in items if ok(x)], key=lambda x: (x["username"].lower() != me, x.get("created") or 0))
+            if cands:                              # کاربر جاری، وگرنه قدیمی‌ترین ادمین محلی فعال
+                cands[0]["superuser"] = True
+        return items
+
+    @_safe
+    def access_get(self):
+        """گروه‌ها، کاربران با سطح مؤثر هر ابزار، و فهرست دستگاه‌ها/گروه‌های دستگاه برای پنل."""
+        self._need_super()
+        users = []
+        all_u = self._all_users()
+        for u in all_u:
+            pu = perms.public_user(u)
+            sup = perms.is_super(u, all_u)
+            pu["effective"] = perms.levels(u, self._settings, sup)
+            pu["is_super"] = sup
+            sc = perms.device_scope(u, self._settings, sup)
+            pu["dev_scope"] = {"all": sc["all"], "grps": sorted(sc["grps"]), "ids": sorted(sc["ids"])}
+            users.append(pu)
+        devs = [{"id": d["id"], "name": d.get("name") or d["host"], "host": d["host"], "grp": d.get("grp") or ""}
+                for d in self._store.ssh_devices() if not d.get("owner")]
+        return {"groups": list(perms.groups_of(self._settings).values()), "users": users, "devices": devs,
+                "dev_groups": sorted({d["grp"] for d in devs if d["grp"]}), "keys": perms.ACCESS_KEYS,
+                "titles": perms.ACCESS_TITLES, "no_view": sorted(perms.NO_VIEW),
+                "enabled": perms.enabled_tools(self._settings) + perms.enabled_features(self._settings),
+                "server": paths.is_server(), "me": (self._current_user() or {}).get("username", "")}
+
+    @_safe
+    def access_group_save(self, group):
+        self._need_super()
+        g = group if isinstance(group, dict) else {}
+        name = str(g.get("name") or "").strip()[:60]
+        if not name:
+            raise ConnectorError("نام گروه لازم است.")
+        gs = perms.groups_of(self._settings)
+        gid = str(g.get("id") or "")
+        if gid and gid not in gs:
+            raise ConnectorError("گروه پیدا نشد.")
+        if any(x.get("name", "").lower() == name.lower() and str(x["id"]) != gid for x in gs.values()):
+            raise ConnectorError(f"گروهی با نام «{name}» هست.")
+        rec = {"id": gid or uuid.uuid4().hex[:10], "name": name, "notes": str(g.get("notes") or "")[:300],
+               "tools": perms.clean_levels(g.get("tools")),
+               "devices": perms.clean_devices(g.get("devices")) or {"all": False, "grps": [], "ids": []}}
+        gs[rec["id"]] = rec
+        if len(gs) > 200:
+            raise ConnectorError("حداکثر ۲۰۰ گروه.")
+        members = g.get("members")
+        if isinstance(members, list):              # عضوها از همین پنجره (اختیاری)
+            want = {str(x).lower() for x in members}
+
+            def upd(items):
+                for x in items:
+                    has = rec["id"] in [str(y) for y in x.get("groups") or []]
+                    if x["username"].lower() in want and not has:
+                        x["groups"] = [str(y) for y in x.get("groups") or []] + [rec["id"]]
+                        self._to_v3(x)
+                    elif x["username"].lower() not in want and has:
+                        x["groups"] = [str(y) for y in x.get("groups") or [] if str(y) != rec["id"]]
+                return self._mark_super(items)
+            self._settings.update({"access": {"groups": list(gs.values())}})
+            self._users_rw(upd)
+        else:
+            self._settings.update({"access": {"groups": list(gs.values())}})
+        self._store.add_history("security", "دسترسی‌ها", "ok", f"گروه «{name}» ویرایش شد" if gid else f"گروه «{name}» ساخته شد")
+        return {"id": rec["id"]}
+
+    @staticmethod
+    def _to_v3(x):
+        """کاربر قدیمی ← مدل گروه‌ها با همان دسترسی قبلی (به‌صورت استثنای کاربر) تا چیزی ناگهان کم یا زیاد نشود."""
+        if int(x.get("access_v") or 0) >= perms.ACCESS_V:
+            return
+        x["access"] = {k: v for k, v in perms.legacy_levels(x).items()}
+        x["devices"] = {"all": x.get("role") == "admin" or x.get("shared_devices", True) is not False, "grps": [], "ids": []}
+        x["access_v"] = perms.ACCESS_V
+        x.setdefault("groups", [])
+
+    @_safe
+    def access_group_delete(self, gid):
+        self._need_super()
+        gs = perms.groups_of(self._settings)
+        g = gs.pop(str(gid), None)
+        if not g:
+            raise ConnectorError("گروه پیدا نشد.")
+        self._settings.update({"access": {"groups": list(gs.values())}})
+
+        def upd(items):
+            for x in items:
+                x["groups"] = [str(y) for y in x.get("groups") or [] if str(y) != str(gid)]
+            return items
+        try:
+            self._users_rw(upd)
+        except VaultError:
+            pass
+        self._store.add_history("security", "دسترسی‌ها", "ok", f"گروه «{g.get('name')}» حذف شد")
+        return {}
+
+    @_safe
+    def access_user_save(self, username, data):
+        """گروه‌ها، استثنای ابزارها (سطح جایگزین)، دستگاه‌ها (None = از گروه‌ها) و «ادمین اصلی» یک کاربر."""
+        self._need_super()
+        d = data if isinstance(data, dict) else {}
+        gs = perms.groups_of(self._settings)
+        me = (self._current_user() or {}).get("username", "").lower()
+        name = str(username or "").lower()
+        found = {}
+
+        def upd(items):
+            for x in items:
+                if x["username"].lower() != name:
+                    continue
+                self._to_v3(x)
+                x["groups"] = [str(g) for g in d.get("groups") or [] if str(g) in gs]
+                x["access"] = perms.clean_levels(d.get("access"))
+                x["devices"] = perms.clean_devices(d.get("devices"))
+                if "superuser" in d:
+                    if x.get("source") == "ad" and d["superuser"]:
+                        raise ConnectorError("کاربر AD نمی‌تواند ادمین اصلی باشد (اگر AD در دسترس نباشد کسی وارد نمی‌شود).")
+                    if d["superuser"] and x.get("role") != "admin":
+                        raise ConnectorError("ادمین اصلی باید نقش «ادمین» داشته باشد.")
+                    if not d["superuser"] and x["username"].lower() == me:
+                        raise ConnectorError("نمی‌توانید «ادمین اصلی» را از خودتان بگیرید؛ اول آن را به ادمین دیگری بدهید.")
+                    x["superuser"] = bool(d["superuser"])
+                found["u"] = x
+            if not found:
+                raise ConnectorError("کاربر پیدا نشد.")
+            return self._mark_super(items)
+        self._users_rw(upd)
+        self._store.add_history("security", "دسترسی‌ها", "ok", f"دسترسی کاربر {found['u']['username']} تغییر کرد"
+                                + ("؛ ادمین اصلی" if found["u"].get("superuser") else ""))
+        return {}      # نشست‌ها هر درخواست رکورد کاربر را دوباره می‌خوانند؛ دسترسی تازه فوراً اعمال می‌شود
 
     @_safe
     def users_list(self):
@@ -408,8 +594,19 @@ class Api:
         self._store.add_history("security", "کاربران", "ok", "کاربران غیرفعال شد؛ رمز اصلی = رمز " + me["username"])
         return self.users_list()
 
+    def _need_super(self):
+        if not self._is_super():
+            raise ConnectorError("فقط ادمین اصلی کاربران و دسترسی‌ها را تغییر می‌دهد.")
+
+    def _new_access(self, u):
+        """1.32: کاربر تازه با مدل گروه‌ها (گروه خالی = بدون ابزار تا ادمین اصلی گروه بدهد)."""
+        gs = perms.groups_of(self._settings)
+        return {"access_v": perms.ACCESS_V, "groups": [str(g) for g in u.get("groups") or [] if str(g) in gs],
+                "access": {}, "devices": None}
+
     @_safe
     def user_save(self, user, password=""):
+        self._need_super()
         if paths.is_server():
             return self._server_user_save(user, password)
         v = self._vault
@@ -418,19 +615,23 @@ class Api:
         u = dict(user or {})
         name = (u.get("username") or "").strip()
         role = u.get("role") or "readonly"
-        tools = [t for t in (u.get("tools") or []) if t in perms.USER_TOOLS] if role == "operator" else []
         items = v.users()
         old = v.find_user(name)
+        src_tools = u.get("tools") if "tools" in u else (old or {}).get("tools")     # 1.32: رابط دیگر تیک ابزار نمی‌فرستد
+        tools = [t for t in (src_tools or []) if t in perms.USER_TOOLS] if role == "operator" else []
         if old is None:
             if not password:
                 raise VaultError("برای کاربر تازه رمز لازم است.")
             rec = {**v.make_user(name, password, role, tools, bool(u.get("disabled"))), "created": time.time(),
-                   "shared_devices": u.get("shared_devices", True) is not False, "perms_v": perms.PERMS_V}
+                   "shared_devices": u.get("shared_devices", True) is not False, "perms_v": perms.PERMS_V, **(self._new_access(u) if "groups" in u else {})}
             items.append(rec)
             msg = f"کاربر {name} ({perms.ROLE_TITLES.get(role)}) ساخته شد"
         else:
             rec = {**old, "role": role, "tools": tools, "disabled": bool(u.get("disabled")),
-                   "shared_devices": u.get("shared_devices", True) is not False, "perms_v": perms.PERMS_V}
+                   "shared_devices": u.get("shared_devices", old.get("shared_devices", True)) is not False, "perms_v": perms.PERMS_V}
+            if "groups" in u:
+                self._to_v3(rec)
+                rec["groups"] = self._new_access(u)["groups"]
             if role not in v.ROLES:
                 raise VaultError("نقش نامعتبر است.")
             if password:
@@ -439,12 +640,13 @@ class Api:
             msg = f"کاربر {old['username']} به‌روز شد" + ("؛ رمز تغییر کرد" if password else "")
         if not any(x["role"] == "admin" and not x.get("disabled") for x in items):
             raise VaultError("حداقل یک ادمین فعال لازم است.")
-        self._save_users(items)
+        self._save_users(self._mark_super(items))
         self._store.add_history("security", "کاربران", "ok", msg)
         return self.users_list()
 
     @_safe
     def user_delete(self, username):
+        self._need_super()
         if paths.is_server():
             return self._server_user_delete(username)
         v = self._vault
@@ -496,16 +698,19 @@ class Api:
         u = dict(user or {})
         name = (u.get("username") or "").strip()
         role = u.get("role") or "readonly"
-        tools = [t for t in (u.get("tools") or []) if t in perms.USER_TOOLS] if role == "operator" else []
         strong = self._settings.get("security", "strong_policy", default=True)
         data = serverauth.load()
         old = serverauth.find(data, name)
+        src_tools = u.get("tools") if "tools" in u else (old or {}).get("tools")     # 1.32: رابط دیگر تیک ابزار نمی‌فرستد
+        tools = [t for t in (src_tools or []) if t in perms.USER_TOOLS] if role == "operator" else []
         if old is None:
             if not password:
                 raise VaultError("برای کاربر تازه رمز لازم است.")
             rec = serverauth.new_user_record(master, name, password, role, tools, bool(u.get("disabled")), strong)
             rec["shared_devices"] = u.get("shared_devices", True) is not False
             rec["perms_v"] = perms.PERMS_V
+            if "groups" in u:                   # 1.32: مدل گروه‌ها؛ بدون groups (API قدیمی) = نقش + tools مثل قبل
+                rec.update(self._new_access(u))
             data["users"].append(rec)
             msg = f"کاربر {name} ({perms.ROLE_TITLES.get(role)}) ساخته شد"
         else:
@@ -515,9 +720,12 @@ class Api:
                 if password:
                     raise VaultError("رمز کاربر AD در خود Active Directory تغییر می‌کند.")
                 role = old["role"]            # نقش کاربر AD از گروه‌هایش در هر ورود
-                tools = [t for t in (u.get("tools") or []) if t in perms.USER_TOOLS] if role == "operator" else []
-            old.update(role=role, tools=tools, disabled=bool(u.get("disabled")), shared_devices=u.get("shared_devices", True) is not False,
+                tools = [t for t in (src_tools or []) if t in perms.USER_TOOLS] if role == "operator" else []
+            old.update(role=role, tools=tools, disabled=bool(u.get("disabled")), shared_devices=u.get("shared_devices", old.get("shared_devices", True)) is not False,
                        perms_v=perms.PERMS_V)
+            if "groups" in u:
+                self._to_v3(old)
+                old["groups"] = self._new_access(u)["groups"]
             if password:
                 from .vault import check_password as _cp
                 errs = _cp(password, strong)
@@ -528,6 +736,7 @@ class Api:
             msg = f"کاربر {old['username']} به‌روز شد" + ("؛ رمز تغییر کرد" if password else "")
         if not any(x["role"] == "admin" and not x.get("disabled") and x.get("source") != "ad" for x in data["users"]):
             raise VaultError("حداقل یک ادمین محلی فعال لازم است (کاربر AD کافی نیست؛ اگر AD در دسترس نباشد کسی وارد نمی‌شود).")
+        data["users"] = self._mark_super(data["users"])
         serverauth.save(data)
         if old is not None and (old.get("disabled") or password):   # غیرفعال یا رمز ریست شد: نشست‌هایش بسته شود
             me = (self._current_user() or {}).get("username", "")
@@ -815,6 +1024,7 @@ class Api:
             "lang": self._settings.get("ui", "lang") or "en",
             "db": self._db_state(),
             "assets_pending": self._store.asset_pending_count() if self._asset_can_view() else 0,
+            "sec_alerts": self._worker.seccheck.summary() if self._is_super() or (self._current_user() or {}).get("role") == "admin" else 0,
             **self._me(),
         }
 
@@ -924,6 +1134,37 @@ class Api:
                 "python": platform.python_version(), "os": platform.platform(),
                 "libs": {"pywebview": ver("webview"), "requests": ver("requests"), "cryptography": ver("cryptography")},
                 "data_dir": str(paths.data_dir())}
+
+    # ------------------------------------------------------------ 1.33: به‌روزرسانی و آسیب‌پذیری (فقط ادمین)
+    @_safe
+    def about_security(self):
+        sc = self._worker.seccheck
+        d = sc.load()
+        d.pop("notified", None)
+        return {"state": d, "running": sc.running, "auto": sc.auto(), "every_hours": 24}
+
+    @_safe
+    def about_check(self):
+        if not self._worker.seccheck.start(self._uname() or "user"):
+            raise ConnectorError("بررسی در حال اجراست.")
+        self._store.add_history("security", "به‌روزرسانی", "ok", "بررسی نسخه‌ی تازه و آسیب‌پذیری کتابخانه‌ها")
+        return {}
+
+    @_safe
+    def about_auto_set(self, on):
+        self._settings.update({"updates": {"auto": bool(on)}})
+        self._store.add_history("security", "به‌روزرسانی", "ok",
+                                "بررسی خودکار روزانه روشن شد" if on else "بررسی خودکار روزانه خاموش شد")
+        return {"auto": bool(on)}
+
+    @_safe
+    def open_release(self):
+        """صفحه‌ی انتشارهای مخزن رسمی در مرورگر پیش‌فرض (نشانی ثابت؛ هیچ نشانی از بیرون پذیرفته نمی‌شود)."""
+        import webbrowser
+
+        from .updates import RELEASES_PAGE
+        webbrowser.open(RELEASES_PAGE)
+        return {}
 
     # ------------------------------------------------------------ security
     @_safe
@@ -1277,7 +1518,7 @@ class Api:
             raise ConnectorError("این فایل خروجی تنظیمات AutoKRP نیست.")
         patch = raw["settings"]
         # 1.27.7: همان کلیدهایی که «ذخیره‌ی تنظیمات» هم نمی‌پذیرد (ad و events فقط از متدهای خودشان با اعتبارسنجی)
-        for k in ("security", "secrets", "has_password", "users", "server", "ui_users", "jobs", "ssh_schedules", "ad", "events"):
+        for k in ("security", "secrets", "has_password", "users", "server", "ui_users", "jobs", "ssh_schedules", "ad", "events", "access"):
             patch.pop(k, None)
         from .settings import SECRET_KEYS
         for c, keys in SECRET_KEYS.items():          # هیچ رازی از فایل وارد نمی‌شود (notify هم)
@@ -1372,6 +1613,7 @@ class Api:
         patch.pop("security", None)   # فقط از متدهای security_* تغییر می‌کند
         patch.pop("ad", None)         # فقط از server_ad_save (با اعتبارسنجی)
         patch.pop("events", None)     # فقط از mon_events_cfg_save
+        patch.pop("access", None)     # 1.32: گروه‌های دسترسی فقط از access_* (ادمین اصلی)
         if isinstance(patch.get("branding"), dict):
             for k in ("logo_file", "icon_file", "logo_data"):
                 patch["branding"].pop(k, None)
@@ -1878,7 +2120,7 @@ class Api:
 
     # ------------------------------------------------------------ runs
     def _need_tools(self, tools):
-        deny = perms.check_tools(self._current_user(), self._settings, tools)
+        deny = perms.check_tools(self._current_user(), self._settings, tools, self._levels())
         if deny:
             raise ConnectorError(deny)
 
@@ -2196,13 +2438,13 @@ class Api:
         return (u or {}).get("username", "").lower()
 
     def _can_shared(self):
-        """دستگاه‌های مشترک (تعریف ادمین): ادمین همیشه؛ اپراتور اگر ادمین اجازه داده باشد."""
-        u = self._current_user()
-        return u is None or u.get("role") == "admin" or u.get("shared_devices", True) is not False
+        """1.32: آیا کاربر دست‌کم بخشی از دستگاه‌های مشترک را می‌بیند (گروه‌های دسترسی؛ ادمین اصلی همه)."""
+        sc = self._dev_scope()
+        return bool(sc["all"] or sc["grps"] or sc["ids"])
 
     def _dev_visible(self, d):
         owner = (d.get("owner") or "").lower()
-        return self._can_shared() if not owner else owner == self._uname()
+        return perms.device_ok(self._dev_scope(), d) if not owner else owner == self._uname()
 
     def _check_devs(self, ids, shared_only=False):
         out = []
@@ -2697,7 +2939,7 @@ class Api:
 
     def _mon_can_add(self):
         u = self._current_user()
-        return u is None or u.get("role") == "admin" or (u.get("role") == "operator" and "monitor" in perms.allowed_tools(u, self._settings))
+        return (u is None or u.get("role") in ("admin", "operator")) and self._level("monitor") == "run"
 
     def _mon_visible(self, t):
         return self._mon_admin() or not t.get("owner") or t.get("owner") == self._uname()
@@ -2729,7 +2971,7 @@ class Api:
     @_safe
     def mon_state(self, since=0):
         """poll سبک رابط (هر چند ثانیه): هشدارهای تازه و تعداد قطع‌ها."""
-        if "monitor" not in perms.enabled_features(self._settings):
+        if "monitor" not in perms.enabled_features(self._settings) or self._level("monitor") == "none":
             return {"seq": self._mon.seq, "alerts": [], "down": [], "alarm": [], "total": 0, "cfg": self._mon_cfg(), "disabled": True}
         vis = {t["id"]: t for t in self._store.mon_targets() if self._mon_visible(t)}
         down = [vis[i].get("name") for i, st in self._mon.state.items() if i in vis and st.get("status") == "down"
@@ -3542,8 +3784,7 @@ class Api:
     def _asset_can_view(self):
         if "asset" not in perms.enabled_tools(self._settings):
             return False
-        u = self._current_user()
-        return u is None or u.get("role") == "admin" or (u.get("role") == "operator" and "asset" in perms.allowed_tools(u, self._settings))
+        return self._level("asset") in ("view", "run")
 
     def _asset_view(self):
         if "asset" not in perms.enabled_tools(self._settings):
@@ -4229,7 +4470,7 @@ class Api:
     def fgu_info(self):
         from . import fgupdate
         devs = [self._dev_public(d) for d in self._store.ssh_devices()
-                if d["device_type"] == "fortinet" and not d.get("owner") and self._can_shared()]
+                if d["device_type"] == "fortinet" and not d.get("owner") and self._dev_visible(d)]
         for d in devs:
             try:
                 d["local_ip"] = fgupdate.local_ip_for(d["host"], d.get("port") or 22)
@@ -4286,7 +4527,7 @@ class Api:
     # ------------------------------------------------------------ config backups
     @_safe
     def backup_overview(self):
-        devs = [self._dev_public(d) for d in self._store.ssh_devices() if not d.get("owner") and self._can_shared()]
+        devs = [self._dev_public(d) for d in self._store.ssh_devices() if not d.get("owner") and self._dev_visible(d)]
         last = {}
         for b in self._store.backups(limit=100000):
             last.setdefault(b["device_id"], []).append(b)
@@ -4444,6 +4685,10 @@ class Api:
             self._check_devs(ids, shared_only=True)
         elif not self._can_shared():
             raise ConnectorError("دسترسی به دستگاه‌های مشترک ندارید.")
+        elif not self._dev_scope()["all"]:          # 1.32: فقط دستگاه‌های گروه‌های همین کاربر
+            ids = [d["id"] for d in self._store.ssh_devices() if not d.get("owner") and self._dev_visible(d)]
+            if not ids:
+                raise ConnectorError("دستگاه مشترکی برای پشتیبان‌گیری ندارید.")
         try:
             job = self._worker.start_backup([int(i) for i in ids] if ids else None)
         except RuntimeError as e:
@@ -4465,7 +4710,12 @@ class Api:
 
     @_safe
     def list_history(self):
-        return {"rows": self._store.list_history(), "runs": self._store.list_runs()}
+        lv = self._levels()
+        hide = {k for k, t in perms.HISTORY_KIND.items() if lv.get(t, "none") == "none"}
+        rows = self._store.list_history()
+        if hide:                                   # 1.32: ردیف‌های ابزاری که کاربر به آن دسترسی ندارد
+            rows = [r for r in rows if r.get("kind") not in hide]
+        return {"rows": rows, "runs": self._store.list_runs()}
 
     @_safe
     def history_view(self, hid, fname=None, q=None):
@@ -4473,7 +4723,7 @@ class Api:
         import csv as csvmod
         import io
         row = self._store.history_get(int(hid))
-        if not row:
+        if not row or self._level(perms.HISTORY_KIND.get(row.get("kind"), "")) == "none" and row.get("kind") in perms.HISTORY_KIND:
             raise ConnectorError("ردیف پیدا نشد.")
         u = self._current_user()
         admin = u is None or u.get("role") == "admin"
@@ -4500,7 +4750,7 @@ class Api:
             from .xfer import enc_size
             return {"type": "received", "rid": p.name, "size": enc_size(p), "title": row["target"]}
         if kind == "ssh" and f:
-            if not admin and "ssh" not in perms.allowed_tools(u, self._settings):
+            if self._level("ssh") == "none":
                 raise ConnectorError("دسترسی به خروجی SSH ندارید.")
             p = paths.inside(f, [paths.data_dir() / "ssh_runs"])
             if p is None or not p.is_dir():

@@ -713,3 +713,31 @@ body.noc-on { overflow: hidden; }
 .nt-job { display: flex; align-items: center; gap: 10px; margin: 10px 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 .nt-job .cw-spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--muted); border-top-color: transparent; animation: spin .7s linear infinite; flex: none; }
 .ok-card { border-color: color-mix(in srgb, var(--ok) 55%, transparent); }
+
+/* 1.32: سطح دسترسی هر ابزار (کلاس‌های body از applyRole؛ CSP سرور style درون‌خطی را نمی‌پذیرد) */
+body.nrun-splunk [data-need-run~="splunk"],
+body.nrun-abuse [data-need-run~="abuse"],
+body.nrun-fortigate [data-need-run~="fortigate"],
+body.nrun-redmine [data-need-run~="redmine"],
+body.nrun-dns [data-need-run~="dns"],
+body.nrun-ssh [data-need-run~="ssh"],
+body.nrun-scan [data-need-run~="scan"],
+body.nrun-intel [data-need-run~="intel"],
+body.nrun-asset [data-need-run~="asset"],
+body.nrun-monitor [data-need-run~="monitor"],
+body.nrun-term [data-need-run~="term"],
+body.nrun-offline [data-need-run~="offline"],
+body.nrun-nettools [data-need-run~="nettools"] { display: none !important; }
+body.nsee-splunk [data-need-tool="splunk"],
+body.nsee-abuse [data-need-tool="abuse"],
+body.nsee-fortigate [data-need-tool="fortigate"],
+body.nsee-redmine [data-need-tool="redmine"],
+body.nsee-dns [data-need-tool="dns"],
+body.nsee-ssh [data-need-tool="ssh"],
+body.nsee-scan [data-need-tool="scan"],
+body.nsee-intel [data-need-tool="intel"],
+body.nsee-asset [data-need-tool="asset"],
+body.nsee-monitor [data-need-tool="monitor"],
+body.nsee-term [data-need-tool="term"],
+body.nsee-offline [data-need-tool="offline"],
+body.nsee-nettools [data-need-tool="nettools"] { display: none !important; }

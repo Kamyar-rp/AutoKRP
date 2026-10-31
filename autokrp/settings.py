@@ -243,7 +243,7 @@ DEFAULTS = {
         "events": {"approval": True, "run_error": True, "ban_failed": True, "ssh_failed": True,
                    "backup_failed": True, "config_changed": True, "abuse_quota": True, "scan_new": True,
                    "mon_down": True, "mon_up": True, "mon_alarm": True, "asset_change": True, "abuse_repeat": True,
-                   "health": True, "dev_event": True, "mon_cert": True},
+                   "health": True, "dev_event": True, "mon_cert": True, "security_update": True},
     },
 }
 

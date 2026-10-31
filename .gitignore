@@ -13,6 +13,9 @@ dist/
 *.spec
 requirements-lock.txt
 
+# Generated at build time (dev/deps_snapshot.py)
+autokrp/build_deps.txt
+
 # Development data
 dev/_data/
 dev/_untranslated.json

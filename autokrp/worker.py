@@ -50,6 +50,9 @@ class Worker:
         self.health = Health(settings, notify=self.notifier.notify, emit=self.emit,
                              history=lambda kind, target, status, detail: store.add_history(kind, target, status, detail, user=""))
         self._next_health = time.time() + 60
+        from .updates import SecurityCheck          # 1.33: نسخه‌ی تازه + آسیب‌پذیری کتابخانه‌ها (روزانه)
+        self.seccheck = SecurityCheck(settings, emit=self.emit, notify=self.notifier.notify, demo=demo)
+        self._next_sec = time.time() + 120
         self._health_busy = threading.Event()
         self.fgu = FgUpdater(settings, store, settings.vault, self.ssh, emit=self.emit, notify=self.notifier.notify)
         from .assets import AssetManager
@@ -162,6 +165,10 @@ class Worker:
                 if now >= self._next_snap:
                     self.snapshot()
                     self._next_snap = now + 3600
+                if now >= self._next_sec:
+                    self._next_sec = now + 600
+                    if self.seccheck.due(now):
+                        self.seccheck.start("auto")
                 if now >= self._next_health and not self._health_busy.is_set():
                     self._next_health = now + 300
                     self._health_busy.set()       # 1.26.2: بررسی قبلی هنوز تمام نشده (مثلاً دیسک کند) ← ترد تازه نه

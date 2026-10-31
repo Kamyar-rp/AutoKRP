@@ -118,19 +118,175 @@ def enabled_features(settings):
     return [f for f in FEATURES if en.get(f, True)]
 
 
-def allowed_tools(user, settings):
-    """ابزارهای اجرایی + بخش‌ها (monitor، term) که برای این کاربر روشن و مجاز است."""
-    en = enabled_tools(settings) + [p for p in USER_PERMS if p in enabled_features(settings)]
-    if user is None or user.get("role") == "admin":
-        return en
-    if user.get("role") == "operator":
-        ut = user_tools(user)
-        return [t for t in en if t in ut]
-    return []
+def allowed_tools(user, settings, lv=None):
+    """ابزارها و بخش‌هایی که این کاربر اجازه‌ی «اجرا» دارد (روشن و مجاز)."""
+    lv = lv or levels(user, settings)
+    return [k for k in ACCESS_KEYS if lv.get(k) == "run"]
 
 
-def can_call(user, name, settings):
-    """None = مجاز؛ وگرنه پیام خطا."""
+# ============================================================== 1.32: دسترسی با گروه‌ها (مثل پنل ادمین جنگو)
+# سطح هر ابزار/بخش برای هر کاربر: none (پنهان) < view (دیدن) < run (اجرا و تغییر).
+# سطح = بیشینه‌ی گروه‌های کاربر، سپس استثنای خود کاربر (جایگزین)، سپس سقف نقش (فقط‌خواندنی حداکثر view).
+# ابزار خاموش در «ابزارهای فعال» برای همه none است. «ادمین اصلی» (superuser) همیشه run و همه‌ی دستگاه‌ها را دارد
+# و فقط او دسترسی‌ها را تغییر می‌دهد. کاربر بدون access_v=3 (پیش از 1.32) همان دسترسی قبلی را دارد (legacy_levels).
+ACCESS_V = 3
+LEVELS = ("none", "view", "run")
+RANK = {"none": 0, "view": 1, "run": 2}
+ACCESS_KEYS = TOOLS + FEATURES                     # همه‌ی ابزارها و بخش‌ها
+ACCESS_TITLES = {**TOOL_TITLES, **FEATURE_TITLES, "ssh": "ارتباط با دستگاه‌ها (SSH/Telnet)"}
+NO_VIEW = {"term"}                                  # بخش‌هایی که «دیدن» ندارند (view = none)
+_MON_VIEW = {"mon_list", "mon_report", "mon_snmp_live", "mon_snmp_series", "mon_icons", "mon_sound_get", "mon_check_now",
+             "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo"}
+_ASSET_VIEW = {"asset_list", "asset_get", "asset_changes", "asset_history", "asset_scan_status"}
+_SSH_VIEW = {"ssh_list", "ssh_jobs", "ssh_job", "ssh_job_results", "ssh_output", "ssh_export_output", "text_chunk",
+             "backup_overview", "backup_versions", "backup_view", "backup_diff", "backup_export", "backup_export_latest"}
+# متد ← (ابزار، کمترین سطح لازم). متدی که اینجا نیست فقط با قاعده‌ی نقش بررسی می‌شود.
+METHOD_ACCESS = {}
+for _m in _MON_VIEW:
+    METHOD_ACCESS[_m] = ("monitor", "view")
+for _m in OPERATOR_MON | FEATURE_API["monitor"] - _MON_VIEW - {"mon_state"}:
+    METHOD_ACCESS[_m] = ("monitor", "run")
+for _m in _ASSET_VIEW:
+    METHOD_ACCESS[_m] = ("asset", "view")
+METHOD_ACCESS["asset_save"] = ("asset", "run")
+for _m in _SSH_VIEW:
+    METHOD_ACCESS[_m] = ("ssh", "view")
+for _m in OPERATOR_SSH - _SSH_VIEW:
+    METHOD_ACCESS[_m] = ("ssh", "run")
+for _m in OPERATOR_TERM | (FEATURE_API["term"] - {"conn_cancel"}):
+    METHOD_ACCESS[_m] = ("term", "run")
+METHOD_ACCESS["net_oui"] = ("nettools", "view")
+for _m in FEATURE_API["nettools"] - {"net_oui"}:
+    METHOD_ACCESS[_m] = ("nettools", "run")
+for _m in FEATURE_API["offline"]:
+    METHOD_ACCESS[_m] = ("offline", "run")
+# متدهای دیگر با همین پیشوندها (بیشترشان فقط ادمین) هم سطح «اجرا»ی همان ابزار را می‌خواهند،
+# تا ادمینی که ادمین اصلی نیست و آن ابزار را ندارد از راه API هم به آن نرسد.
+PREFIX_ACCESS = (("asset_", "asset"), ("ssh_", "ssh"), ("backup_", "ssh"), ("cred_", "ssh"), ("fgu_", "offline"),
+                 ("mon_", "monitor"), ("snmp_", "monitor"), ("mib_", "monitor"), ("term_", "term"), ("xfer_", "term"),
+                 ("tftp_", "term"), ("net_", "nettools"))
+NO_ACCESS_CHECK = {"mon_state"}          # خودش برای سطح none پاسخ خالی می‌دهد (بنر هشدار سراسری)
+
+
+def access_for(name):
+    if name in NO_ACCESS_CHECK:
+        return None
+    if name in METHOD_ACCESS:
+        return METHOD_ACCESS[name]
+    for p, k in PREFIX_ACCESS:
+        if name.startswith(p):
+            return (k, "run")
+    return None
+
+
+# تاریخچه: نوع ردیف ← ابزار (ردیف ابزار پنهان برای کاربر نشان داده نمی‌شود)
+HISTORY_KIND = {"ssh": "ssh", "backup": "ssh", "fgupdate": "offline", "terminal": "term", "transfer": "term",
+                "monitor": "monitor", "asset": "asset", "nettools": "nettools", "dns": "dns", "scan": "scan",
+                "intel": "intel", "splunk": "splunk", "abuse": "abuse", "fortigate": "fortigate", "ban": "fortigate",
+                "redmine": "redmine", "ticket": "redmine"}
+
+
+def _maxl(a, b):
+    return a if RANK.get(a, 0) >= RANK.get(b, 0) else b
+
+
+def legacy_levels(user):
+    """سطح‌های معادل دسترسی پیش از 1.32 (نقش + تیک ابزارهای اپراتور)."""
+    role = user.get("role")
+    if role == "admin":
+        return {k: "run" for k in ACCESS_KEYS}
+    lv = {}
+    ut = user_tools(user) if role == "operator" else []
+    for k in ACCESS_KEYS:
+        if k in ut:
+            lv[k] = "run"
+        elif k in ("ssh", "asset", "term"):
+            lv[k] = "none"
+        elif k == "nettools":
+            lv[k] = "run" if role == "operator" else "none"
+        else:
+            lv[k] = "view"                         # نتیجه‌ها، مانیتورینگ و ابزارهای آفلاین را می‌دید
+    return lv
+
+
+def is_super(user, all_users):
+    """ادمین اصلی: کاربر با پرچم superuser؛ اگر هیچ ادمین فعالی پرچم ندارد (پیش از 1.32)، هر ادمین."""
+    if user is None:
+        return True
+    if user.get("role") != "admin" or user.get("disabled"):
+        return False
+    if user.get("superuser"):
+        return True
+    return not any(u.get("superuser") and u.get("role") == "admin" and not u.get("disabled") for u in all_users or [])
+
+
+def groups_of(settings):
+    g = settings.get("access", "groups", default=[]) or []
+    return {str(x.get("id")): x for x in g if isinstance(x, dict) and x.get("id")}
+
+
+def levels(user, settings, superuser=False):
+    """{ابزار: none|view|run} برای این کاربر."""
+    en = set(enabled_tools(settings)) | set(enabled_features(settings))
+    if user is None or superuser:
+        lv = {k: "run" for k in ACCESS_KEYS}
+    elif int(user.get("access_v") or 0) < ACCESS_V:
+        lv = legacy_levels(user)
+    else:
+        lv = {k: "none" for k in ACCESS_KEYS}
+        gs = groups_of(settings)
+        for gid in user.get("groups") or []:
+            for k, v in ((gs.get(str(gid)) or {}).get("tools") or {}).items():
+                if k in lv and v in RANK:
+                    lv[k] = _maxl(lv[k], v)
+        for k, v in (user.get("access") or {}).items():
+            if k in lv and v in RANK:
+                lv[k] = v
+        if user.get("role") == "readonly":
+            lv = {k: ("view" if v == "run" else v) for k, v in lv.items()}
+    for k in NO_VIEW:
+        if lv.get(k) == "view":
+            lv[k] = "none"
+    return {k: (v if k in en else "none") for k, v in lv.items()}
+
+
+def device_scope(user, settings, superuser=False):
+    """دستگاه‌های مشترکی که کاربر می‌بیند: {"all": bool, "grps": set, "ids": set}."""
+    if user is None or superuser:
+        return {"all": True, "grps": set(), "ids": set()}
+    if int(user.get("access_v") or 0) < ACCESS_V:
+        ok = user.get("role") == "admin" or user.get("shared_devices", True) is not False
+        return {"all": ok, "grps": set(), "ids": set()}
+    sc = {"all": False, "grps": set(), "ids": set()}
+    specs = [(groups_of(settings).get(str(g)) or {}).get("devices") for g in user.get("groups") or []]
+    if isinstance(user.get("devices"), dict):
+        specs = [user["devices"]]                  # استثنای کاربر جای گروه‌ها را می‌گیرد
+    for d in specs:
+        if not isinstance(d, dict):
+            continue
+        sc["all"] = sc["all"] or bool(d.get("all"))
+        sc["grps"] |= {str(x) for x in d.get("grps") or []}
+        sc["ids"] |= {int(x) for x in d.get("ids") or [] if str(x).isdigit()}
+    return sc
+
+
+def device_ok(scope, dev):
+    return bool(scope["all"] or (dev.get("grp") or "") in scope["grps"] or int(dev.get("id") or 0) in scope["ids"])
+
+
+def clean_levels(d):
+    return {k: v for k, v in (d or {}).items() if k in ACCESS_KEYS and v in RANK} if isinstance(d, dict) else {}
+
+
+def clean_devices(d):
+    if not isinstance(d, dict):
+        return None
+    return {"all": bool(d.get("all")), "grps": sorted({str(x).strip()[:60] for x in d.get("grps") or [] if str(x).strip()})[:500],
+            "ids": sorted({int(x) for x in d.get("ids") or [] if str(x).isdigit()})[:5000]}
+
+
+def can_call(user, name, settings, lv=None):
+    """None = مجاز؛ وگرنه پیام خطا. lv = levels(...) همین کاربر (اگر نیامد از نقش و تیک‌ها حساب می‌شود)."""
     if name in PUBLIC:
         return None
     mb = mode_block(name)
@@ -139,6 +295,12 @@ def can_call(user, name, settings):
     for f, names in FEATURE_API.items():
         if name in names and f not in enabled_features(settings):
             return f"بخش «{FEATURE_TITLES[f]}» در تنظیمات خاموش است."
+    if lv is None:
+        lv = levels(user, settings)
+    need = access_for(name)
+    if need and RANK[lv.get(need[0], "none")] < RANK[need[1]]:
+        return f"دسترسی به «{ACCESS_TITLES.get(need[0], need[0])}» ندارید." if lv.get(need[0], "none") == "none" \
+            else f"فقط اجازه‌ی دیدن «{ACCESS_TITLES.get(need[0], need[0])}» را دارید."
     role = "admin" if user is None else user.get("role")
     if role == "admin":
         if name in SSH_RUN and "ssh" not in enabled_tools(settings):
@@ -147,23 +309,19 @@ def can_call(user, name, settings):
     if name in READ:
         return None
     if role == "operator":
-        if name in OPERATOR:
+        if name in OPERATOR or name in OPERATOR_SSH or name in OPERATOR_TERM or name in OPERATOR_MON:
             return None
-        ok = allowed_tools(user, settings)
-        if name in OPERATOR_SSH:
-            return None if "ssh" in ok else "دسترسی به ابزار SSH ندارید."
-        if name in OPERATOR_TERM:
-            return None if "term" in ok else "دسترسی به ترمینال و انتقال فایل ندارید."
-        if name in OPERATOR_MON:
-            return None if "monitor" in ok else "دسترسی به تغییر مانیتورینگ ندارید."
         if name == "conn_cancel":
-            return None if ("ssh" in ok or "term" in ok) else "دسترسی ندارید."
+            return None if (RANK[lv.get("ssh", "none")] == 2 or RANK[lv.get("term", "none")] == 2) else "دسترسی ندارید."
+    if role == "readonly" and need and need[1] == "view":
+        return None                                # فقط‌خواندنی با سطح «دیدن»
     return "دسترسی به این بخش ندارید."
 
 
-def check_tools(user, settings, tools):
-    """ابزارهایی که اجرا می‌شوند باید فعال و برای کاربر مجاز باشند."""
-    en, ok = enabled_tools(settings), allowed_tools(user, settings)
+def check_tools(user, settings, tools, lv=None):
+    """ابزارهایی که اجرا می‌شوند باید فعال و برای کاربر مجاز (سطح اجرا) باشند."""
+    en = enabled_tools(settings)
+    ok = [k for k, v in (lv or levels(user, settings)).items() if v == "run"]
     for t in tools:
         if t not in en:
             return f"ابزار {TOOL_TITLES.get(t, t)} در تنظیمات خاموش است."
@@ -178,4 +336,7 @@ def public_user(u):
     return {"username": u["username"], "role": u["role"], "tools": user_tools(u) if u["role"] == "operator" else [],
             "disabled": bool(u.get("disabled")),
             "shared_devices": u.get("shared_devices", True) is not False,
+            "groups": [str(g) for g in u.get("groups") or []], "access": clean_levels(u.get("access")),
+            "devices": clean_devices(u.get("devices")), "superuser": bool(u.get("superuser")),
+            "access_v": int(u.get("access_v") or 0),
             "last_login": u.get("last_login"), "created": u.get("created"), "source": u.get("source") or "local"}

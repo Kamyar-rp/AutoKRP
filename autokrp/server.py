@@ -228,7 +228,8 @@ class _Ctx:
             if self._ad_expired(s, rec):
                 self.sessions.pop(sid, None)
                 return None
-            s["user"] = {k: rec.get(k) for k in ("username", "role", "tools", "disabled", "shared_devices", "perms_v", "source")}
+            s["user"] = {k: rec.get(k) for k in ("username", "role", "tools", "disabled", "shared_devices", "perms_v", "source",
+                                                  "groups", "access", "devices", "superuser", "access_v")}
             if touch:
                 s["seen"] = time.time()
             return s

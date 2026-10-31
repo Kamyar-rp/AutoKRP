@@ -385,6 +385,7 @@ function hiddenTools() { return (S.settings && S.settings.ui && S.settings.ui.hi
 function shown(t) {
   if (hiddenTools().includes(t)) return false;
   const st = S.state || {};
+  if (st.access && t in st.access) return st.access[t] !== "none";      // 1.32: سطح دسترسی همین کاربر
   if (FEATS.some(([k]) => k === t)) return !st.features || st.features.includes(t);
   return !st.tools_enabled || st.tools_enabled.includes(t);
 }
@@ -401,6 +402,8 @@ function renderSide(r) {
   if (WEB) $("#btnLock").lastChild.textContent = "خروج";
   const n = r.counts.fw_pending;            // آدرس‌ها: تعداد جامانده از بلاک
   $("#navReview").hidden = !n; $("#navReview").textContent = n; $("#navReview").title = I18N.t("جامانده از بلاک");
+  const sa = r.sec_alerts || 0;              // 1.33: نسخه‌ی تازه یا آسیب‌پذیری کتابخانه‌ها (ادمین)
+  $("#navAbout").hidden = !sa; $("#navAbout").textContent = sa; $("#navAbout").title = I18N.t("به‌روزرسانی و امنیت");
   const ap = r.assets_pending || 0;          // دارایی‌ها: تغییرهای در انتظار تأیید
   $("#navAssets").hidden = !ap; $("#navAssets").textContent = ap; $("#navAssets").title = I18N.t("در انتظار تأیید");
   if (S.page === "assets" && typeof AS !== "undefined" && AS.pendN !== ap) { AS.pendN = ap; asPendBadge(); }
@@ -414,24 +417,32 @@ function isAdmin() { return !S.state || !S.state.me || S.state.me.role === "admi
 function isRO() { return !!(S.state && S.state.me && S.state.me.role === "readonly"); }
 function applyRole(r) {
   const hid = hiddenTools();
-  const me = r.me, sig = JSON.stringify([me, r.tools, r.tools_enabled, r.features, hid, r.hidden_modes]);
+  const me = r.me, sig = JSON.stringify([me, r.tools, r.tools_enabled, r.features, hid, r.hidden_modes, r.access]);
   if (sig === roleSig) return;
   roleSig = sig;
   const role = me ? me.role : "admin";
   document.body.classList.toggle("nadm", role !== "admin");
   document.body.classList.toggle("ro", role === "readonly");
   // اپراتور: «ترمینال و انتقال فایل» فقط با دسترسی term خودش (1.22)؛ بقیه‌ی بخش‌ها با روشن بودن کلی
-  const feats = (r.features || FEATS.map(([k]) => k)).filter((f) => role === "admin" || f !== "term" || (r.tools || []).includes("term"));
-  const tl = (role === "admin" ? (r.tools_enabled || []) : (r.tools || [])).concat(feats).filter((t) => !hid.includes(t));
+  // 1.32: سطح هر ابزار از سرور (r.access: none | view | run)؛ «پنهان» = دیده نمی‌شود، «دیدن» = بدون دکمه‌های اجرا
+  const AX = r.access || {};
+  const tl = Object.keys(AX).filter((k) => AX[k] !== "none" && !hid.includes(k));
   $$("[data-need-tool]").forEach((el) => el.classList.toggle("tool-off", !tl.includes(el.dataset.needTool)));
+  Object.keys(AX).forEach((k) => {
+    document.body.classList.toggle("nrun-" + k, AX[k] !== "run");
+    document.body.classList.toggle("nsee-" + k, AX[k] === "none" || hid.includes(k));
+  });
   // 1.31: بخش مخصوص حالت دیگر (مثلاً کابل کنسول فقط در کلاینت) اصلاً دیده نمی‌شود
   $$("[data-mode]").forEach((el) => el.classList.toggle("mode-off", (r.hidden_modes || []).includes(el.dataset.mode)));
-  $("#navSsh").hidden = !(r.tools_enabled || []).includes("ssh") || (role !== "admin" && !(r.tools || []).includes("ssh")) || hid.includes("ssh");
+  $("#navSsh").hidden = !["ssh", "term", "nettools"].some((k) => tl.includes(k));      // صفحه‌ی «ارتباط با دستگاه‌ها»
   // تب یا صفحه‌ای که الان پنهان شد
   const off = (sel) => { const b = $(sel); return !!b && b.classList.contains("tool-off"); };
   if (off(`#setTabs button[data-t="${S.setTab}"]`)) { S.setTab = "general"; if (S.page === "settings") renderSettings(); }
   if (off(`#autoTabs button[data-t="${S.autoTab}"]`)) { S.autoTab = "daily"; if (S.page === "auto") renderAuto(); }
-  if (typeof SSH !== "undefined" && off(`#sshTabs button[data-t="${SSH.tab}"]`)) { SSH.tab = "devices"; if (S.page === "ssh") loadSsh(); }
+  if (typeof SSH !== "undefined" && off(`#sshTabs button[data-t="${SSH.tab}"]`)) {
+    const first = $$("#sshTabs button").find((b) => !b.classList.contains("tool-off") && getComputedStyle(b).display !== "none");
+    SSH.tab = first ? first.dataset.t : "devices"; if (S.page === "ssh") loadSsh();
+  }
   if (ST.tab === "monitor" && off(`#stTab button[data-v="monitor"]`)) { ST.tab = "general"; if (S.page === "stats") { stTabApply(); loadStats(); } }
   if (S.page === "monitor" && off(`#nav button[data-page="monitor"]`)) go("dashboard");
   if (S.page === "assets" && off(`#nav button[data-page="assets"]`)) go("dashboard");
@@ -447,8 +458,8 @@ function applyRole(r) {
 }
 async function myTools() {
   const st = S.state || {}, role = st.me ? st.me.role : "admin";
-  const avail = (role === "admin" ? st.tools_enabled || [] : st.tools || []).map((k) => [k, STEP_TITLE[k] || (UTOOLS.find((x) => x[0] === k) || [k, k])[1]])
-    .concat(FEATS.filter(([k]) => !st.features || st.features.includes(k)));
+  const AX = st.access || {};
+  const avail = UTOOLS.concat(FEATS).filter(([k]) => (AX[k] || "none") !== "none").map(([k, t]) => [k, STEP_TITLE[k] || t]);
   const hid = new Set(hiddenTools());
   const res = await openModal({ title: "ابزارهای من",
     body: `<p class="hint">ابزارهایی را که لازم ندارید پنهان کنید؛ فقط برای ${st.me && !st.me.single ? "حساب شما" : "همین برنامه"} اعمال می‌شود (منو، صفحه‌ی ابزارها، تب‌های تنظیمات و اتصال‌ها) و دسترسی‌ها یا کارهای خودکار را عوض نمی‌کند.</p>
@@ -2052,7 +2063,7 @@ function renderSettings() {
   if (t === "notify") {
     const N = D.notify || {}, ev = N.events || {};
     const EV = [["approval", "اجرا منتظر تأیید است"], ["run_error", "مرحله‌ای از اجرا خطا داد"], ["ban_failed", "بلاک در FortiGate ناموفق بود"],
-      ["ssh_failed", "اجرای SSH روی دستگاهی ناموفق بود"], ["backup_failed", "پشتیبان‌گیری کانفیگ ناموفق بود"], ["config_changed", "کانفیگ دستگاهی تغییر کرد"], ["abuse_quota", "سهمیه‌ی روزانه‌ی AbuseIPDB تمام شد و IPهایی بررسی نشدند"], ["scan_new", "اسکن شبکه هاست یا پورت تازه پیدا کرد"], ["mon_down", "هدف مانیتورینگ قطع شد"], ["mon_up", "هدف مانیتورینگ دوباره وصل شد"], ["mon_alarm", "هشدار آستانه‌ی SNMP (CPU، حافظه، دما، پورت، OID دستی) یا راه‌اندازی دوباره‌ی دستگاه"], ["mon_cert", "گواهی HTTPS هدف مانیتورینگ نزدیک انقضاست"], ["abuse_repeat", "IP غیرمخربی بارها تکرار شد و نیاز به بررسی مجدد دارد"], ["health", "سلامت سرور: فضای دیسک کم، RAM یا CPU برنامه بالا"], ["dev_event", "رخداد بحرانی دستگاه (Trap یا Syslog)"]];
+      ["ssh_failed", "اجرای SSH روی دستگاهی ناموفق بود"], ["backup_failed", "پشتیبان‌گیری کانفیگ ناموفق بود"], ["config_changed", "کانفیگ دستگاهی تغییر کرد"], ["abuse_quota", "سهمیه‌ی روزانه‌ی AbuseIPDB تمام شد و IPهایی بررسی نشدند"], ["scan_new", "اسکن شبکه هاست یا پورت تازه پیدا کرد"], ["mon_down", "هدف مانیتورینگ قطع شد"], ["mon_up", "هدف مانیتورینگ دوباره وصل شد"], ["mon_alarm", "هشدار آستانه‌ی SNMP (CPU، حافظه، دما، پورت، OID دستی) یا راه‌اندازی دوباره‌ی دستگاه"], ["mon_cert", "گواهی HTTPS هدف مانیتورینگ نزدیک انقضاست"], ["security_update", "به‌روزرسانی و امنیت: نسخه‌ی تازه‌ی برنامه یا آسیب‌پذیری تازه در کتابخانه‌ها"], ["abuse_repeat", "IP غیرمخربی بارها تکرار شد و نیاز به بررسی مجدد دارد"], ["health", "سلامت سرور: فضای دیسک کم، RAM یا CPU برنامه بالا"], ["dev_event", "رخداد بحرانی دستگاه (Trap یا Syslog)"]];
     body.innerHTML = `<div class="form"><div class="row" style="justify-content:space-between">${sw("notify.enabled", N.enabled, "<b>ارسال اعلان با ایمیل</b>")}</div>
       <h3 style="margin:16px 0 10px">سرور ایمیل (SMTP)</h3><div class="form-grid">
         ${inp("notify.host", "سرور", { ltr: true, ph: "mail.example.com" })}${inp("notify.port", "پورت", { type: "num" })}
@@ -2920,20 +2931,17 @@ const UTOOLS = [["splunk", "Splunk"], ["abuse", "AbuseIPDB"], ["fortigate", "For
 async function renderUsersTab(body) {
   const sec = (S.state && S.state.security) || {};
   body.innerHTML = `<div class="form"><h3>نقش‌ها</h3><dl class="kv"><dt>ادمین</dt><dd>همه‌چیز، از جمله تنظیمات و کاربران</dd>
-      <dt>اپراتور</dt><dd>دیدن داده‌ها و گرفتن خروجی، به‌اضافه‌ی ابزارها و بخش‌هایی که برایش تیک می‌زنید</dd>
-      <dt>فقط‌خواندنی</dt><dd>فقط دیدن؛ بدون اجرا، تأیید، خروجی و تنظیمات</dd></dl>
-      <p class="hint">خاموش کردن یک ابزار یا بخش برای همه در «تنظیمات ← عمومی» است؛ این‌جا دسترسی هر کاربر جداست.</p></div>
+      <dt>اپراتور</dt><dd>ابزارها و بخش‌هایی که گروه‌هایش اجازه می‌دهند (دیدن یا اجرا)؛ بدون تنظیمات</dd>
+      <dt>فقط‌خواندنی</dt><dd>حداکثر «دیدن» در ابزارهایی که گروه‌هایش اجازه می‌دهند؛ بدون اجرا، تأیید، خروجی و تنظیمات</dd></dl>
+      <p class="hint">خاموش کردن یک ابزار یا بخش برای همه در «تنظیمات ← عمومی» است؛ دسترسی هر گروه و کاربر در جدول «دسترسی‌ها» پایین همین صفحه.</p></div>
     <div class="form" id="usrBox"></div><div class="form" id="usrMatrix"></div>${WEB ? `<div class="form" id="usrAd"></div><div class="form" id="usrUnseal"></div>` : ""}`;
   await renderUsers($("#usrBox", body), sec, () => renderUsersTab(body));
   if (WEB) adRender(body);
   const r = await api("users_list");
   const box = $("#usrMatrix", body);
   if (!r.ok || !r.enabled || !r.users.length) { box.remove(); return; }
-  const cols = UTOOLS.concat(UPERMS.map(([k]) => [k, { monitor: "مانیتورینگ", term: "ترمینال" }[k]]));
-  const cell = (u, k) => (u.role === "admin" || (u.role === "operator" && u.tools.includes(k)) ? `<span class="tag ok" data-sv="1">✓</span>` : `<span class="muted" data-sv="0">—</span>`);
-  box.innerHTML = `<h3>جدول دسترسی‌ها</h3><div class="table-wrap inner"><table class="grid"><thead><tr><th>کاربر</th><th>نقش</th>${cols.map(([, t]) => `<th>${esc(t)}</th>`).join("")}</tr></thead><tbody>
-    ${r.users.map((u) => `<tr${u.disabled ? ` class="muted"` : ""}><td class="ltr"><b>${esc(u.username)}</b></td><td>${esc(r.roles[u.role] || u.role)}</td>${cols.map(([k]) => `<td>${cell(u, k)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
-    <p class="hint">برای تغییر، «ویرایش» همان کاربر را در جدول بالا بزنید.</p>`;
+  if (!(S.state && S.state.superuser)) { box.innerHTML = `<h3>دسترسی‌ها</h3><p class="hint">فقط «ادمین اصلی» کاربران، گروه‌ها و دسترسی‌ها را تغییر می‌دهد.</p>`; return; }
+  await renderAccess(box);                                   // 1.32: ui/access.js
 }
 async function renderUsers(box, sec, after) {
   if (!box) return;
@@ -3039,11 +3047,8 @@ function userModal(u, done) {
       <label class="field"><span>نقش</span><select id="umRole">${[["admin", "ادمین — همه‌چیز"], ["operator", "اپراتور — اجرای ابزارهای مجاز"], ["readonly", "فقط‌خواندنی — فقط دیدن"]].map(([k, t]) => `<option value="${k}" ${u.role === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
       <label class="field"><span>${isNew ? "رمز" : "رمز تازه (خالی = بدون تغییر)"}</span><input type="password" class="ltr" id="umPw" autocomplete="new-password"></label>
       <label class="field"><span>تکرار رمز</span><input type="password" class="ltr" id="umPw2" autocomplete="new-password"></label></div>
-    <div class="field" id="umTools"><span>ابزارها و بخش‌های مجاز اپراتور <small class="hint" id="umToolsHint">(برای انتخاب ابزارها، نقش را «اپراتور» کنید؛ ادمین به همه و فقط‌خواندنی به هیچ‌کدام)</small></span><div class="um-grp"><b>اجرای ابزارها</b><div class="chks">${UTOOLS.map(([k, t]) => `<label class="chk"><input type="checkbox" class="umT" value="${k}" ${u.tools.includes(k) ? "checked" : ""}>${t}</label>`).join("")}</div></div>
-      <div class="um-grp"><b>بخش‌ها</b><div class="chks">${UPERMS.map(([k, t]) => `<label class="chk"><input type="checkbox" class="umT" value="${k}" ${u.tools.includes(k) ? "checked" : ""}>${t}</label>`).join("")}</div></div>
-      <small class="hint">اپراتور فقط همین ابزارها را اجرا و تأیید می‌کند. SSH یعنی صفحه‌ی SSH (دستگاه‌ها، اجرای اسکریپت، پشتیبان کانفیگ). بدون «مانیتورینگ» صفحه‌ی مانیتورینگ را فقط می‌بیند. دیدن آدرس‌ها، تاریخچه و آمار برای همه‌ی نقش‌ها باز است.</small>
-      <label class="chk" style="margin-top:8px"><input type="checkbox" id="umShared" ${u.shared_devices !== false ? "checked" : ""}>دسترسی به دستگاه‌های مشترک (ذخیره‌شده توسط ادمین)</label>
-      <small class="hint">اگر خاموش باشد، دستگاه‌های مشترک برای این کاربر نمایش داده نمی‌شوند و فقط با یوزر و رمز خودش وصل می‌شود (دستگاه‌های شخصی یا اتصال موقت).</small></div>
+    <div class="field" id="umGroups"><span>گروه‌های دسترسی</span><div class="chks" id="umGrpList"><span class="muted">…</span></div>
+      <small class="hint">ابزارها، سطح دسترسی (دیدن یا اجرا) و دستگاه‌های مجاز از گروه‌ها می‌آید؛ استثنای هر کاربر در جدول «دسترسی‌ها».</small></div>
     <label class="chk" style="margin-top:8px"><input type="checkbox" id="umDis" ${u.disabled ? "checked" : ""}>غیرفعال (نمی‌تواند وارد شود)</label>`,
     foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">ذخیره</button>`,
     onOpen: (m, close) => {
@@ -3051,15 +3056,20 @@ function userModal(u, done) {
         $("#umRole", m).disabled = true; $("#umPw", m).closest(".field").hidden = true; $("#umPw2", m).closest(".field").hidden = true;
         $("#umRole", m).insertAdjacentHTML("afterend", `<small class="hint">کاربر AD: نقش در هر ورود از گروه‌های AD تعیین می‌شود؛ رمز در خود AD.</small>`);
       }
-      const sync = () => { const op = $("#umRole", m).value === "operator"; $$(".umT", m).forEach((x) => (x.disabled = !op)); $("#umToolsHint", m).hidden = op; };
-      $("#umRole", m).onchange = sync; sync();
+      api("access_get").then((g) => {
+        const bx = $("#umGrpList", m); if (!bx) return;
+        if (!g.ok) { $("#umGroups", m).hidden = true; return; }
+        const mine = new Set(isNew ? [] : u.groups || []);
+        bx.innerHTML = g.groups.length ? g.groups.map((x) => `<label class="chk"><input type="checkbox" class="umG" value="${esc(x.id)}" ${mine.has(String(x.id)) ? "checked" : ""}>${esc(x.name)}</label>`).join("")
+          : `<span class="muted">هنوز گروهی نیست؛ پایین همین صفحه در «دسترسی‌ها» بسازید.</span>`;
+      });
       $("[data-r='0']", m).onclick = () => close(null);
       $("[data-r='1']", m).onclick = async () => {
         const pw = $("#umPw", m).value;
         if (pw !== $("#umPw2", m).value) return toast("رمز و تکرار آن یکی نیستند.", "error");
-        const x = await api("user_save", { username: $("#umName", m).value.trim(), role: $("#umRole", m).value,
-          tools: $$(".umT", m).filter((c) => c.checked).map((c) => c.value), disabled: $("#umDis", m).checked,
-          shared_devices: $("#umShared", m).checked }, pw);
+        const body = { username: $("#umName", m).value.trim(), role: $("#umRole", m).value, disabled: $("#umDis", m).checked };
+        if ($("#umGrpList input", m)) body.groups = $$(".umG", m).filter((c) => c.checked).map((c) => c.value);
+        const x = await api("user_save", body, pw);
         if (!x.ok) return toast(x.error, "error");
         toast("ذخیره شد", "ok"); close(true); done();
       };
@@ -3099,7 +3109,45 @@ async function renderAbout() {
         <dd>${WEB && /^(https:|mailto:)/.test(c.url || "") ? `<a href="${esc(c.url)}" class="ltr" target="_blank" rel="noopener noreferrer">${esc(c.text)}</a>` : `<a href="#" class="ltr" data-contact="${esc(c.kind)}">${esc(c.text)}</a>`}</dd>`).join("")}</dl></div>
       <div class="sec"><h3>محیط اجرا</h3><dl class="kv"><dt>Python</dt><dd class="ltr" style="text-align:start">${esc(r.python)}</dd><dt>سیستم‌عامل</dt><dd class="ltr" style="text-align:start">${esc(r.os)}</dd>
       ${Object.entries(r.libs).map(([k, v]) => `<dt>${esc(k)}</dt><dd class="ltr" style="text-align:start">${esc(v)}</dd>`).join("")}
-      <dt>پوشه‌ی داده</dt><dd class="ltr" style="text-align:start">${esc(r.data_dir)}</dd></dl></div></div>`;
+      <dt>پوشه‌ی داده</dt><dd class="ltr" style="text-align:start">${esc(r.data_dir)}</dd></dl></div>
+      ${isAdmin() ? `<div class="sec" id="aboutSec"></div>` : ""}</div>`;
+  if (isAdmin()) aboutSec();
+}
+
+/* 1.33: نسخه‌ی تازه در GitHub + آسیب‌پذیری کتابخانه‌های برنامه (OSV) — دستی یا خودکار روزانه */
+let _aboutPoll = null;
+async function aboutSec() {
+  const box = $("#aboutSec"); if (!box) return;
+  const r = await api("about_security"); if (!r.ok) { box.innerHTML = ""; return; }
+  const st = r.state || {}, rel = st.release || {}, vu = st.vulns || {};
+  const items = vu.items || [], bad = items.filter((x) => !x.accepted);
+  const relHtml = r.running && !st.at ? `<span class="muted">در حال بررسی…</span>`
+    : !st.at ? `<span class="muted">هنوز بررسی نشده است.</span>`
+    : rel.error ? `<span class="tag err">خطا</span> <span class="muted">${esc(rel.error)}</span>`
+    : rel.newer ? `<span class="tag warn">نسخه‌ی تازه</span> <b class="ltr">${esc(rel.latest)}</b> <span class="muted">${rel.published ? esc(fmtDate(Date.parse(rel.published) / 1000)) : ""}</span>
+        ${WEB ? `<a class="btn sm primary" href="${esc(rel.url)}" target="_blank" rel="noopener noreferrer">صفحه‌ی دانلود</a>` : `<button class="btn sm primary" id="abRel">صفحه‌ی دانلود</button>`}`
+    : rel.latest ? `<span class="tag ok">به‌روز است</span> <span class="muted">آخرین انتشار:</span> <span class="ltr">${esc(rel.latest)}</span>` : `<span class="muted">هنوز انتشاری در GitHub نیست.</span>`;
+  const vulnHtml = !st.at ? "" : vu.error ? `<p><span class="tag err">خطا</span> <span class="muted">${esc(vu.error)}</span></p>`
+    : !items.length ? `<p><span class="tag ok">بدون آسیب‌پذیری شناخته‌شده</span> <span class="muted"><span>${num(vu.checked || 0)}</span> <span>کتابخانه بررسی شد.</span></span></p>`
+    : `<p>${bad.length ? `<span class="tag err"><span>${num(bad.length)}</span> <span>آسیب‌پذیری</span></span>` : `<span class="tag ok">فقط موارد پذیرفته‌شده</span>`} <span class="muted"><span>${num(vu.checked || 0)}</span> <span>کتابخانه بررسی شد.</span></span></p>
+      <div class="table-wrap inner"><table class="grid"><thead><tr><th>کتابخانه</th><th>نسخه</th><th>شناسه</th><th>شدت</th><th>رفع در نسخه</th><th>توضیح</th></tr></thead><tbody>
+      ${items.map((x) => `<tr class="${x.accepted ? "muted" : ""}"><td class="ltr">${esc(x.package)}</td><td class="ltr">${esc(x.version)}</td>
+        <td class="ltr" data-no-i18n>${esc(x.id)}${x.aliases.length ? `<br><small class="muted">${esc(x.aliases.join(", "))}</small>` : ""}</td><td class="ltr">${esc(x.severity || "—")}</td>
+        <td class="ltr">${esc((x.fixed || []).join(", ") || "—")}</td>
+        <td>${x.accepted ? `<span class="tag mute">ریسک پذیرفته‌شده</span> <small>${esc(x.accepted)}</small>` : `<small class="ltr" data-no-i18n>${esc(x.summary)}</small>`}</td></tr>`).join("")}</tbody></table></div>
+      ${bad.length ? `<p class="hint">کتابخانه را در requirements.txt به نسخه‌ی «رفع در نسخه» برسانید و دوباره بیلد کنید، یا نسخه‌ی تازه‌ی برنامه را از GitHub بگیرید.</p>` : ""}`;
+  box.innerHTML = `<h3>به‌روزرسانی و امنیت</h3>
+    <dl class="kv"><dt>نسخه‌ی تازه در GitHub</dt><dd>${relHtml}</dd>
+      <dt>آخرین بررسی</dt><dd>${st.at ? esc(fmtDate(st.at)) : "—"}${r.running ? ` <span class="tag info">در حال بررسی…</span>` : ""}</dd></dl>
+    <h4 style="margin:12px 0 6px">آسیب‌پذیری کتابخانه‌های برنامه</h4>${vulnHtml}
+    <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px"><button class="btn" id="abChk" ${r.running ? "disabled" : ""}>بررسی الان</button>
+      <label class="switch"><input type="checkbox" id="abAuto" ${r.auto ? "checked" : ""}><span class="track"><span class="thumb"></span></span>بررسی خودکار هر روز</label></div>
+    <p class="hint">فقط نسخه‌ی برنامه و نام و نسخه‌ی کتابخانه‌ها به GitHub و پایگاه آسیب‌پذیری OSV (osv.dev، همان منبع pip-audit) فرستاده می‌شود؛ هیچ داده‌ی سازمانی فرستاده نمی‌شود. مورد تازه با اعلان برنامه و ایمیل (رویداد «به‌روزرسانی و امنیت») خبر داده می‌شود.</p>`;
+  const rb = $("#abRel", box); if (rb) rb.onclick = () => api("open_release");
+  $("#abChk", box).onclick = async () => { const x = await api("about_check"); if (!x.ok) return toast(x.error, "error"); aboutSec(); };
+  $("#abAuto", box).onchange = async (e) => { const x = await api("about_auto_set", e.target.checked); if (!x.ok) { e.target.checked = !e.target.checked; toast(x.error, "error"); } };
+  clearTimeout(_aboutPoll);
+  if (r.running) _aboutPoll = setTimeout(() => { if (S.page === "about") aboutSec(); }, 1500);   // فقط تا پایان بررسی
 }
 
 /* ================================================================ branding in general tab */
@@ -3467,7 +3515,12 @@ const SSH_ST = { ok: ["ok", "موفق"], failed: ["err", "ناموفق"], runnin
 const typeName = (t) => (SSH.types.find((x) => x[0] === t) || [t, t])[1];
 const isLinux = (id) => (SSH.devices.find((d) => d.id === id) || {}).device_type === "linux";
 async function loadSsh() {
-  const [r, c] = await Promise.all([api("ssh_list"), isRO() ? Promise.resolve({ ok: false }) : api("cred_list")]);
+  const lv = ((S.state || {}).access || {}).ssh;
+  if (lv === "none") {                       // 1.32: فقط ترمینال یا ابزارهای شبکه (بدون دسترسی به فهرست دستگاه‌های SSH)
+    Object.assign(SSH, { devices: [], scripts: [], creds: [], groups: [] });
+    return renderSsh();
+  }
+  const [r, c] = await Promise.all([api("ssh_list"), isRO() || lv === "view" ? Promise.resolve({ ok: false }) : api("cred_list")]);
   if (!r.ok) return toast(r.error, "error");
   Object.assign(SSH, { devices: r.devices, scripts: r.scripts, types: r.types, telnetTypes: r.telnet_types || [], groups: r.groups, vars: r.vars, creds: c.ok ? c.profiles : [] });
   const ids = new Set(r.devices.map((d) => d.id));
@@ -3477,6 +3530,11 @@ async function loadSsh() {
 function renderSsh() {
   if (!isAdmin() && SSH.tab === "fgu") SSH.tab = "run";
   if (S.state && S.state.me && S.state.me.role === "readonly" && ["term", "xfer", "creds", "net"].includes(SSH.tab)) SSH.tab = "devices";
+  const tb = $(`#sshTabs button[data-t="${SSH.tab}"]`);
+  if (tb && (tb.classList.contains("tool-off") || getComputedStyle(tb).display === "none")) {   // 1.32: تب پنهان برای این کاربر
+    const first = $$("#sshTabs button").find((b) => !b.classList.contains("tool-off") && getComputedStyle(b).display !== "none");
+    if (first) SSH.tab = first.dataset.t;
+  }
   $$("#sshTabs button").forEach((b) => b.classList.toggle("on", b.dataset.t === SSH.tab));
   if (SSH.tab !== "term") termHide();
   ({ devices: sshDevices, creds: sshCreds, run: sshRun, term: sshTerm, xfer: sshXfer, net: sshNet, backups: sshBackups, fgu: sshFgu, jobs: sshJobs })[SSH.tab]();
@@ -3490,7 +3548,7 @@ const stTag = (s) => { const st = SSH_ST[s] || ["mute", "—"]; return `<span cl
 /* ---------- devices ---------- */
 function sshDevices() {
   const canTerm = shown("term") && !(S.state && S.state.me && S.state.me.role === "readonly");   // دکمه‌ی «ترمینال» هر دستگاه
-  $("#sshActions").innerHTML = `<button class="btn ghost adm-only" id="sshKeys">کلیدهای میزبان</button><button class="btn adm-only" id="sshBulk">افزودن گروهی</button><button class="btn primary" id="sshAdd">${isAdmin() ? "افزودن دستگاه" : "افزودن دستگاه شخصی"}</button>`;
+  $("#sshActions").innerHTML = `<button class="btn ghost adm-only" id="sshKeys" data-need-run="ssh">کلیدهای میزبان</button><button class="btn adm-only" id="sshBulk" data-need-run="ssh">افزودن گروهی</button><button class="btn primary" id="sshAdd" data-need-run="ssh">${isAdmin() ? "افزودن دستگاه" : "افزودن دستگاه شخصی"}</button>`;
   const q = SSH.q.toLowerCase();
   const rows = SSH.devices.filter((d) => (!SSH.grp || d.grp === SSH.grp) && (!q || [d.name, d.host, d.grp, d.username, typeName(d.device_type)].some((x) => String(x || "").toLowerCase().includes(q))));
   const allSel = rows.length && rows.every((d) => SSH.sel.has(d.id));
@@ -3508,8 +3566,8 @@ function sshDevices() {
       : `<tr><td colspan="${canTerm ? 8 : 7}"><div class="empty">${SSH.devices.length ? "موردی با این فیلتر نیست." : "هنوز دستگاهی اضافه نشده است."}</div></td></tr>`}</tbody></table></div>
     <p class="hint" style="margin-top:10px">یوزر، پسورد و رمز enable/sudo فقط در فایل رمزنگاری‌شده نگهداری می‌شوند. کلید میزبان هر دستگاه بار اول ثبت می‌شود (TOFU) و اگر عوض شود اتصال قبل از ارسال پسورد قطع می‌شود.</p>
     <div class="selbar" id="sshSelBar" ${SSH.sel.size ? "" : "hidden"}><b>${num(SSH.sel.size)} مورد انتخاب شده</b>
-      <button class="btn sm" data-sa="test">تست اتصال</button><button class="btn sm" data-sa="run">اجرای اسکریپت</button>
-      <button class="btn sm" data-sa="backup">پشتیبان‌گیری الان</button><button class="btn sm danger-ghost" data-sa="del">حذف</button>
+      <button class="btn sm" data-sa="test" data-need-run="ssh">تست اتصال</button><button class="btn sm" data-sa="run" data-need-run="ssh">اجرای اسکریپت</button>
+      <button class="btn sm" data-sa="backup" data-need-run="ssh">پشتیبان‌گیری الان</button><button class="btn sm danger-ghost" data-sa="del" data-need-run="ssh">حذف</button>
       <button class="btn sm ghost" data-sa="clear">لغو انتخاب</button></div>`;
   $("#sshQ").oninput = (e) => { SSH.q = e.target.value; const p = e.target.selectionStart; sshDevices(); const i = $("#sshQ"); i.focus(); i.selectionStart = i.selectionEnd = p; };
   $("#sshGrp").onchange = (e) => { SSH.grp = e.target.value; sshDevices(); };
@@ -3880,7 +3938,7 @@ setInterval(() => {
 
 /* ---------- config backups ---------- */
 async function sshBackups() {
-  $("#sshActions").innerHTML = `<button class="btn" id="bkLatest">دانلود آخرین نسخه‌ها…</button><button class="btn primary" id="bkNow">پشتیبان‌گیری الان</button>`;
+  $("#sshActions").innerHTML = `<button class="btn" id="bkLatest">دانلود آخرین نسخه‌ها…</button><button class="btn primary" id="bkNow" data-need-run="ssh">پشتیبان‌گیری الان</button>`;
   const r = await api("backup_overview"); if (SSH.tab !== "backups" || S.page !== "ssh") return; if (!r.ok) return toast(r.error, "error");
   const devs = r.devices, auto = (S.settings && S.settings.automation && S.settings.automation.backup) || {};
   if (SSH.bk.dev && !devs.some((d) => d.id === SSH.bk.dev)) SSH.bk.dev = null;

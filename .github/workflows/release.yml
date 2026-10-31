@@ -19,12 +19,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+      - name: Dependency list for the in-app security check
+        run: python dev/deps_snapshot.py
       - name: Build exe
         shell: cmd
         run: >
           python -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoKRP --icon assets\app.ico
           --add-data "ui;ui" --add-data "assets\app.png;assets" --add-data "assets\mibs;assets\mibs"
-          --add-data "autokrp\trapdb.json;autokrp" --add-data "autokrp\oui.dat;autokrp" --collect-submodules serial --hidden-import pystray._win32 --hidden-import pymysql
+          --add-data "autokrp\trapdb.json;autokrp" --add-data "autokrp\oui.dat;autokrp" --add-data "autokrp\build_deps.txt;autokrp" --collect-submodules serial --hidden-import pystray._win32 --hidden-import pymysql
           --hidden-import autokrp.fgtask_child --collect-submodules netmiko --collect-submodules dns
           --collect-submodules pysnmp --collect-submodules ldap3 --collect-all pysmi --collect-data lark
           --hidden-import sqlcipher3 --collect-binaries sqlcipher3 app.py

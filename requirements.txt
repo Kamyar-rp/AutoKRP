@@ -6,6 +6,7 @@ netmiko>=4.3
 paramiko>=4.0,<5.0     # paramiko 5 removed SHA-1 algorithms; some older devices need them (per-device "legacy" switch)
 dnspython>=2.6
 PyMySQL>=1.1.1         # CVE-2024-36039; optional MySQL / MariaDB backend (pure Python)
+pyasn1>=0.6.5          # pysnmp/ldap3 dependency; CVE-2026-119194, -119195, -119196, -119197
 pysnmp>=7.1,<8         # SNMP v2c/v3 monitoring (pure Python)
 ldap3>=2.9,<3          # optional Active Directory sign-in in server mode (pure Python, LGPL-3.0)
 sqlcipher3>=0.6,<1     # encrypted local database (SQLCipher 4; Windows wheels include the library)

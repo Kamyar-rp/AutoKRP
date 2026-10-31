@@ -219,8 +219,11 @@ async function termConnectDlg(preset) {
       const setMode = (v) => {
         $$("#tcMode button", m).forEach((x) => x.classList.toggle("on", x.dataset.v === v));
         $("#tcDev", m).hidden = v !== "dev"; $("#tcAd", m).hidden = v !== "adhoc"; $("#tcSer", m).hidden = v !== "serial";
-        clearInterval(timer); timer = null;
-        if (v === "serial") { loadPorts(); timer = setInterval(() => (m.isConnected ? loadPorts() : clearInterval(timer)), 2000); }   // کابل تازه وصل‌شده خودکار دیده شود
+        clearTimeout(timer); timer = null;
+        if (v === "serial") {        // کابل تازه وصل‌شده خودکار دیده شود؛ درخواست بعدی فقط بعد از پاسخ قبلی (شمارش پورت در ویندوز کند است)
+          const loop = async () => { if (!m.isConnected || $("#tcSer", m).hidden) return; await loadPorts(); timer = setTimeout(loop, 3000); };
+          loop();
+        }
       };
       const protoUi = () => { const t = $("#tcProto", m).value === "telnet"; $$(".tcSsh", m).forEach((x) => (x.hidden = t)); $$(".tcTel", m).forEach((x) => (x.hidden = !t)); };
       $("#tcProto", m).onchange = () => { const pp = $("#tcPort", m); if (["22", "23", ""].includes(pp.value.trim())) pp.value = $("#tcProto", m).value === "telnet" ? 23 : 22; protoUi(); };
@@ -228,14 +231,14 @@ async function termConnectDlg(preset) {
       $$("#tcMode button", m).forEach((b) => (b.onclick = () => setMode(b.dataset.v)));
       $("#tcComRe", m).onclick = () => { ports = null; loadPorts(); };
       setMode(mode0);
-      $("[data-r='0']", m).onclick = () => { clearInterval(timer); close(null); };
+      $("[data-r='0']", m).onclick = () => { clearTimeout(timer); close(null); };
       $("[data-r='1']", m).onclick = () => {
         if (!$("#tcSer", m).hidden) {
           const port = $("#tcCom", m).value; if (!port) return toast("پورت سریال انتخاب نشده است", "error");
-          clearInterval(timer);
+          clearTimeout(timer);
           return close({ serial: { port, baud: Number($("#tcBaud", m).value) || 9600, bits: Number($("#tcBits", m).value), parity: $("#tcPar", m).value, stop: $("#tcStop", m).value, flow: $("#tcFlow", m).value } });
         }
-        clearInterval(timer);
+        clearTimeout(timer);
         if (!$("#tcAd", m).hidden) {
           const host = $("#tcHost", m).value.trim(); if (!host) return toast("آدرس را وارد کنید", "error");
           const proto = $("#tcProto", m).value;
