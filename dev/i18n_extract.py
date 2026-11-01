@@ -253,7 +253,7 @@ def main():
         if s and FA.search(s):
             items.setdefault(s, set()).add(src)
 
-    for kind, parts in (x for f in ("app.js", "trange.js", "keys.js", "noc.js", "monevents.js", "sshlive.js", "monitor.js", "snmp.js", "assets.js", "offline.js", "dbui.js", "nettools.js", "access.js", "monview.js") for x in js_strings((ROOT / "ui" / f).read_text(encoding="utf-8"))):
+    for kind, parts in (x for f in ("app.js", "trange.js", "keys.js", "noc.js", "monevents.js", "sshlive.js", "monitor.js", "snmp.js", "assets.js", "offline.js", "dbui.js", "nettools.js", "access.js", "monview.js", "netmap.js", "apitool.js") for x in js_strings((ROOT / "ui" / f).read_text(encoding="utf-8"))):
         if kind == "str":
             for sgm in segments_from_parts(parts):
                 add(sgm, "js")

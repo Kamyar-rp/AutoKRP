@@ -581,14 +581,22 @@ class XferManager:
         with self._lock:
             self.conns.pop(c.id, None)
 
-    def close_all(self, owner=None):
+    def close_conns(self, owner=None):
+        """اتصال‌های SFTP/SCP/FTP و انتقال‌های در جریان (بدون سرور TFTP). خروجی: تعداد بسته‌شده."""
+        n = 0
         for c in list(self.conns.values()):
             if owner is None or c.owner == owner:
                 c.close()
                 self.conns.pop(c.id, None)
+                n += 1
         for j in list(self.jobs.values()):
             if (owner is None or j["owner"] == owner) and j["state"] in ("running", "waiting"):
                 j["cancel"].set()
+                n += 1
+        return n
+
+    def close_all(self, owner=None):
+        self.close_conns(owner)
         if owner is None or (self.tftp and self.tftp["owner"] == owner):
             self.tftp_stop(None)
 

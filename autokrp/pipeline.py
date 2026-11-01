@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 import threading
 import time
 from datetime import datetime, timedelta
@@ -198,12 +199,35 @@ def purge_run_dir(d):
         return 0
 
 
-def purge_old_runs():
-    """یک‌بار در شروع: فایل‌های نمایش‌داده‌نشده‌ی اجراهای قبلی (ssh_script.txt، test_*.json …)."""
+def archive_run_dir(store, d, run_id=None):
+    """1.37: متن run.log در پایگاه داده (runs.log) و حذف کل پوشه‌ی اجرا (CSVها هم؛ خواسته‌ی کاربر).
+    خروجی: True اگر پوشه پاک شد."""
+    d = Path(d)
+    if not d.is_dir():
+        return False
+    lf = d / "run.log"
     try:
-        return sum(purge_run_dir(d) for d in paths.runs_dir().iterdir() if d.is_dir())
+        if lf.is_file():
+            text = "\n".join(atrest.read_log_lines(lf))
+            if text.strip():
+                store.run_set_log(run_id or d.name, text, started=lf.stat().st_mtime)
+    except Exception:  # noqa — گزارش خوانده نشد: پوشه نگه داشته می‌شود
+        log.exception("run archive %s", d.name)
+        return False
+    shutil.rmtree(d, ignore_errors=True)
+    return not d.exists()
+
+
+def purge_old_runs(store=None, skip=()):
+    """یک‌بار در شروع. با store (1.37): گزارش اجراهای قبلی به پایگاه داده و حذف پوشه‌ها؛
+    بدون store (نسخه‌های قبل): فقط فایل‌های نمایش‌داده‌نشده."""
+    try:
+        dirs = [d for d in paths.runs_dir().iterdir() if d.is_dir() and d.name not in skip]
     except OSError:
         return 0
+    if store is None:
+        return sum(purge_run_dir(d) for d in dirs)
+    return sum(1 for d in dirs if archive_run_dir(store, d))
 
 
 class Pipeline:
@@ -459,15 +483,16 @@ class Pipeline:
             # run.json دیگر نوشته نمی‌شود: جایی خوانده نمی‌شد و تکرار run.log و CSVها بود
             self._cleanup_run(run)
 
-    @staticmethod
-    def _cleanup_run(run):
+    def _cleanup_run(self, run):
         """1.23.1: پس از اجرا فقط آنچه در برنامه نمایش داده می‌شود (CSVها و run.log) در پوشه‌ی اجرا می‌ماند؛
         داده‌ی کمکی اجرا (در حافظه و فایل) پاک می‌شود."""
         # 1.28: فهرست‌های نمایشی (تب‌های نتیجه) می‌مانند؛ قبلاً با پاک شدن کل run.data نتیجه‌ی ابزارها
         # (اسکن، DNS، SSH، AbuseIPDB، …) بلافاصله بعد از پایان اجرا از صفحه‌ی ابزارها پاک می‌شد
         run.data = {k: run.data[k] for k in RUN_LISTS if run.data.get(k)}
         run.close_log()               # ویندوز: فایل باز حذف/جابه‌جا نمی‌شود
-        purge_run_dir(run.dir)
+        # 1.37: فقط متن گزارش (در پایگاه داده) می‌ماند؛ CSVها پس از پایان کار لازم نیستند (پیوست تیکت پیش از این فرستاده شده)
+        if not archive_run_dir(self.store, run.dir, run.id):
+            purge_run_dir(run.dir)
 
     def _run_row(self, run):
         return {"id": run.id, "started": run.started, "finished": run.finished, "trigger": run.trigger,

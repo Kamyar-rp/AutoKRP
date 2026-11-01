@@ -18,7 +18,7 @@ function polDataHtml(c, pfx) {
   const on = (o, k) => (o[k] === undefined ? true : !!o[k]);
   return `<div class="form-grid">
       <label class="field"><span>دقت داده‌ی دقیق (نمودار)</span><select id="${pfx}Res"><option value="300" ${Number(c.res || 300) === 300 ? "selected" : ""}>هر ۵ دقیقه</option><option value="60" ${Number(c.res) === 60 ? "selected" : ""}>هر ۱ دقیقه (حجم ۵ برابر)</option></select>
-        <small class="hint">بازه‌های طولانی همیشه از داده‌ی ساعتی خوانده می‌شوند.</small></label>
+        <small class="hint">حجم تقریبی هر دستگاه (سوییچ ۴۸ پورت با ترافیک): ۵ دقیقه ≈ ۰٫۷ و ۱ دقیقه ≈ ۳٫۵ مگابایت در روز. داده‌ی دقیق تا پایان «نگهداری» با همان دقت می‌ماند و ادغام نمی‌شود؛ با نگهداری ۰ (بی‌پایان) و دقت ۱ دقیقه، هر دستگاه حدود ۱٫۳ گیگابایت در سال. نمودار بازه‌ی طولانی خلاصه نشان می‌دهد؛ با بزرگ‌نمایی روی هر روز، داده‌ی دقیق دیده می‌شود.</small></label>
       <label class="field"><span>تاریخچه‌ی کدام پورت‌ها</span><select id="${pfx}Ports">${POL_PORTS.map(([k, n]) => `<option value="${k}" ${(c.ports || "all") === k ? "selected" : ""}>${n}</option>`).join("")}</select>
         <small class="hint">جدول زنده‌ی پورت‌ها همیشه همه را نشان می‌دهد.</small></label>
       <label class="field"><span>نگهداری داده‌ی دقیق (روز)</span><input id="${pfx}KeepD" type="number" min="0" value="${esc(polKeep(c.keep_d))}" placeholder="مثل تنظیمات کلی">
@@ -320,19 +320,20 @@ function snCardLine(t) {
 }
 
 /* ---------------------------------------------------------------- جزئیات زنده */
-async function snmpDetail(t) {
+async function snmpDetail(t, opt = {}) {
   // 1.35: ترتیب و نمایش بخش‌ها از «قالب نمایش» دستگاه
   const TABS = { sum: "خلاصه", ports: "پورت‌ها", hw: "سخت‌افزار", oids: "OIDها و وضعیت‌ها", charts: "نمودارها" };
   const tabs = ((t.tpl_eff && t.tpl_eff.tabs) || []).filter((k) => TABS[k]);
   if (!tabs.length) tabs.push("sum", "ports", "hw", "oids", "charts");
   const D = { t, live: null, tab: tabs[0], port: null, filter: "", pf: "all", timer: null };
+  if (opt.port && tabs.includes("ports")) { D.tab = "ports"; D.port = opt.port; }   // 1.38: از لینک نقشه
   const st = MON_ST[t.status] || MON_ST.unknown;
   const done = openModal({ title: t.name, wide: true,
     body: `<div class="mon-dhead">${monIcon(t.icon, "big")}<div style="flex:1"><div class="ltr">${esc(t.host)}:${esc(String(t.port || 161))} (SNMP)</div>
         <div class="row" style="gap:8px;margin-top:4px;flex-wrap:wrap"><span class="tag ${st[0]}">${st[1]}</span><span id="snHead" class="row" style="gap:8px;flex-wrap:wrap"></span></div>
         ${t.err ? `<div class="muted" style="color:var(--err)">${esc(t.err)}</div>` : ""}</div></div>
       <div class="tabs" id="snTabs" style="margin-top:10px">${tabs
-        .map((k) => `<button data-t="${k}" class="${k === D.tab ? "on" : ""}">${TABS[k]}</button>`).join("")}</div>
+        .map((k) => `<button data-t="${k}" class="${k === D.tab ? "on" : ""}">${TABS[k]}</button>`).join("")}${(t.can_edit || (typeof MON !== "undefined" && MON.canAdd)) && axOk("monitor.live", "run") ? `<button data-t="live" class="sn-livetab" title="خواندن هر چند ثانیه برای عیب‌یابی؛ ذخیره نمی‌شود">● زنده</button>` : ""}</div>
       <div id="snBody" style="margin-top:12px"><div class="empty">در حال خواندن…</div></div>`,
     foot: `${t.can_edit ? `<button class="btn danger-ghost" data-a="del">حذف</button><button class="btn" data-a="toggle">${t.enabled ? "توقف بررسی" : "ادامه‌ی بررسی"}</button><button class="btn" data-a="edit">ویرایش</button>` : ""}
       <button class="btn" data-a="now">بررسی همین حالا</button><button class="btn ghost" data-a="close">بستن</button>`,
@@ -349,11 +350,13 @@ async function snmpDetail(t) {
           const r = await api("mon_delete", t.id); if (!r.ok) return toast(r.error, "error"); return loadMon();
         }
       }));
-      $$("#snTabs button", m).forEach((b) => (b.onclick = () => { $$("#snTabs button", m).forEach((x) => x.classList.toggle("on", x === b)); D.tab = b.dataset.t; snRender(D); if (D.tab === "ports") snRefresh(D, true); }));
+      $$("#snTabs button", m).forEach((b) => (b.onclick = () => {
+        if (D.liveOn && b.dataset.t !== "live") { D.liveOn = false; clearTimeout(D.liveT); api("mon_live_stop", t.id); }
+        $$("#snTabs button", m).forEach((x) => x.classList.toggle("on", x === b)); D.tab = b.dataset.t; snRender(D); if (D.tab === "ports") snRefresh(D, true); }));
       snRefresh(D, true);
       D.timer = setInterval(() => { if ($("#snBody", m)) snRefresh(D, false); }, 10000);
     } });
-  done.then(() => clearInterval(D.timer));
+  done.then(() => { clearInterval(D.timer); clearTimeout(D.liveT); if (D.liveOn) { D.liveOn = false; api("mon_live_stop", t.id); } });
 }
 async function snRefresh(D, force) {
   const r = await api("mon_snmp_live", D.t.id, force ? 0 : D.live ? D.live.t : 0, true);
@@ -361,6 +364,7 @@ async function snRefresh(D, force) {
   if (r.same) return;
   D.live = r.none ? null : r;
   snHead(D);
+  if (D.tab === "live") return;                    // 1.37: جلسه‌ی زنده خودش به‌روز می‌شود
   if (D.tab !== "charts" || !D.chartsDone) snRender(D);
 }
 function snHead(D) {
@@ -380,6 +384,7 @@ function snRender(D) {
   if (D.tab === "ports") return snPorts(D, b, L);
   if (D.tab === "hw") return snHw(D, b, L);
   if (D.tab === "oids") return snOids(D, b, L);
+  if (D.tab === "live") return D.liveOn ? null : snLive(D, b);
   return snCharts(D, b);
 }
 /* 1.36: بخش «خلاصه» از بلوک‌های قالب نمایش (به همان ترتیب). همه فقط داده‌ای که همین حالا خوانده می‌شود. */
@@ -570,6 +575,10 @@ async function snCharts(D, b, silent) {
   if (!silent || !$("#sncCpu", b)) {
     b.innerHTML = `<div class="toolbar"><div id="snCr"></div>
       <button class="btn no-ro" id="snCsv">خروجی CSV</button></div><div class="tr-note" id="snCn"></div>
+    <div class="chart-card wide sn-heatcard"><div class="chart-head"><h3>ترافیک همه‌ی پورت‌ها</h3><span class="muted" id="snHeatN"></span>
+        <label class="chk" style="margin-inline-start:auto"><input type="checkbox" id="snHeatAll">همه‌ی پورت‌ها</label></div>
+      <div id="snHeat" class="sn-heat"></div><div class="sn-heatleg"><span>${esc(I18N.t("کم"))}</span><i></i><span>${esc(I18N.t("زیاد"))}</span>
+        <span class="muted">${esc(I18N.t("رنگ = درصد ظرفیت پورت (اگر سرعت معلوم است)، وگرنه نسبت به پرترافیک‌ترین پورت. روی خانه‌ها بروید تا مقدار را ببینید."))}</span></div></div>
     <div class="chart-grid">
       <div class="chart-card wide"><div class="chart-head"><h3>CPU (٪)</h3></div><div class="chart" id="sncCpu"></div></div>
       <div class="chart-card wide"><div class="chart-head"><h3>حافظه (٪)</h3></div><div class="chart" id="sncMem"></div></div>
@@ -591,6 +600,7 @@ async function snCharts(D, b, silent) {
   draw("sncCpu", "cpu", "CPU", "info", { pct: true }); draw("sncMem", "mem", "حافظه", "acc", { pct: true });
   draw("sncTemp", "temp", "دما", "warn", {}); draw("sncDisk", "disk", "دیسک", "info", { pct: true }); draw("sncRtt", "rtt", "زمان پاسخ", "ok", {});
   oids.forEach((o, i) => draw("sncO" + i, "oid:" + o.oid, o.name, "info", {}));
+  snHeat(D, b);
   $("#snCsv", b).onclick = async () => {
     const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const ks = Object.keys(r.data);
@@ -599,6 +609,106 @@ async function snCharts(D, b, silent) {
     const res = await api("save_export", `autokrp_snmp_${D.t.id}_${typeof trApi(MON.tr) === "string" ? trApi(MON.tr) : Math.floor(r.since) + "-" + Math.floor(r.until)}.csv`, "\ufeff" + lines.join("\r\n"), false);
     if (!res.ok) return toast(res.error, "error"); if (!res.cancelled) toast("ذخیره شد: " + res.path, "ok");
   };
+}
+/* 1.37: نقشه‌ی حرارتی ترافیک همه‌ی پورت‌ها (هر ردیف یک پورت، هر خانه یک بازه‌ی زمانی) — پورت پرمصرف با یک نگاه */
+async function snHeat(D, b) {
+  const el = $("#snHeat", b); if (!el) return;
+  const r = await api("mon_snmp_ifheat", D.t.id, trApi(MON.tr));
+  if (!el.isConnected) return;
+  if (!r.ok) { el.innerHTML = `<div class="empty">${esc(r.error)}</div>`; return; }
+  const all = $("#snHeatAll", b);
+  const draw = () => {
+    const ports = all.checked ? r.ports : r.ports.slice(0, 24);
+    $("#snHeatN", b).textContent = r.total ? `${num(ports.length)} / ${num(r.total)}` : "";
+    if (!ports.length) { el.innerHTML = `<div class="empty">برای پورت‌ها در این بازه تاریخچه‌ای نیست (تاریخچه‌ی پورت‌ها در «سیاست پایش» یا تنظیمات هدف خاموش است یا هنوز داده‌ای نیست).</div>`; return; }
+    const gmax = Math.max(1, ...ports.map((p) => p.peak || 0));
+    const nb = r.times.length, rowH = 16, labW = 150, W = Math.max(400, el.clientWidth || 800), cw = (W - labW - 8) / nb;
+    const H = ports.length * rowH + 20;
+    el.innerHTML = `<canvas width="${Math.round(W * devicePixelRatio)}" height="${Math.round(H * devicePixelRatio)}" style="width:${W}px;height:${H}px"></canvas>`;
+    const cv = $("canvas", el), g = cv.getContext("2d"); g.scale(devicePixelRatio, devicePixelRatio);
+    const css = getComputedStyle(document.body), fg = css.getPropertyValue("--text") || "#ddd", mu = css.getPropertyValue("--muted") || "#888";
+    const col = (x) => { const h = 140 - 140 * Math.min(1, Math.max(0, x)); return `hsl(${h},70%,${42 + 8 * (1 - x)}%)`; };
+    g.font = "11px Vazir, sans-serif"; g.textBaseline = "middle";
+    ports.forEach((p, j) => {
+      const y = j * rowH;
+      g.fillStyle = fg; g.textAlign = "left"; g.fillText(p.n.length > 20 ? p.n.slice(0, 19) + "…" : p.n, 4, y + rowH / 2);
+      p.avg.forEach((v, i) => {
+        if (v === null) return;
+        const x = p.sp ? v / p.sp : v / gmax;
+        g.fillStyle = col(x); g.fillRect(labW + i * cw, y + 1, Math.max(1, cw - 0.5), rowH - 2);
+      });
+    });
+    g.fillStyle = mu; g.textAlign = "center";
+    const ax = monAxis(r.times, r.step), every = Math.max(1, Math.ceil(nb / 8));
+    ax.lab.forEach((l, i) => { if (i % every === 0) g.fillText(l, labW + (i + 0.5) * cw, H - 8); });
+    cv.onmousemove = (e) => {
+      const bx = cv.getBoundingClientRect(), x = e.clientX - bx.left, y = e.clientY - bx.top;
+      const i = Math.floor((x - labW) / cw), j = Math.floor(y / rowH);
+      if (i < 0 || i >= nb || j < 0 || j >= ports.length) { clearTips(); return; }
+      const p = ports[j], v = p.avg[i], mx = p.max[i];
+      let tip = $(".hover-tip"); if (!tip) { tip = document.createElement("div"); tip.className = "hover-tip"; document.body.appendChild(tip); }
+      tip.innerHTML = `<b class="ltr">${esc(p.n)}</b>${p.a ? ` <span class="muted">${esc(p.a)}</span>` : ""}<br>${esc(ax.tips[i])}<br>${v === null ? "—" : `${esc(I18N.t("میانگین"))}: <span class="ltr">${esc(fmtBps(v))}</span> · ${esc(I18N.t("بیشینه"))}: <span class="ltr">${esc(fmtBps(mx))}</span>${p.sp ? ` · ${snPct(100 * mx / p.sp)}` : ""}`}`;
+      tip.style.left = Math.min(window.innerWidth - tip.offsetWidth - 8, e.clientX + 14) + "px"; tip.style.top = (e.clientY + 12) + "px";
+    };
+    cv.onmouseleave = clearTips;
+    cv.onclick = (e) => {               // کلیک روی ردیف ← نمودار همان پورت در سربرگ «پورت‌ها»
+      const bx = cv.getBoundingClientRect(), j = Math.floor((e.clientY - bx.top) / rowH);
+      if (ports[j]) { clearTips(); D.port = ports[j].n; D.tab = "ports"; $$("#snTabs button", D.m).forEach((x) => x.classList.toggle("on", x.dataset.t === "ports")); snRender(D); }
+    };
+  };
+  all.onchange = draw;
+  draw();
+}
+
+/* 1.37: بررسی زنده‌ی موقت — هر ۵/۱۰/۳۰ ثانیه، فقط تا وقتی این پنجره باز است؛ ذخیره نمی‌شود و به بررسی عادی کاری ندارد */
+async function snLive(D, b) {
+  D.liveIv = D.liveIv || 10;
+  b.innerHTML = `<div class="toolbar"><b>بررسی زنده‌ی موقت</b>
+      <div class="seg" id="slIv">${[5, 10, 30].map((v) => `<button data-v="${v}" class="${D.liveIv === v ? "on" : ""}">${num(v)} ${esc(I18N.t("ثانیه"))}</button>`).join("")}</div>
+      <span class="muted" id="slLeft"></span><button class="btn sm danger-ghost" id="slStop">توقف</button></div>
+    <p class="hint">برای عیب‌یابی: CPU و ترافیک همه‌ی پورت‌ها با فاصله‌ی کوتاه خوانده می‌شود. هیچ‌چیز ذخیره نمی‌شود و بررسی عادی، هشدارها و نمودارهای دستگاه تغییری نمی‌کنند. با بستن این پنجره یا پس از ۱۵ دقیقه خودکار متوقف می‌شود. خواندن پرتکرار کمی بار روی CPU دستگاه می‌گذارد.</p>
+    <div id="slErr" class="hint" style="color:var(--warn)"></div>
+    <div class="chart-grid"><div class="chart-card wide"><div class="chart-head"><h3>CPU و حافظه (٪) — زنده</h3></div><div class="chart" id="slCpu"></div></div>
+      <div class="chart-card wide"><div class="chart-head"><h3>پرترافیک‌ترین پورت‌ها — زنده</h3></div><div class="chart" id="slTop"></div></div></div>
+    <h3 style="margin:12px 0 6px">همه‌ی پورت‌ها (الان)</h3><div id="slPorts"></div>`;
+  const start = async () => {
+    const r = await api("mon_live_start", D.t.id, D.liveIv);
+    if (!r.ok) { $("#slErr", b).textContent = r.error; return false; }
+    D.liveOn = true; D.liveSeq = 0; D.liveS = []; return true;
+  };
+  $$("#slIv button", b).forEach((x) => (x.onclick = async () => { D.liveIv = Number(x.dataset.v); $$("#slIv button", b).forEach((y) => y.classList.toggle("on", y === x)); await start(); }));
+  $("#slStop", b).onclick = async () => { await api("mon_live_stop", D.t.id); D.liveOn = false; clearTimeout(D.liveT); $("#slLeft", b).textContent = I18N.t("متوقف شد"); };
+  if (!(await start())) return;
+  const tick = async () => {
+    if (!D.liveOn || !$("#slCpu", b)) return;
+    const r = await api("mon_live_get", D.t.id, D.liveSeq);
+    if (r.ok && !r.stopped) {
+      (r.samples || []).forEach((x) => { D.liveS.push(x); D.liveSeq = Math.max(D.liveSeq, x.seq); });
+      D.liveS = D.liveS.slice(-120);
+      $("#slLeft", b).textContent = `${I18N.t("باقی‌مانده")}: ${monDur(r.left)}`;
+      $("#slErr", b).textContent = r.err || (D.liveS.length ? "" : I18N.t("در انتظار دو بار خواندن برای محاسبه‌ی ترافیک…"));
+      snLiveDraw(D, b);
+    } else if (r.ok && r.stopped) { D.liveOn = false; $("#slLeft", b).textContent = I18N.t("متوقف شد"); return; }
+    D.liveT = setTimeout(tick, Math.max(2000, D.liveIv * 1000 / 2));
+  };
+  tick();
+}
+function snLiveDraw(D, b) {
+  const S2 = D.liveS; if (!S2.length) return;
+  const c = COLORS(), lab = S2.map((x) => new Date(x.t * 1000).toTimeString().slice(0, 8));
+  drawChart($("#slCpu", b), lab, [{ name: "CPU", color: c.info, values: S2.map((x) => x.cpu) }, { name: I18N.t("حافظه"), color: c.acc, values: S2.map((x) => x.mem) }],
+    { type: "line", height: 170, yMax: 100, fmt: (v) => Math.round(v * 10) / 10 + "%" });
+  const last = S2[S2.length - 1], peak = {};
+  S2.forEach((x) => x.ports.forEach((p) => { peak[p.n] = Math.max(peak[p.n] || 0, p.i || 0, p.u || 0); }));
+  const top = Object.keys(peak).sort((a, b2) => peak[b2] - peak[a]).slice(0, 5).filter((n) => peak[n] > 0);
+  const pal = [c.info, c.ok, c.warn, c.acc, c.err];
+  drawChart($("#slTop", b), lab, top.map((n, k) => ({ name: n, color: pal[k], values: S2.map((x) => { const p = x.ports.find((y) => y.n === n); return p ? Math.max(p.i || 0, p.u || 0) : null; }) })),
+    { type: "line", height: 170, fmt: fmtBps });
+  const ps = [...last.ports].sort((a, b2) => Math.max(b2.i || 0, b2.u || 0) - Math.max(a.i || 0, a.u || 0));
+  const mx = Math.max(1, ...ps.map((p) => Math.max(p.i || 0, p.u || 0)));
+  $("#slPorts", b).innerHTML = `<div class="sn-top">${ps.slice(0, 80).map((x) => `<div class="sn-trow"><span class="ltr sn-tn">${esc(x.n)}</span><span class="${snNameCls(x.a)} muted sn-ta">${esc(x.a || "")}</span>
+    <span class="sn-tbars"><i class="in" style="width:${(100 * (x.i || 0) / mx).toFixed(1)}%"></i><i class="out" style="width:${(100 * (x.u || 0) / mx).toFixed(1)}%"></i></span>
+    <span class="ltr sn-tv">↓${esc(fmtBps(x.i))} ↑${esc(fmtBps(x.u))}</span><span class="ltr muted">${x.sp && (x.i || x.u) ? snPct(100 * Math.max(x.i || 0, x.u || 0) / x.sp) : x.o === 1 ? "" : esc(I18N.t("قطع"))}</span></div>`).join("")}</div>`;
 }
 async function snChart(D, el, R, defs, opt) {
   const r = await api("mon_snmp_series", D.t.id, typeof R === "string" ? R : trApi(R), defs.map((d) => d[0]));

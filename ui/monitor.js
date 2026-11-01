@@ -183,11 +183,14 @@ function loadMon() {
 /* 1.25/1.26: سربرگ‌های صفحه‌ی مانیتورینگ */
 function monTabsHtml() {
   const tab = MON.tab || "targets";
-  return `<div class="tabs" id="monTabs" style="margin-bottom:12px">${[["targets", "هدف‌ها"], ["events", "رخدادهای دستگاه (Trap و Syslog)"], ["topo", "نقشه‌ی شبکه"]]
+  return `<div class="tabs" id="monTabs" style="margin-bottom:12px">${[["targets", "هدف‌ها"], ["events", "رخدادهای دستگاه (Trap و Syslog)"], ["maps", "نقشه‌ها"], ["topo", "نقشه‌ی خودکار (LLDP)"]].filter(([k]) => k === "targets" || axOk("monitor." + k))
     .map(([k, n]) => `<button data-mt="${k}" class="${tab === k ? "on" : ""}">${n}</button>`).join("")}</div>`;
 }
 function monTabsBind() {
-  $$("#monTabs [data-mt]").forEach((b) => (b.onclick = () => { MON.tab = b.dataset.mt; monTabsRender(); }));
+  $$("#monTabs [data-mt]").forEach((b) => (b.onclick = async () => {
+    if (MON.tab === "maps" && typeof nmCanLeave === "function" && !(await nmCanLeave())) return;   // 1.38: ویرایش نقشه‌ی ذخیره‌نشده
+    MON.tab = b.dataset.mt; monTabsRender();
+  }));
 }
 function monTabsRender() {
   const tab = MON.tab || "targets";
@@ -195,7 +198,7 @@ function monTabsRender() {
   if (tab === "targets") return;
   $("#monBody").innerHTML = monTabsHtml() + `<div id="monSub"></div>`;
   monTabsBind();
-  if (tab === "events") monEventsRender($("#monSub")); else topoRender($("#monSub"));
+  if (tab === "events") monEventsRender($("#monSub")); else if (tab === "maps") netmapRender($("#monSub")); else topoRender($("#monSub"));
 }
 function monChips() {
   const el = $("#monChips"); if (!el) return;
@@ -211,7 +214,7 @@ function monChips() {
 function monBannerCap() { const el = $("#monCapB"); if (el) el.innerHTML = monCapBanner(); }
 function renderMon() {
   $("#monActions").innerHTML = `${MON.canAdd ? `<button class="btn primary" id="monAdd">+ هدف تازه</button><button class="btn" id="monSnmpP">اعتبارنامه‌های SNMP</button>` : ""}
-    <button class="btn" id="monMaint">پنجره‌های نگهداری</button>${MON.admin ? `<button class="btn" id="monPol" title="بازه، دقت داده، نگهداری و این‌که چه داده‌ای جمع شود">سیاست‌های پایش</button>` : ""}<button class="btn" id="monNoc" title="نمای تمام‌صفحه برای مانیتور دیواری">نمای NOC</button>${MON.admin ? `<button class="btn" id="monNocD" title="داشبوردهای نام‌دار برای مانیتور دیواری: هدف‌ها، چیدمان، نمودار uplink و چرخش خودکار">داشبوردهای NOC</button>` : ""}
+    <button class="btn" id="monMaint">پنجره‌های نگهداری</button>${MON.admin ? `<button class="btn" id="monPol" title="بازه، دقت داده، نگهداری و این‌که چه داده‌ای جمع شود">سیاست‌های پایش</button>` : ""}${axOk("monitor.noc") ? `<button class="btn" id="monNoc" title="نمای تمام‌صفحه برای مانیتور دیواری">نمای NOC</button>` : ""}${MON.admin && axOk("monitor.noc", "run") ? `<button class="btn" id="monNocD" title="داشبوردهای نام‌دار برای مانیتور دیواری: هدف‌ها، چیدمان، نمودار uplink و چرخش خودکار">داشبوردهای NOC</button>` : ""}
     <button class="btn ghost" id="monMute">${MON.muted ? "صدا: خاموش" : "صدا: روشن"}</button>
     <button class="btn ghost" id="monTest" title="پخش صدای قطعی برای امتحان">امتحان صدا</button>
     ${WEB && "Notification" in window && Notification.permission === "default" ? `<button class="btn ghost" id="monNotif">اعلان مرورگر</button>` : ""}
@@ -223,7 +226,7 @@ function renderMon() {
   if ($("#monSnmpP")) $("#monSnmpP").onclick = () => snmpProfiles();
   $("#monMaint").onclick = () => monMaintList();
   if ($("#monPol")) $("#monPol").onclick = () => monPolicies();
-  $("#monNoc").onclick = () => nocOpen();
+  if ($("#monNoc")) $("#monNoc").onclick = () => nocOpen();
   if ($("#monNocD")) $("#monNocD").onclick = () => nocDashboards();
   $("#monMute").onclick = () => monSetMute(!MON.muted);
   $("#monTest").onclick = () => { const m = MON.muted; MON.muted = false; monPlay("down", 1).finally(() => (MON.muted = m)); };

@@ -8,10 +8,28 @@ function acTitle(k) { return (AC.data && AC.data.titles[k]) || k; }
 function acBadge(lv) {
   return lv === "run" ? `<span class="tag ok" data-sv="2" title="اجرا">✓</span>` : lv === "view" ? `<span class="tag info" data-sv="1" title="دیدن">👁</span>` : `<span class="muted" data-sv="0" title="پنهان">—</span>`;
 }
-function acLvOpts(k, cur, inherit) {
-  const nv = (AC.data.no_view || []).includes(k);
-  return (inherit ? `<option value="" ${cur ? "" : "selected"}>از گروه‌ها</option>` : "")
-    + AC_LV.filter(([v]) => !(nv && v === "view")).map(([v, t]) => `<option value="${v}" ${cur === v ? "selected" : ""}>${t}</option>`).join("");
+/* 1.39: درخت بخش‌ها در پنجره‌ی گروه و کاربر. mode: group (بدون سطح: کلید پایه = پنهان، والد = بدون سقف، زیرمجموعه = مثل بخش)
+   یا user (بدون سطح = از گروه‌ها). فقط سطح‌های تعیین‌شده ذخیره می‌شوند. */
+function acKind(k) { const D = AC.data; return D.pure.includes(k) ? "pure" : D.subs.includes(k) ? "sub" : "base"; }
+function acTreeSel(k, cur, mode, hint) {
+  const nv = (AC.data.no_view || []).includes(k.split(".")[0]);
+  const kind = acKind(k);
+  const def = mode === "user" ? ["", acT("از گروه‌ها") + (hint ? ` (${hint})` : "")] : kind === "sub" ? ["", acT("مثل بخش")] : kind === "pure" ? ["", acT("بدون محدودیت")] : null;
+  const v = cur == null ? "" : cur;
+  return `<select data-ack="${k}" class="ac-sel">${def ? `<option value="" ${v === "" ? "selected" : ""}>${esc(def[1])}</option>` : ""}${AC_LV.filter(([x]) => !(nv && x === "view"))
+    .map(([x, t]) => `<option value="${x}" ${v === x || (!def && v === "" && x === "none") ? "selected" : ""}>${t}</option>`).join("")}</select>`;
+}
+function acTree(vals, mode, hintOf) {
+  const D = AC.data, off = (k) => !D.enabled.includes(k);
+  const row = (k, cls) => `<div class="ac-row ${cls}"><span>${esc(acTitle(k))}${off(k) ? ` <small class="tag err">${esc(acT("خاموش در تنظیمات"))}</small>` : ""}</span>${acTreeSel(k, vals[k], mode, hintOf && hintOf(k))}</div>`;
+  return `<div class="ac-tree">${D.tree.map(([sec, kids]) => `<details class="ac-sec" ${kids.some((k) => vals[k] != null) ? "open" : ""}><summary>${row(sec, "top")}</summary>
+    ${kids.map((k) => row(k, k.includes(".") ? "sub2" : "sub")).join("")}</details>`).join("")}</div>`;
+}
+function acTreeBind(m) { $$(".ac-sec summary select", m).forEach((x) => (x.onclick = (e) => e.preventDefault())); }
+function acTreeRead(m) {
+  const out = {};
+  $$("[data-ack]", m).forEach((s) => { if (s.value !== "" && !(acKind(s.dataset.ack) === "base" && s.value === "none" && !s.querySelector("option[value='']"))) out[s.dataset.ack] = s.value; });
+  return out;
 }
 function acDevSummary(d) {
   if (!d) return `<span class="muted">از گروه‌ها</span>`;
@@ -85,17 +103,17 @@ function acGroupModal(g, done) {
   openModal({ title: isNew ? "گروه تازه" : `ویرایش گروه ${g.name}`, wide: true, body: `<div class="form-grid">
       <label class="field"><span>نام گروه</span><input id="agName" value="${esc(g.name)}" maxlength="60" placeholder="${esc(acT("مثلاً تیم شبکه"))}"></label>
       <label class="field"><span>توضیح</span><input id="agNotes" value="${esc(g.notes || "")}" maxlength="300"></label></div>
-    <h3 style="margin:12px 0 6px">ابزارها و بخش‌ها</h3><div class="form-grid">
-      ${D.keys.map((k) => `<label class="field"><span>${esc(acTitle(k))}${D.enabled.includes(k) ? "" : ` <small class="muted">(خاموش در تنظیمات)</small>`}</span><select data-agk="${k}">${acLvOpts(k, (g.tools || {})[k] || "none")}</select></label>`).join("")}</div>
+    <h3 style="margin:12px 0 6px">ابزارها و بخش‌ها</h3><p class="hint">سطح هر زیرمجموعه حداکثر به اندازه‌ی بخش بالای آن است. دسترسی هیچ سرویسی را متوقف نمی‌کند؛ فقط اعضای همین گروه را محدود می‌کند.</p>
+    ${acTree(g.tools || {}, "group")}
     <h3 style="margin:12px 0 6px">دستگاه‌های مشترک</h3>${acDevPicker(g.devices, false)}
     <h3 style="margin:12px 0 6px">اعضا</h3><div class="chks">${D.users.map((u) => `<label class="chk"><input type="checkbox" data-agm value="${esc(u.username)}" ${members.has(u.username) ? "checked" : ""}><span class="ltr">${esc(u.username)}</span> <span class="muted">(${esc(ROLE_FA[u.role] || u.role)})</span></label>`).join("")}</div>
     <small class="hint">کاربری که هنوز دسترسی نسخه‌های قبل را دارد با عضویت به مدل گروه‌ها منتقل می‌شود و همان دسترسی قبلی‌اش به‌صورت «استثنای کاربر» می‌ماند تا چیزی ناگهان عوض نشود؛ برای این‌که فقط گروه‌ها اعمال شوند، در «ویرایش» همان کاربر استثناها را پاک کنید.</small>`,
     foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">ذخیره</button>`,
     onOpen: (m, close) => {
-      acDevBind(m);
+      acDevBind(m); acTreeBind(m);
       $("[data-r='0']", m).onclick = () => close();
       $("[data-r='1']", m).onclick = async () => {
-        const tools = {}; $$("[data-agk]", m).forEach((s) => { if (s.value !== "none") tools[s.dataset.agk] = s.value; });
+        const tools = acTreeRead(m);
         const x = await api("access_group_save", { id: g.id || null, name: $("#agName", m).value.trim(), notes: $("#agNotes", m).value, tools,
           devices: acDevRead(m), members: $$("[data-agm]", m).filter((c) => c.checked).map((c) => c.value) });
         if (!x.ok) return toast(x.error, "error");
@@ -107,23 +125,22 @@ function acGroupModal(g, done) {
 function acUserModal(u, done) {
   const D = AC.data;
   const legacy = u.access_v < 3;
-  const ov = legacy ? { ...u.effective } : { ...(u.access || {}) };          // کاربر قدیمی: همان دسترسی فعلی به‌صورت استثنا
+  const ov = legacy ? Object.fromEntries(D.keys.map((k) => [k, u.effective[k]])) : { ...(u.access || {}) };          // کاربر قدیمی: همان دسترسی فعلی به‌صورت استثنا
   const devs = legacy ? { all: u.dev_scope.all, grps: [], ids: [] } : u.devices;
-  const fromGroups = (k) => { let best = "none"; for (const id of u.groups || []) { const g = D.groups.find((x) => String(x.id) === id); const v = g && (g.tools || {})[k]; if (v === "run" || (v === "view" && best === "none")) best = v; } return best; };
   openModal({ title: `دسترسی ${u.username}`, wide: true, body: `${legacy ? `<p class="hint warn-text">این کاربر هنوز دسترسی نسخه‌های قبل را دارد. با ذخیره به مدل گروه‌ها منتقل می‌شود؛ دسترسی فعلی‌اش به‌صورت استثنا پر شده است.</p>` : ""}
     <h3 style="margin:4px 0 6px">گروه‌ها</h3><div class="chks">${D.groups.map((g) => `<label class="chk"><input type="checkbox" data-aug value="${esc(g.id)}" ${(u.groups || []).includes(String(g.id)) ? "checked" : ""}>${esc(g.name)}</label>`).join("") || `<span class="muted">هنوز گروهی نیست.</span>`}</div>
-    <h3 style="margin:12px 0 6px">استثنای این کاربر <button type="button" class="btn sm ghost" id="auClr">همه «از گروه‌ها»</button></h3><div class="form-grid">
-      ${D.keys.map((k) => `<label class="field"><span>${esc(acTitle(k))} <small class="muted">(<span>گروه‌ها:</span> <span>${esc(acT((AC_LV.find(([v]) => v === fromGroups(k)) || [])[1] || ""))}</span>)</small></span><select data-auk="${k}">${acLvOpts(k, ov[k] || "", true)}</select></label>`).join("")}</div>
+    <h3 style="margin:12px 0 6px">استثنای این کاربر <button type="button" class="btn sm ghost" id="auClr">همه «از گروه‌ها»</button></h3>
+      ${acTree(ov, "user", (k) => acT((AC_LV.find(([v]) => v === u.effective[k]) || [])[1] || ""))}
     ${u.role === "readonly" ? `<small class="hint">نقش «فقط‌خواندنی»: «اجرا» برای او «دیدن» حساب می‌شود.</small>` : ""}
     <h3 style="margin:12px 0 6px">دستگاه‌های مشترک</h3>${acDevPicker(devs, true)}
     ${u.role === "admin" && u.source !== "ad" ? `<label class="chk" style="margin-top:12px"><input type="checkbox" id="auSup" ${u.superuser ? "checked" : ""}>ادمین اصلی (همه‌ی ابزارها و دستگاه‌ها؛ تغییر کاربران و دسترسی‌ها)</label>` : ""}`,
     foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">ذخیره</button>`,
     onOpen: (m, close) => {
-      acDevBind(m);
-      $("#auClr", m).onclick = () => $$("[data-auk]", m).forEach((s) => (s.value = ""));
+      acDevBind(m); acTreeBind(m);
+      $("#auClr", m).onclick = () => $$("[data-ack]", m).forEach((s) => (s.value = ""));
       $("[data-r='0']", m).onclick = () => close();
       $("[data-r='1']", m).onclick = async () => {
-        const access = {}; $$("[data-auk]", m).forEach((s) => { if (s.value) access[s.dataset.auk] = s.value; });
+        const access = acTreeRead(m);
         const data = { groups: $$("[data-aug]", m).filter((c) => c.checked).map((c) => c.value), access, devices: acDevRead(m) };
         if ($("#auSup", m)) data.superuser = $("#auSup", m).checked;
         const x = await api("access_user_save", u.username, data);

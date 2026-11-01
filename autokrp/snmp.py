@@ -1561,6 +1561,53 @@ class SnmpRuntime:
                 "data": {k: {"avg": [round(s_[0] / s_[1], 2) if s_[1] else None for s_ in v],
                              "max": [round(s_[2], 2) if s_[2] is not None else None for s_ in v]} for k, v in acc.items()}}
 
+    def if_heat(self, tid, rng, keep_days=0, res=300, max_bins=144, max_ports=256):
+        """1.37: «نقشه‌ی حرارتی» ترافیک همه‌ی پورت‌ها: برای هر پورت در هر خانه‌ی زمانی بیشینه‌ی ورودی/خروجی (bps).
+        {step, times, ports: [{n, a, sp, avg: [], max: []}]} مرتب از پرترافیک‌ترین."""
+        from . import trange
+        now = time.time()
+        since, until = trange.resolve(rng, now)
+        f_ok = not keep_days or since >= now - keep_days * 86400 + 600
+        lo = res if f_ok else 3600
+        step = next((x for x in trange.STEPS if x >= lo and (until - since) / x <= max_bins), trange.STEPS[-1])
+        src = "sd" if step < 3600 else "sh"
+        start, nb = trange.grid(since, until, step)
+        acc = {}
+
+        def add(t0, rec):
+            i = int((t0 - start) // step)
+            if not 0 <= i < nb:
+                return
+            ports = {}
+            for k, v in rec["a"].items():
+                if k.startswith("if:") and (k.endswith(":in") or k.endswith(":out")):
+                    n = k[3:].rsplit(":", 1)[0]
+                    mx = rec["x"].get(k, v)
+                    p = ports.setdefault(n, [0.0, 0.0])
+                    p[0], p[1] = max(p[0], v or 0), max(p[1], mx or 0)
+            for n, (av, mx) in ports.items():
+                row = acc.setdefault(n, [[0.0, 0, 0.0] for _ in range(nb)])
+                c = row[i]
+                c[0] += av
+                c[1] += 1
+                c[2] = max(c[2], mx)
+        for rec in self.ts.get(src, int(tid), start - step + 1, until):
+            add(rec["t"], rec)
+        with self._lock:
+            cur = (self._acc5 if src == "sd" else self._acch).get(int(tid))
+            if cur and cur["a"] and cur["b"] <= until:
+                add(cur["b"], self._pack(cur["a"]))
+        lv = self.live.get(int(tid)) or {}
+        info = {x["name"]: x for x in lv.get("ifs") or []}
+        ports = []
+        for n, row in acc.items():
+            mx = [round(c[2]) if c[1] else None for c in row]
+            ports.append({"n": n, "a": (info.get(n) or {}).get("alias") or "", "sp": (info.get(n) or {}).get("speed"),
+                          "avg": [round(c[0] / c[1]) if c[1] else None for c in row], "max": mx, "peak": max([x for x in mx if x is not None] or [0])})
+        ports.sort(key=lambda p: -p["peak"])
+        return {"step": step, "since": since, "until": until, "times": [start + i * step for i in range(nb)], "ports": ports[:max_ports],
+                "total": len(ports)}
+
     # ---- خروجی برای رابط
     def summary(self, tid):
         lv = self.live.get(tid)
@@ -1728,3 +1775,121 @@ def _demo_other(t, cfg, ven):
                         {"name": "Fan 1", "value": "5400", "state": "ok"}, {"name": "Fan 2", "value": "5520", "state": "ok"},
                         {"name": "CPU On-die Temperature", "value": str(52 + rnd.randint(0, 4)), "state": "ok"}],
             "extra": {"sessions": ses, "version": "v7.4.4,build2662,240514 (GA.F)"}}
+
+
+# ---------------------------------------------------------------------------- 1.37: بررسی زنده‌ی موقت
+class LiveProbe:
+    """خواندن پرتکرار موقت (۵/۱۰/۳۰ ثانیه) فقط CPU و پورت‌ها برای عیب‌یابی، تا وقتی پنجره باز است.
+    کاملاً جدا از بررسی عادی: شمارنده‌ها، هشدارها و سری زمانی دست نمی‌خورند و چیزی ذخیره نمی‌شود.
+    هر جلسه با هر درخواست رابط تمدید می‌شود؛ بدون درخواست (پنجره بسته شد) پس از LEASE ثانیه و در هر حال پس از MAX_SEC تمام می‌شود."""
+    INTERVALS = (5, 10, 30)
+    LEASE = 45
+    MAX_SEC = 900
+    KEEP = 180
+
+    def __init__(self, runtime):
+        self.rt = runtime
+        self.s = {}                 # tid → جلسه
+        self._lock = threading.Lock()
+        self._thr = None
+        self._stop = threading.Event()
+
+    def start(self, t, sec):
+        sec = int(sec) if int(sec or 0) in self.INTERVALS else 10
+        now = time.time()
+        with self._lock:
+            cur = self.s.get(t["id"])
+            if cur and cur["iv"] == sec and now < cur["end"]:
+                cur["lease"] = now + self.LEASE
+                return cur
+            self.s[t["id"]] = {"t": dict(t), "iv": sec, "start": now, "end": now + self.MAX_SEC, "lease": now + self.LEASE,
+                               "next": now, "busy": False, "prev": None, "samples": deque(maxlen=self.KEEP), "err": "", "seq": 0}
+            if self._thr is None or not self._thr.is_alive():
+                self._stop.clear()
+                self._thr = threading.Thread(target=self._loop, name="snmp-live", daemon=True)
+                self._thr.start()
+            return self.s[t["id"]]
+
+    def stop(self, tid):
+        with self._lock:
+            self.s.pop(int(tid), None)
+
+    def get(self, tid, since=0):
+        now = time.time()
+        with self._lock:
+            x = self.s.get(int(tid))
+            if not x:
+                return None
+            x["lease"] = now + self.LEASE
+            return {"iv": x["iv"], "left": max(0, round(x["end"] - now)), "err": x["err"], "seq": x["seq"],
+                    "samples": [y for y in list(x["samples"]) if y["seq"] > int(since or 0)]}
+
+    def _loop(self):
+        while not self._stop.wait(0.5):
+            now = time.time()
+            with self._lock:
+                for tid in [k for k, v in self.s.items() if now > v["end"] or now > v["lease"]]:
+                    self.s.pop(tid, None)
+                if not self.s:
+                    self._thr = None
+                    return
+                due = [v for v in self.s.values() if not v["busy"] and now >= v["next"]]
+                for v in due:
+                    v["busy"], v["next"] = True, now + v["iv"]
+            for v in due:
+                self._poll(v)
+
+    def _poll(self, v):
+        t = v["t"]
+        cfg = dict(load_cfg(t))
+        cfg.update(collect={"cpu": 1, "mem": 1, "disk": 0, "env": 0, "if": 1}, oids=[], profile="none",
+                   counters={"traffic": 1, "err": 1, "disc": 0})
+        cfg["_profiles"] = []
+        rt = self.rt
+        if rt._demo(t):
+            try:
+                self._done(v, demo_raw({**t, "id": -int(t["id"])}, cfg))     # حالت جدای Demo (شمارنده‌های بررسی عادی دست نخورند)
+            finally:
+                v["busy"] = False
+            return
+        try:
+            cred = rt.cred_for(t)
+        except SnmpError as e:
+            v["err"], v["busy"] = str(e), False
+            return
+        timeout = float(t.get("timeout") or 3)
+        fut = asyncio.run_coroutine_threadsafe(
+            collect(rt.client, cred, t["host"], t.get("port") or 161, cfg, timeout, 0), rt.client._ensure())
+
+        def fin(f):
+            try:
+                self._done(v, f.result())
+            except SnmpError as e:
+                v["err"] = str(e)
+            except BaseException as e:  # noqa
+                v["err"] = e.__class__.__name__
+            finally:
+                v["busy"] = False
+        fut.add_done_callback(fin)
+
+    def _done(self, v, raw):
+        now = time.time()
+        pv = v["prev"]
+        ports = []
+        for x in raw["ifs"]:
+            ib = ob = None
+            if pv and x["name"] in pv["c"] and now > pv["t"]:
+                dt = now - pv["t"]
+                pi, po = pv["c"][x["name"]]
+                if x["in"] is not None and pi is not None and x["in"] >= pi:
+                    ib = round((x["in"] - pi) * 8 / dt)
+                if x["out"] is not None and po is not None and x["out"] >= po:
+                    ob = round((x["out"] - po) * 8 / dt)
+            ports.append({"n": x["name"], "a": (x.get("alias") or "")[:40], "o": x["oper"], "sp": x["speed"], "i": ib, "u": ob})
+        v["prev"] = {"t": now, "c": {x["name"]: (x["in"], x["out"]) for x in raw["ifs"]}}
+        v["err"] = "; ".join(raw.get("errors") or [])[:200]
+        if pv is None:
+            return                      # نمونه‌ی اول فقط پایه‌ی محاسبه‌ی نرخ است
+        v["seq"] += 1
+        v["samples"].append({"seq": v["seq"], "t": round(now, 1), "cpu": (raw.get("cpu") or {}).get("value"),
+                             "mem": (raw.get("mem") or {}).get("pct"), "rtt": raw.get("rtt"), "ports": ports})

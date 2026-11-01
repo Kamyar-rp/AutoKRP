@@ -38,7 +38,7 @@ CHECK_PLAIN = b"AutoKRP-key-check-v1"
 # ستون‌های رمزشده در حالت cols (متن آزاد، مسیرها، آدرس و یوزر دستگاه‌ها). ستون‌های تازه پیش‌فرض خوانا هستند.
 ENC_COLS = {
     "history": {"target", "detail", "file"},
-    "runs": {"steps", "summary", "dir"},
+    "runs": {"steps", "summary", "dir", "log"},
     "processed": {"info"},
     "ips": {"signatures", "fw_detail", "error", "intel_detail", "dest_ports", "source"},   # 1.22: پورت‌های هدف و منبع هم (داده‌ی شبکه‌ی سازمان)
     "ssh_devices": {"host", "username", "notes", "backup_message"},
@@ -50,6 +50,9 @@ ENC_COLS = {
     "mon_events": {"reason"},
     "mon_maint": {"name", "scope", "note"},
     "cred_profiles": {"notes"},
+    "api_conns": {"base_url", "headers", "notes"},                    # 1.40: ابزار API
+    "api_requests": {"path", "params", "headers", "body"},
+    "api_log": {"url", "req_headers", "req_body", "resp_head", "error"},
     "assets": {"notes", "descr"},
     "asset_changes": {"data", "note"},
 }

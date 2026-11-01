@@ -36,14 +36,17 @@ A typical SOC chore: take the source IPs from IDS alerts, check them on AbuseIPD
 - Live terminal in tabs over SSH, Telnet or a USB/serial console cable (COM port, desktop mode only, with Break), MultiExec and saved command buttons; WinSCP-style file transfer (SFTP, SCP, FTP/FTPS, temporary TFTP server).
 - Telnet devices for runs and config backups (Cisco and other network devices supported by netmiko).
 - Network tools: find where an IP/MAC is connected (switch and port, via SNMP ARP/MAC tables), traceroute, IP owner lookup (RDAP), MAC vendor lookup (IEEE).
+- **API tool**: saved connections (base URL + Basic, Bearer or API-key auth; secrets in the encrypted store), GET/POST/PUT/PATCH/DELETE with parameters, headers and body, formatted JSON responses (copy or save), saved requests and a request log in the database (who, when, what; secrets masked).
 
 **Monitoring and assets**
 - Ping / TCP / HTTP monitoring with sound, browser and email alerts, maintenance windows, reports and a NOC view.
+- Hand-drawn **network maps** (no LLDP needed): port-to-port links coloured by load, red when a port or device is down, submaps, problems-only view and a wall-display mode.
 - SNMP v2c/v3 (Cisco, FortiGate, Juniper, MikroTik, HP iLO, Linux, …): CPU, memory, disks, temperature, fans, PSUs, per-port traffic, custom OIDs, thresholds and long-term charts; traps and syslog. Polling runs in separate worker processes (multi-core), with monitoring policies per device (interval, 1- or 5-minute resolution, retention, what to collect) and optional MySQL/MariaDB storage for chart data and traps/syslog. Card or table view with saved per-user views, device display templates, and named NOC dashboards (tiles/table, uplink charts, auto-rotation) for wall displays.
 - Asset inventory from SNMP (ENTITY-MIB) and SSH, with change history and admin approval.
 
 **Everything else**
 - Statistics, repeated-IP analysis, full history, email notifications, offline tools (subnet calculator, hashes, IOC extractor, port list, …).
+- Every section and sub-feature can be turned off for everyone (really stopped, not just hidden) or limited per user/group (hidden / view / run).
 - English and Persian UI.
 
 | Tools | Approval |

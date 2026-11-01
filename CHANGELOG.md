@@ -2,6 +2,109 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.40.0] — 2026-11-01
+
+### Added
+- **API tool** (Device access → API), a simple request tool in the spirit of Bruno and Insomnia:
+  - **Connections**: name, base URL and authentication (none, Basic, Bearer token, API key in a header or in the URL), TLS certificate check, timeout and default headers.
+    - Passwords, tokens and keys are stored in the encrypted secret store and never sent back to the interface.
+    - Admins create shared connections; operators create personal ones.
+  - **Requests**: GET, POST, PUT, PATCH or DELETE with a path, parameters, headers and a body (JSON with "Format JSON", text or form).
+    - Pasting a URL with `?a=1&b=2` splits it into parameters.
+    - Enter or Ctrl+Enter sends. POST, PUT, PATCH and DELETE ask for confirmation first, unless switched off until the app closes.
+    - Requests can be saved under their connection.
+  - **Responses**: status, time and size; formatted, coloured JSON, the raw text and the response headers; copy, or save as a file.
+    - Responses over 5 MB are truncated.
+  - **Request log in the database**:
+    - Records who, when, which connection, method, URL, status, duration, the request headers and body, and the first 4 KB of the response.
+    - Passwords, tokens, keys and sensitive field values are masked.
+    - Admins see everyone's requests; others see only their own. Each request is also recorded in History.
+  - It appears in the parts tree ("API tool" under Device access): it can be turned off for everyone or limited per user and group (view = connections and log, run = send and edit).
+
+### Fixed
+- In server mode on short browser windows, the bottom of the side menu (language, version, user) was cut off. The menu is now more compact on short screens and scrolls when needed.
+
+### Changed
+- THIRD_PARTY_NOTICES lists `autokrp/trapdb.json` (trap names and descriptions extracted from vendor MIB files).
+- The exe build explicitly includes the map, terms and API tool modules.
+
+## [1.39.0] — 2026-11-01
+
+### Added
+- **Terms of use and disclaimer**:
+  - Shown on the very first start, before the data folder and run mode (client or server) are chosen, and again inside the app before anything else.
+  - The program cannot be used until the text is accepted. "I do not accept" closes the app (desktop) or signs out (server).
+  - Acceptance is recorded with its time and text version. The desktop accepts once per installation; in server mode every user accepts once. Everyone is asked again only when the text changes.
+  - The text can be read again under About.
+- **Parts and tools as a tree** (Settings → General):
+  - Each section (Security, Device access, Monitoring, Assets, Offline tools) has a switch, and its sub-items have tick boxes:
+    - Device access: devices and commands, config backup, terminal, file transfer, TFTP server, serial console, network tools
+    - Monitoring: Trap/Syslog, maps, automatic LLDP map, NOC, live check
+    - Assets: asset scan
+  - Turning something off **really stops it** for everyone, not only hides it:
+    - Monitoring checks, SNMP workers and Trap/Syslog listeners stop.
+    - Open terminal and file-transfer sessions are closed and the TFTP server is stopped.
+    - Scheduled config backups and asset scans are skipped.
+    - The matching API calls are refused.
+  - Before saving, a confirmation lists what will be turned off. Presets: all on, monitoring only, device access only, security only.
+- **Access per sub-item** (Settings → Users → Access):
+  - Groups and per-user exceptions use the same tree with hidden / view / run.
+  - A sub-item is "same as section" by default and can never have more access than its section.
+  - Access only limits those users and never stops a service.
+  - Existing groups and users keep exactly the access they had.
+
+## [1.38.0] — 2026-11-01
+
+### Added
+- **Network maps** (Monitoring → Maps): hand-drawn maps of your network. They do not need LLDP or CDP, which are often turned off for security.
+  - **Maps list**: one card per map with a preview, the number of devices that are up, down or warning, a group filter and "problems only".
+  - **Live view**:
+    - Devices are colored by state. A device that is down glows red. A device whose parent is down is purple. A device with an alert is orange.
+    - Links connect port to port and are colored by load (green, yellow, orange, red). A port that goes down turns the link red with a ✕. A link to a device that is down is red and dashed. VPN and wireless links are drawn dashed.
+    - Hover a device or link for details (ports, speed, in/out, how long it has been down). Click a device for its details, or a link for that port's chart.
+  - **Labels** can be chosen per map and switched in the view:
+    - device: name, name and IP, name and CPU/memory, or none
+    - link: load %, in/out bps, port names, or none
+  - **Problems only**: healthy parts are dimmed and a list of problems is shown. Click a problem to zoom to it.
+  - **Submaps**: a map can contain another map, shown with the worst state inside it. Click it to open, with a path back.
+  - **Editor**:
+    - Drag (or click) monitored devices onto the map.
+    - Draw a link by clicking two devices and choosing the port on each side from the device's port list, with up/down state, speed, ports already used, and the LLDP neighbour if a scan exists. Line types: cable, fiber, VPN, wireless, or no port (state from the two devices only).
+    - Add areas (room, floor, building), text labels, clouds/ISPs, unmonitored devices and submaps.
+    - Optional background image (PNG/JPG up to 2 MB, e.g. a floor plan), snap to grid, auto layout, undo/redo (Ctrl+Z / Ctrl+Y) and Delete. You are asked before leaving with unsaved changes.
+    - "Suggest links from LLDP" is optional and only uses the last neighbour scan.
+  - **Full screen / wall display**: full screen with a status summary and clock, rotating between maps every 30 s to 5 min.
+  - Map state comes from normal monitoring data. **No extra SNMP requests** are sent to devices.
+  - Anyone who can see Monitoring can view maps. Creating and editing needs "Run" access to Monitoring.
+  - A device the viewer may not see is shown without its name or state, and other users cannot add it to their own maps.
+
+### Changed
+- The 1.26 neighbour map tab is now called "Automatic map (LLDP)" and comes after "Maps".
+
+## [1.37.0] — 2026-11-01
+
+### Fixed
+- A chart tooltip could stay on screen after its window closed or the chart redrew. It now disappears when the chart redraws, the window closes, the page scrolls or the mouse leaves.
+- The "close the app" question opened behind the NOC view. Windows opened over the NOC are now shown on top.
+- History looked like it lost older entries. Only the latest 3,000 rows were loaded. History is now searched, filtered and paged on the server across all entries, with a time-range filter.
+- The chart range controls were unclear. The buttons now have labels (Previous, Next, Wider range, Auto refresh). Auto refresh redraws immediately when switched on and shows the time of the last refresh. It explains that it only works for ranges ending "now".
+
+### Added
+- **Addresses**:
+  - an exact **country filter** (a list of countries with counts, instead of a text search that also matched ISP/domain)
+  - a **"days checked ≥ N"** filter, to select, for example, clean IPs of one country seen on many days and block them by hand
+- **Temporary live check** (SNMP detail → "● Live"): CPU, memory and the traffic of every port every 5, 10 or 30 seconds, for troubleshooting.
+  - Nothing is stored, and normal checks, counters, alerts and charts are untouched.
+  - It stops when the window closes or after 15 minutes, and needs "Run" access to Monitoring.
+- **Traffic of all ports** in one view (SNMP detail → Charts): a heatmap with one row per port over the chosen time range.
+  - Colors show % of port capacity, or are relative to the busiest port when the speed is unknown.
+  - Click a row to open that port's chart.
+- **"Monitoring only"** preset (Settings → General): turns off every tool except Monitoring. When a user has no security tools, the menu hides the security pages and opens on Monitoring.
+- An approximate data-size note next to the detailed-data resolution: 1-minute data is kept unmerged for the whole retention period, and retention 0 keeps it forever.
+
+### Changed
+- **Run files**: when a run ends, its log text is stored (compressed) in the database and the run folder, including its CSV files, is deleted. Existing run folders are converted the same way at startup. History "View" shows the log from the database. File export is only available while a run is in progress.
+
 ## [1.36.0] — 2026-10-31
 
 ### Added

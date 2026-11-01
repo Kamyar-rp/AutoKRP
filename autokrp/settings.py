@@ -537,6 +537,13 @@ class Settings:
             self.data["users"] = copy.deepcopy(items)
             self.save()
 
+    def set_terms(self, key: str, rec: dict):
+        """1.39: پذیرش متن استفاده (key خالی = همین نصب دسکتاپ؛ در حالت سرور نام کاربر). فقط از terms_accept."""
+        with self._lock:
+            t = self.data.setdefault("terms", {})
+            t[str(key or "")] = copy.deepcopy(rec)
+            self.save()
+
     def set_jobs(self, items: list, migrated=None):
         with self._lock:
             self.data["jobs"] = copy.deepcopy(items)
@@ -644,6 +651,7 @@ class Settings:
             d = copy.deepcopy(self.data)
         d.pop("secrets", None)
         d.pop("users", None)
+        d.pop("terms", None)             # 1.39: پذیرش کاربران فقط از terms_status خودشان
         (d.get("security") or {}).pop("recovery", None)     # 1.27.8: فقط وضعیتش از security_status
         for conn, keys in SECRET_KEYS.items():
             if conn in FG_EXTRA and not isinstance(d.get(conn), dict):
@@ -669,6 +677,7 @@ class Settings:
             patch.pop("server", None)
             patch.pop("jobs_migrated", None)
             patch.pop("ui_users", None)
+            patch.pop("terms", None)          # 1.39: پذیرش فقط از terms_accept
             for conn in PIN_CONNS:   # پین گواهی فقط از مسیر set_cert_pin عوض می‌شود، نه از فرم
                 if isinstance(patch.get(conn), dict):
                     patch[conn].pop("cert_pin", None)

@@ -80,7 +80,7 @@ function trTip(ts, step) {
 const TR_PRE = [["15m", "۱۵ دقیقه‌ی گذشته", 900], ["1h", "۱ ساعت گذشته", 3600], ["6h", "۶ ساعت گذشته", 21600], ["12h", "۱۲ ساعت گذشته", 43200],
   ["24h", "۲۴ ساعت گذشته", 86400], ["7d", "۷ روز گذشته", 7 * 86400], ["30d", "۳۰ روز گذشته", 30 * 86400], ["90d", "۹۰ روز گذشته", 90 * 86400], ["365d", "یک سال گذشته", 365 * 86400], ["730d", "دو سال گذشته", 730 * 86400]];
 const TR_CAL_PRE = [["today", "امروز"], ["yday", "دیروز"], ["week", "این هفته"], ["pweek", "هفته‌ی قبل"], ["month", "این ماه"], ["pmonth", "ماه قبل"]];
-const TR_AUTO = [[0, "خاموش"], [30, "۳۰ ثانیه"], [60, "۱ دقیقه"], [300, "۵ دقیقه"]];
+const TR_AUTO = [[0, "خاموش"], [30, "هر ۳۰ ثانیه"], [60, "هر ۱ دقیقه"], [300, "هر ۵ دقیقه"]];
 const TR_MIN_FROM = 946684800;     // 2000-01-01 (داده‌ها بدون محدودیت نگه داشته می‌شوند)
 
 function trStartOfWeek(dt) {
@@ -144,12 +144,15 @@ const TR_STATE = { auto: (() => { try { return Number(localStorage.getItem("akrp
 function trBar(el, o) {
   const R = o.get();
   el.classList.add("trbar");
-  el.innerHTML = `<button class="iconbtn" data-tr="prev" title="${esc(I18N.t("بازه‌ی قبل"))}">◀</button>
+  // 1.37: برچسب روی دکمه‌ها (فقط علامت نامفهوم بود) و زمان آخرین به‌روزرسانی خودکار
+  el.innerHTML = `<button class="iconbtn trlab" data-tr="prev" title="${esc(I18N.t("بازه‌ی قبل"))}">◀ <span>${esc(I18N.t("قبلی"))}</span></button>
     <button class="trbtn" data-tr="open" title="${esc(I18N.t("انتخاب بازه‌ی زمانی"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span class="bidi">${esc(trLabel(R))}</span><b>▾</b></button>
-    <button class="iconbtn" data-tr="next" title="${esc(I18N.t("بازه‌ی بعد"))}" ${trResolve(R).live ? "disabled" : ""}>▶</button>
-    <button class="iconbtn" data-tr="out" title="${esc(I18N.t("بازه‌ی بزرگ‌تر (دو برابر)"))}">⊖</button>
-    <label class="trauto" title="${esc(I18N.t("به‌روزرسانی خودکار وقتی پایان بازه «اکنون» است"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>
-      <select data-tr="auto">${TR_AUTO.map(([v, t]) => `<option value="${v}" ${TR_STATE.auto === v ? "selected" : ""}>${esc(I18N.t(t))}</option>`).join("")}</select></label>`;
+    <button class="iconbtn trlab" data-tr="next" title="${esc(I18N.t("بازه‌ی بعد"))}" ${trResolve(R).live ? "disabled" : ""}><span>${esc(I18N.t("بعدی"))}</span> ▶</button>
+    <button class="iconbtn trlab" data-tr="out" title="${esc(I18N.t("بازه‌ی بزرگ‌تر (دو برابر)"))}">⊖ <span>${esc(I18N.t("بازه‌ی بزرگ‌تر"))}</span></button>
+    <label class="trauto" title="${esc(I18N.t("نمودار خودش با داده‌ی تازه دوباره رسم شود؛ فقط وقتی پایان بازه «اکنون» است (نه بازه‌ی گذشته)"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>
+      <span class="trauto-l">${esc(I18N.t("به‌روزرسانی خودکار"))}</span>
+      <select data-tr="auto">${TR_AUTO.map(([v, t]) => `<option value="${v}" ${TR_STATE.auto === v ? "selected" : ""}>${esc(I18N.t(t))}</option>`).join("")}</select>
+      <span class="trauto-at muted ltr" data-tr="at"></span></label>`;
   const shift = (dir) => {
     const r = trResolve(o.get()), span = r.to - r.from;
     o.set(trCustom(r.from + dir * span, r.to + dir * span));
@@ -162,16 +165,26 @@ function trBar(el, o) {
     o.set(trCustom(r.from - span / 2, r.to + span / 2));
   };
   $("[data-tr='open']", el).onclick = (e) => { e.stopPropagation(); trPop(el, o); };
-  $("[data-tr='auto']", el).onchange = (e) => { TR_STATE.auto = Number(e.target.value); try { localStorage.setItem("akrp_tr_auto", String(TR_STATE.auto)); } catch (_) { /* فقط همین مرورگر */ } trAutoArm(el, o); };
+  $("[data-tr='auto']", el).onchange = (e) => {
+    TR_STATE.auto = Number(e.target.value); try { localStorage.setItem("akrp_tr_auto", String(TR_STATE.auto)); } catch (_) { /* فقط همین مرورگر */ }
+    trAutoArm(el, o);
+    if (TR_STATE.auto && trResolve(o.get()).live) { o.refresh(); trAutoMark(el); }   // همان لحظه یک بار، تا اثرش دیده شود
+    else if (TR_STATE.auto) toast(I18N.t("به‌روزرسانی خودکار فقط برای بازه‌ای است که تا «اکنون» است؛ بازه را «۱ ساعت گذشته» یا مشابه بگذارید."), "info");
+  };
   trAutoArm(el, o);
+}
+function trAutoMark(el) {
+  const a = $("[data-tr='at']", el);
+  if (a) { const d = new Date(); a.textContent = TR_STATE.auto ? d.toTimeString().slice(0, 8) : ""; a.title = I18N.t("آخرین به‌روزرسانی خودکار"); }
 }
 function trAutoArm(el, o) {
   clearInterval(el._trAuto);
+  const a = $("[data-tr='at']", el); if (a && !TR_STATE.auto) a.textContent = "";
   if (!TR_STATE.auto) return;
   el._trAuto = setInterval(() => {
     if (!el.isConnected) return clearInterval(el._trAuto);
     if (document.hidden || $(".trpop")) return;
-    if (trResolve(o.get()).live) o.refresh();
+    if (trResolve(o.get()).live) { o.refresh(); trAutoMark(el); }
   }, TR_STATE.auto * 1000);
 }
 function trPopClose() { const p = $(".trpop"); if (p) { p.remove(); return true; } return false; }

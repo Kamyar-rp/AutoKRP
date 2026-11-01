@@ -176,7 +176,7 @@ function termFitActive() { termFit(TERM.tabs.find((x) => x.id === TERM.active));
 async function termConnectDlg(preset) {
   const devs = SSH.devices.filter((d) => d.has_password && d.username);
   const p = preset || {};
-  const serialOk = !(S.state && (S.state.hidden_modes || []).includes("serial"));
+  const serialOk = !(S.state && (S.state.hidden_modes || []).includes("serial")) && axOk("term.serial", "run");
   const mode0 = p.serial ? "serial" : p.adhoc ? "adhoc" : "dev";
   const tel = p.protocol === "telnet";
   const res = await openModal({
@@ -480,14 +480,16 @@ document.addEventListener("mousedown", (e) => {
 async function sshXfer() {
   termHide();
   $("#sshActions").innerHTML = "";
-  const c = await api("xfer_conns");
+  const canF = axOk("term.xfer"), canT = axOk("term.tftp");          // 1.39: هر کدام جدا خاموش یا پنهان می‌شود
+  if (!canF) XF.sub = "tftp"; else if (!canT) XF.sub = "files";
+  const c = canF ? await api("xfer_conns") : { ok: false };
   if (c.ok) { XF.conns = c.conns; XF.limit = c.limit; XF.limitH = c.limit_h; XF.desktop = c.desktop; }
   if (XF.cur && !XF.conns.find((x) => x.id === XF.cur.id)) XF.cur = null;
   if (!XF.cur && XF.conns.length) XF.cur = XF.conns[0];
-  $("#sshBody").innerHTML = `<div class="xf-top"><div class="seg" id="xfSub"><button data-v="files" class="${XF.sub === "files" ? "on" : ""}">SFTP / SCP / FTP</button><button data-v="tftp" class="${XF.sub === "tftp" ? "on" : ""}">سرور TFTP</button></div>
+  $("#sshBody").innerHTML = `<div class="xf-top"><div class="seg" id="xfSub">${canF ? `<button data-v="files" class="${XF.sub === "files" ? "on" : ""}">SFTP / SCP / FTP</button>` : ""}${canT ? `<button data-v="tftp" class="${XF.sub === "tftp" ? "on" : ""}">سرور TFTP</button>` : ""}</div>
       <span class="muted">${XF.limit ? `سقف حجم هر فایل: <b class="ltr">${esc(XF.limitH)}</b>` : "بدون محدودیت حجم"}</span></div>
     <div id="xfMain"></div>
-    <div class="panel xf-queue"><div class="panel-head"><h3>انتقال‌ها</h3><button class="btn sm ghost" id="xfClear">پاک کردن تمام‌شده‌ها</button></div><div id="xfJobs"></div></div>`;
+    <div class="panel xf-queue" ${canF ? "" : "hidden"}><div class="panel-head"><h3>انتقال‌ها</h3><button class="btn sm ghost" id="xfClear">پاک کردن تمام‌شده‌ها</button></div><div id="xfJobs"></div></div>`;
   $$("#xfSub button").forEach((b) => (b.onclick = () => { XF.sub = b.dataset.v; sshXfer(); }));
   $("#xfClear").onclick = async () => { await api("xfer_clear"); xfPollJobs(true); };
   if (XF.sub === "tftp") await tftpRender(); else xfRenderFiles();
@@ -870,6 +872,7 @@ async function xfRetry(j) {
   xfPollJobs(true);
 }
 async function xfPollJobs(once) {
+  if (!axOk("term.xfer")) return;
   const r = await api("xfer_jobs");
   if (r.ok) {
     const before = XF.jobs.filter((j) => j.state === "running").map((j) => j.id);

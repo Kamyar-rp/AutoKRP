@@ -158,6 +158,8 @@
           <button data-f="fw_pending">جامانده از بلاک</button>
           <button data-f="intel" title="مخرب در «بررسی تکمیلی» (فید یا لیست داخلی)">مخرب تکمیلی</button>
         </div>
+        <select id="ipCountry" title="فقط IPهای یک کشور (کد کشور دقیق، نه جستجوی متن)"><option value="">همه‌ی کشورها</option></select>
+        <label class="ip-days" title="فقط IPهایی که دست‌کم این تعداد روزِ مختلف در AbuseIPDB بررسی شده‌اند"><span>روز بررسی ≥</span><input type="number" id="ipDays" min="0" max="3650" placeholder="—"></label>
         <span class="muted" id="ipCount"></span>
       </div>
       <div class="table-wrap" id="ipTableWrap"><table class="grid" id="ipTable"></table></div>
@@ -178,7 +180,8 @@
         <div class="ph-actions"><button class="btn adm-only" id="btnRunsFolder"><svg><use href="#i-folder"/></svg>خروجی لاگ‌ها</button><button class="btn" id="btnReloadHist">به‌روزرسانی</button></div>
       </header>
       <div class="toolbar">
-        <input type="search" class="search" id="histSearch" placeholder="جستجو…">
+        <input type="search" class="search" id="histSearch" placeholder="جستجو در همه‌ی تاریخچه…">
+        <select id="histRange" title="بازه‌ی زمانی"><option value="">همه‌ی زمان‌ها</option><option value="24h">۲۴ ساعت گذشته</option><option value="7d">۷ روز گذشته</option><option value="30d">۳۰ روز گذشته</option><option value="90d">۹۰ روز گذشته</option><option value="365d">یک سال گذشته</option></select>
         <div class="seg" id="histFilter">
           <button data-f="all" class="on">همه</button><button data-f="splunk">Splunk</button><button data-f="abuse">AbuseIPDB</button>
           <button data-f="ban">بلاک</button><button data-f="ticket">تیکت</button><button data-f="security">امنیت</button><button data-f="ssh">SSH</button><button data-f="terminal">ترمینال</button><button data-f="transfer">انتقال فایل</button><button data-f="scan">اسکن شبکه</button><button data-f="error">خطاها</button>
@@ -226,7 +229,8 @@
         <button data-t="term" class="no-ro" data-need-tool="term">ترمینال</button>
         <button data-t="xfer" class="no-ro" data-need-tool="term">انتقال فایل</button>
         <button data-t="net" class="no-ro" data-need-tool="nettools">ابزارهای شبکه</button>
-        <button data-t="backups" data-need-tool="ssh">پشتیبان کانفیگ</button>
+        <button data-t="api" data-need-tool="apitool">API</button>
+        <button data-t="backups" data-need-tool="ssh.backup">پشتیبان کانفیگ</button>
         <button data-t="fgu" class="adm-only" data-need-tool="offline" data-need-run="offline">به‌روزرسانی FortiGate</button>
         <button data-t="jobs" data-need-tool="ssh">سابقه</button>
       </div>
@@ -290,6 +294,8 @@
 <script src="monview.js"></script>
 <script src="noc.js"></script>
 <script src="monevents.js"></script>
+<script src="netmap.js"></script>
+<script src="apitool.js"></script>
 <script src="assets.js"></script>
 <script src="offhash.js"></script>
 <script src="offline.js"></script>

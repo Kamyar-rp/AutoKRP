@@ -396,6 +396,9 @@ class Monitor:
     def _events_tick(self):
         """گیرنده‌های Trap/Syslog فقط وقتی مانیتورینگ فعال است و با تغییر تنظیمات دوباره راه‌اندازی می‌شوند."""
         c = self.events.cfg()
+        from . import perms
+        if "monitor.events" not in perms.enabled_keys(self.settings):      # 1.39: زیرمجموعه‌ی خاموش = شنونده‌ها بسته
+            c = {**c, "trap_enabled": False, "syslog_enabled": False}
         sig = json.dumps({k: c[k] for k in ("trap_enabled", "trap_port", "syslog_enabled", "syslog_port", "syslog_tcp", "bind")},
                          sort_keys=True) if (c["trap_enabled"] or c["syslog_enabled"]) else None
         if sig != self._ev_sig:
@@ -545,7 +548,8 @@ class Monitor:
 
     def _active(self):
         v = self.settings.vault
-        if not (self.settings.get("tools_enabled", default={}) or {}).get("monitor", True):
+        from . import perms
+        if "monitor" not in perms.enabled_keys(self.settings):
             return False          # مانیتورینگ در تنظیمات خاموش است
         return v is None or v.unlocked()
 

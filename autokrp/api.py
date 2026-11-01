@@ -41,7 +41,7 @@ STATS_TTL = 20            # ثانیه
 IPC_TTL = 10              # ثانیه: کمترین فاصله‌ی شمارش دوباره‌ی IPها برای داشبورد وقتی پایگاه داده مدام تغییر می‌کند
 UNLOCK_FREE_TRIES = 5     # بعد از این تعداد رمز اشتباه، مکث تصاعدی: 30، 60، 120 … ثانیه
 UNLOCK_MAX_WAIT = 900
-UI_LOCK_ALLOW = {"get_state", "get_settings", "security_status", "security_unlock", "security_check_password",
+UI_LOCK_ALLOW = {"get_state", "get_settings", "security_status", "security_unlock", "security_check_password", "terms_status", "terms_accept",
                  "security_recover", "save_ui", "js_error", "ui_perf", "ui_touch"}   # 1.27.8: RESET از صفحه‌ی قفل نه
 
 
@@ -342,6 +342,34 @@ class Api:
     def whoami(self):
         return self._me()
 
+    # ------------------------------------------------------------ 1.39: متن پذیرش پیش از استفاده
+    def _terms_key(self):
+        """دسکتاپ: یک پذیرش برای همین نصب؛ حالت سرور: هر کاربر جدا."""
+        if not paths.is_server():
+            return ""
+        u = self._current_user()
+        return (u or {}).get("username") or ""
+
+    @_safe
+    def terms_status(self):
+        from . import terms
+        rec = (self._settings.get("terms", default={}) or {}).get(self._terms_key()) or {}
+        if not paths.is_server() and int(rec.get("v") or 0) < terms.VERSION and paths.terms_accepted_v() >= terms.VERSION:
+            # پذیرفته‌شده در پنجره‌ی اولین اجرا (پیش از ساخت تنظیمات) ← همین‌جا ثبت می‌شود
+            rec = {"v": terms.VERSION, "at": time.time(), "by": "", "first_run": True}
+            self._settings.set_terms("", rec)
+        return {**terms.payload(), "need": int(rec.get("v") or 0) < terms.VERSION, "accepted": rec if rec.get("v") else None}
+
+    @_safe
+    def terms_accept(self, v):
+        from . import terms
+        if int(v or 0) != terms.VERSION:
+            raise ConnectorError("متن به‌روز شده است؛ صفحه را دوباره باز کنید.")
+        u = self._current_user()
+        self._settings.set_terms(self._terms_key(), {"v": terms.VERSION, "at": time.time(), "by": (u or {}).get("username") or ""})
+        self._store.add_history("security", "متن پذیرش", "ok", f"متن استفاده (نسخه‌ی {terms.VERSION}) پذیرفته شد")
+        return {}
+
     # ------------------------------------------------------------ 1.32: دسترسی با گروه‌ها
     def _all_users(self):
         if paths.is_server():
@@ -442,8 +470,9 @@ class Api:
                 for d in self._store.ssh_devices() if not d.get("owner")]
         return {"groups": list(perms.groups_of(self._settings).values()), "users": users, "devices": devs,
                 "dev_groups": sorted({d["grp"] for d in devs if d["grp"]}), "keys": perms.ACCESS_KEYS,
-                "titles": perms.ACCESS_TITLES, "no_view": sorted(perms.NO_VIEW),
-                "enabled": perms.enabled_tools(self._settings) + perms.enabled_features(self._settings),
+                "titles": {**perms.ACCESS_TITLES, **perms.SUB_TITLES, **perms.SECTION_TITLES}, "no_view": sorted(perms.NO_VIEW),
+                "enabled": sorted(perms.enabled_keys(self._settings)),
+                "tree": perms.SECTIONS, "pure": perms.PURE_SECTIONS, "subs": perms.SUBKEYS,
                 "server": paths.is_server(), "me": (self._current_user() or {}).get("username", "")}
 
     @_safe
@@ -1626,8 +1655,30 @@ class Api:
         if added:
             self._store.add_history("security", "رنج‌های مستثنا", "ok", "IP سرورهای برنامه اضافه شد: " + "، ".join(added))
         self._after_auto_change(before_master, before_daily)
+        self._apply_enabled()
         self._worker.request_check()
         return {"settings": self._settings.public()}
+
+    def _apply_enabled(self):
+        """1.39: بخش خاموش در «ابزارهای فعال» واقعاً متوقف شود (نه فقط پنهان). مانیتورینگ و Trap/Syslog در حلقه‌ی خودش
+        (monitor._active و _events_tick)، زمان‌بندی‌ها در worker؛ اینجا نشست‌های باز همه‌ی کاربران بسته می‌شوند."""
+        on = perms.enabled_keys(self._settings)
+        stopped = []
+        try:
+            if "term" not in on:
+                n = sum(1 for x in list(self._term.sessions.values()) if not x.closed)
+                self._term.close_all()
+                if n:
+                    stopped.append("ترمینال")
+            if "term.xfer" not in on and self._xfer.close_conns():
+                stopped.append("انتقال فایل")
+            if "term.tftp" not in on and self._xfer.tftp:
+                self._xfer.tftp_stop(None)
+                stopped.append("سرور TFTP")
+        except Exception:  # noqa — بستن نشست نباید ذخیره‌ی تنظیمات را خراب کند
+            log.exception("apply enabled")
+        if stopped:
+            self._store.add_history("security", "بخش‌های فعال", "ok", "خاموش و متوقف شد: " + "، ".join(stopped))
 
     def _check_secret_dest(self, patch):
         """تغییر مقصد اتصال (آدرس/هاست/پورت) بدون وارد کردن دوباره‌ی توکن/رمز ذخیره‌شده پذیرفته نمی‌شود؛
@@ -2295,7 +2346,7 @@ class Api:
         row = self._store.get_ip(ip)
         if not row:
             raise ConnectorError("این IP در داده‌ها نیست.")
-        hist = [h for h in self._store.list_history(2000) if h["target"] == ip][:30]
+        hist = self._store.history_query(target=ip, limit=30)[0]
         row["seen_days"] = (self._store.seen_days([ip]).get(ip) or (0,))[0]
         return {"ip": row, "history": hist}
 
@@ -2421,7 +2472,7 @@ class Api:
         """ذخیره‌ی خروجی ساخته‌شده در رابط (PNG نمودار، CSV آمار) با پنجره‌ی ذخیره."""
         name = Path(str(name)).name or "export.txt"
         ext = Path(name).suffix.lower()
-        if ext not in (".png", ".csv", ".svg", ".txt", ".json"):
+        if ext not in (".png", ".csv", ".svg", ".txt", ".json", ".xml"):
             raise ConnectorError("نوع فایل مجاز نیست.")
         data = base64.b64decode(content) if is_base64 else str(content).encode("utf-8-sig" if ext == ".csv" else "utf-8")
         if len(data) > 20 * 1024 * 1024:
@@ -3591,6 +3642,186 @@ class Api:
         self._store.add_history("monitor", d["name"], "ok", "داشبورد NOC حذف شد")
         return {}
 
+    # ---- نقشه‌های دستی شبکه (1.38)
+    def _map_get(self, mid):
+        mid = int(mid)
+        x = next((x for x in self._store.lay_list("map") if x["id"] == mid), None)
+        if not x:
+            raise ConnectorError("نقشه پیدا نشد.")
+        return x
+
+    def _map_edit_ok(self):
+        if not self._mon_can_add():
+            raise ConnectorError("ساخت و ویرایش نقشه نیاز به دسترسی «اجرا» در مانیتورینگ دارد.")
+
+    def _map_ctx(self):
+        vis = {t["id"]: t for t in self._store.mon_targets() if self._mon_visible(t)}
+        return vis, {x["id"]: x for x in self._store.lay_list("map")}
+
+    def _map_dev_states(self, data, vis, maps, depth=0, seen=None):
+        """وضعیت همه‌ی دستگاه‌های یک نقشه (و زیرنقشه‌هایش تا سه سطح، بدون حلقه) برای کارت و گره‌ی زیرنقشه."""
+        from .netmap import MapStatus
+        seen = set(seen or ())
+        out = []
+        for n in data.get("nodes") or []:
+            if n["t"] == "dev" and n.get("tid") in vis:
+                t = vis[n["tid"]]
+                out.append(MapStatus().node(t, self._mon.state.get(t["id"]) or {}, self._mon.snmp.live.get(t["id"]))["st"])
+            elif n["t"] == "map" and depth < 3 and n.get("map") in maps and n["map"] not in seen:
+                out += self._map_dev_states(maps[n["map"]]["data"], vis, maps, depth + 1, seen | {n["map"]})
+        return out
+
+    @_safe
+    def mon_map_list(self):
+        from .netmap import worst
+        vis, maps = self._map_ctx()
+        out = []
+        for mid, x in maps.items():
+            d = x["data"]
+            w, c = worst(self._map_dev_states(d, vis, maps, 0, {mid}))
+            out.append({"id": mid, "name": x["name"], "grp": d.get("grp") or "", "worst": w, "counts": c,
+                        "n_links": len(d.get("links") or []), "updated": d.get("updated") or x.get("created"),
+                        "w": d.get("w"), "h": d.get("h"),
+                        "nodes": [{"t": n["t"], "x": n["x"], "y": n["y"], "w": n.get("w"), "h": n.get("h"), "id": n["id"]}
+                                  for n in d.get("nodes") or [] if n["t"] != "text"],
+                        "links": [[lk["a"], lk["b"]] for lk in d.get("links") or []]})
+        out.sort(key=lambda m: m["name"].lower())
+        grps = sorted({t.get("grp") or "" for t in vis.values()} - {""})
+        return {"maps": out, "can_edit": self._mon_can_add(), "groups": grps}
+
+    @_safe
+    def mon_map_get(self, mid):
+        x = self._map_get(mid)
+        vis, maps = self._map_ctx()
+        d = dict(x["data"])
+        d["bg"] = any(b["name"] == str(x["id"]) for b in self._store.lay_list("mapbg"))
+        devs = [{"id": t["id"], "name": t.get("name") or t["host"], "host": t.get("host") or "", "grp": t.get("grp") or "",
+                 "kind": t["kind"], "icon": t.get("icon") or ""} for t in vis.values()]
+        return {"id": x["id"], "name": x["name"], "data": d, "can_edit": self._mon_can_add(),
+                "devices": devs, "maps": [{"id": k, "name": v["name"]} for k, v in maps.items() if k != x["id"]]}
+
+    @_safe
+    def mon_map_bg(self, mid):
+        x = self._map_get(mid)
+        b = next((b for b in self._store.lay_list("mapbg") if b["name"] == str(x["id"])), None)
+        return {"img": (b or {}).get("data", {}).get("img") or ""}
+
+    @_safe
+    def mon_map_save(self, m):
+        from .netmap import MAP_MAX, MapError, clean_bg, clean_map
+        self._map_edit_ok()
+        p = m if isinstance(m, dict) else {}
+        name = str(p.get("name") or "").strip()[:60]
+        if not name:
+            raise ConnectorError("نام نقشه را وارد کنید.")
+        have = self._store.lay_list("map")
+        mid = int(p["id"]) if str(p.get("id") or "").isdigit() else None
+        old = next((x for x in have if x["id"] == mid), None) if mid else None
+        if mid and not old:
+            raise ConnectorError("نقشه پیدا نشد.")
+        if not mid and len(have) >= MAP_MAX:
+            raise ConnectorError(f"حداکثر {MAP_MAX} نقشه.")
+        try:
+            data = clean_map(p.get("data"))
+            bg = clean_bg(p.get("bg")) if p.get("bg") not in (None, True) else None
+        except MapError as e:
+            raise ConnectorError(str(e))
+        vis = {t["id"] for t in self._store.mon_targets() if self._mon_visible(t)}
+        # دستگاه‌هایی که این کاربر نمی‌بیند: از نقشه‌ی قبلی حفظ می‌شوند، ولی کاربر نمی‌تواند تازه اضافه‌شان کند
+        prev = {n["id"]: n for n in ((old or {}).get("data") or {}).get("nodes") or []}
+        data["nodes"] = [n for n in data["nodes"] if n["t"] != "dev" or n["tid"] in vis
+                         or (n["id"] in prev and prev[n["id"]].get("tid") == n["tid"])]
+        keep = {n["id"] for n in data["nodes"]}
+        data["links"] = [lk for lk in data["links"] if lk["a"] in keep and lk["b"] in keep]
+        data["grp"] = str(p.get("grp") or "").strip()[:60]
+        data["updated"] = time.time()
+        mid = self._store.lay_save(mid, "map", name, data)
+        if bg is not None:
+            b = next((b for b in self._store.lay_list("mapbg") if b["name"] == str(mid)), None)
+            if bg:
+                self._store.lay_save(b["id"] if b else None, "mapbg", str(mid), {"img": bg})
+            elif b:
+                self._store.lay_delete(b["id"], "mapbg")
+        self._store.add_history("monitor", name, "ok", "نقشه‌ی شبکه ذخیره شد")
+        return {"id": mid}
+
+    @_safe
+    def mon_map_delete(self, mid):
+        self._map_edit_ok()
+        x = self._map_get(mid)
+        self._store.lay_delete(x["id"], "map")
+        for b in self._store.lay_list("mapbg"):
+            if b["name"] == str(x["id"]):
+                self._store.lay_delete(b["id"], "mapbg")
+        self._store.add_history("monitor", x["name"], "ok", "نقشه‌ی شبکه حذف شد")
+        return {}
+
+    @_safe
+    def mon_map_status(self, mid):
+        """وضعیت زنده‌ی گره‌ها و لینک‌های یک نقشه (هر ۱۵ ثانیه از رابط). دستگاهی که کاربر نمی‌بیند: «hidden» بدون نام."""
+        from .netmap import find_if, worst
+        x = self._map_get(mid)
+        vis, maps = self._map_ctx()
+        allt = {t["id"]: t for t in self._store.mon_targets()}
+        now = time.time()
+        if not hasattr(self, "_mapst"):
+            from .netmap import MapStatus
+            self._mapst = MapStatus()
+        ms = self._mapst
+        nodes, lives = {}, {}
+        for n in x["data"].get("nodes") or []:
+            if n["t"] == "dev":
+                if n["tid"] not in vis:
+                    nodes[n["id"]] = {"st": "gone"} if n["tid"] not in allt else {"st": "hidden"}
+                    continue
+                t = vis[n["tid"]]
+                lv = self._mon.snmp.live.get(t["id"]) if t.get("kind") == "snmp" else None
+                lives[n["id"]] = lv
+                nodes[n["id"]] = ms.node(t, self._mon.state.get(t["id"]) or {}, lv)
+            elif n["t"] == "map":
+                sub = maps.get(n.get("map"))
+                if not sub:
+                    nodes[n["id"]] = {"st": "gone"}
+                    continue
+                w, c = worst(self._map_dev_states(sub["data"], vis, maps, 1, {x["id"], sub["id"]}))
+                nodes[n["id"]] = {"st": w, "counts": c, "name": sub["name"]}
+        links = {}
+        for lk in x["data"].get("links") or []:
+            na, nb = nodes.get(lk["a"]), nodes.get(lk["b"])
+            na = na if na and "name" in na and na.get("kind") else None
+            nb = nb if nb and "name" in nb and nb.get("kind") else None
+            ia = find_if(lives.get(lk["a"]), lk.get("pa")) if na else None
+            ib = find_if(lives.get(lk["b"]), lk.get("pb")) if nb else None
+            links[lk["id"]] = ms.link(f"{x['id']}:{lk['id']}", lk, na, nb, ia, ib, now)
+        return {"nodes": nodes, "links": links, "now": now}
+
+    @_safe
+    def mon_map_ports(self, tid):
+        """فهرست پورت‌های یک دستگاه SNMP برای انتخاب در ویرایشگر لینک (از آخرین poll؛ بدون درخواست تازه) + همسایه‌ی LLDP اگر اسکن شده."""
+        self._map_edit_ok()
+        t = self._mon_get(tid)
+        lv = self._mon.snmp.live.get(t["id"]) if t.get("kind") == "snmp" else None
+        nb = {}
+        for lk in (self._mon.topo.load() or {}).get("links") or []:
+            if lk.get("a") == t["id"]:
+                nb[lk.get("a_port") or ""] = {"tid": lk.get("b"), "port": lk.get("b_port") or "", "name": lk.get("b_name") or ""}
+            elif lk.get("b") == t["id"]:
+                nb[lk.get("b_port") or ""] = {"tid": lk.get("a"), "port": lk.get("a_port") or "", "name": ""}
+        ports = [{"name": x["name"], "alias": x.get("alias") or "", "descr": x.get("descr") or "", "oper": x.get("oper"),
+                  "admin": x.get("admin"), "speed": x.get("speed"), "nb": nb.get(x["name"])} for x in (lv or {}).get("ifs") or []]
+        return {"ports": ports, "polled": bool(lv), "kind": t.get("kind")}
+
+    @_safe
+    def mon_map_lldp(self, mid=None, tids=None):
+        """پیشنهاد لینک بین دستگاه‌های روی نقشه از آخرین اسکن LLDP/CDP (اگر اسکنی انجام شده باشد؛ اختیاری)."""
+        self._map_edit_ok()
+        vis = {t["id"] for t in self._store.mon_targets() if self._mon_visible(t)}
+        on = {int(i) for i in (tids or []) if str(i).isdigit()} & vis
+        d = self._mon.topo.load() or {}
+        out = [{"a": lk["a"], "b": lk["b"], "pa": lk.get("a_port") or "", "pb": lk.get("b_port") or ""}
+               for lk in d.get("links") or [] if lk.get("b") and lk["a"] in on and lk["b"] in on]
+        return {"links": out, "scanned": bool(d.get("at"))}
+
     @_safe
     def mon_capacity(self):
         """بار بررسی‌ها، کارگرهای SNMP و محل ذخیره‌ی سری زمانی (فقط ادمین)."""
@@ -4042,6 +4273,49 @@ class Api:
             return {"ok": False, "error": str(e)}
 
     @_safe
+    def mon_snmp_ifheat(self, tid, rng="24h"):
+        """1.37: ترافیک همه‌ی پورت‌ها در یک نگاه (نقشه‌ی حرارتی)."""
+        t = self._mon_get(tid)
+        e = self._mon.targets().get(t["id"]) or t
+        keep = self._mon.keep_for(e)[0]
+        res = ((e.get("_cfg") or {}).get("res")) or 300
+        try:
+            return self._mon.snmp.if_heat(t["id"], rng if isinstance(rng, dict) else str(rng), keep, res)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+
+    def _live(self):
+        if getattr(self, "_liveprobe", None) is None:
+            from .snmp import LiveProbe
+            self._liveprobe = LiveProbe(self._mon.snmp)
+        return self._liveprobe
+
+    @_safe
+    def mon_live_start(self, tid, sec=10):
+        """1.37: بررسی زنده‌ی موقت (۵/۱۰/۳۰ ثانیه) برای عیب‌یابی؛ ذخیره نمی‌شود و به بررسی عادی کاری ندارد."""
+        t = self._mon_get(tid)
+        if t.get("kind") != "snmp":
+            raise ConnectorError("بررسی زنده فقط برای هدف SNMP است.")
+        if self._level("monitor") != "run":
+            raise ConnectorError("برای بررسی زنده دسترسی «اجرا»ی مانیتورینگ لازم است.")
+        e = self._mon.targets().get(t["id"]) or t
+        x = self._live().start(e, sec)
+        self._store.add_history("monitor", t["name"], "ok", f"بررسی زنده‌ی موقت هر {x['iv']} ثانیه شروع شد")
+        return {"iv": x["iv"], "left": round(x["end"] - time.time())}
+
+    @_safe
+    def mon_live_get(self, tid, since=0):
+        t = self._mon_get(tid)
+        r = self._live().get(t["id"], since)
+        return r or {"stopped": True}
+
+    @_safe
+    def mon_live_stop(self, tid):
+        t = self._mon_get(tid)
+        self._live().stop(t["id"])
+        return {}
+
+    @_safe
     def mon_snmp_watch(self, tid, names, on):
         """پیگیری پورت (هشدار قطع، مصرف و خطا) از جدول پورت‌ها."""
         from .snmp import load_cfg
@@ -4348,6 +4622,162 @@ class Api:
         return {"id": p["id"], "name": p["name"], "kind": p["kind"], "notes": p.get("notes") or "", "personal": bool(p.get("owner")),
                 "username": self._vault.get(pfx + "username", ""), "has_password": self._vault.has(pfx + "password"),
                 "has_secret": self._vault.has(pfx + "secret"), "devices": usage.get(p["id"], 0) if usage is not None else None}
+
+    # ------------------------------------------------------------ 1.40: ابزار API
+    def _api_visible(self, c):
+        owner = (c.get("owner") or "").lower()
+        return not owner or owner == (self._uname() or "").lower()
+
+    def _api_conn(self, cid, edit=False):
+        c = self._store.api_conn_get(int(cid)) if str(cid or "").isdigit() else None
+        if not c or not self._api_visible(c):
+            raise ConnectorError("اتصال پیدا نشد یا دسترسی به آن ندارید.")
+        if edit and not c.get("owner") and (self._current_user() or {"role": "admin"}).get("role") != "admin":
+            raise ConnectorError("اتصال‌های مشترک را فقط ادمین تغییر می‌دهد.")
+        return c
+
+    def _api_pub(self, c):
+        import json as _j
+        pfx = f"api.{c['id']}."
+        u = self._current_user() or {"role": "admin"}
+        return {"id": c["id"], "name": c["name"], "base_url": c["base_url"], "auth": c["auth"], "key_name": c.get("key_name") or "",
+                "verify": bool(c.get("verify")), "timeout": c.get("timeout") or 30, "headers": _j.loads(c.get("headers") or "[]"),
+                "notes": c.get("notes") or "", "personal": bool(c.get("owner")), "username": self._vault.get(pfx + "username", "") if c["auth"] == "basic" else "",
+                "has_secret": self._vault.has(pfx + "secret"),
+                "can_edit": bool(c.get("owner")) or u.get("role") == "admin"}
+
+    @_safe
+    def api_conn_list(self):
+        import json as _j
+        conns = [c for c in self._store.api_conns() if self._api_visible(c)]
+        ids = {c["id"] for c in conns}
+        reqs = {}
+        for r in self._store.api_reqs():
+            if r["conn_id"] in ids:
+                reqs.setdefault(r["conn_id"], []).append({"id": r["id"], "conn_id": r["conn_id"], "name": r["name"], "method": r["method"], "path": r["path"],
+                                                          "params": _j.loads(r["params"] or "[]"), "headers": _j.loads(r["headers"] or "[]"),
+                                                          "body": r["body"] or "", "body_type": r["body_type"] or "json"})
+        u = self._current_user() or {"role": "admin"}
+        return {"conns": [self._api_pub(c) for c in conns], "reqs": reqs, "admin": u.get("role") == "admin", "me": self._uname()}
+
+    @_safe
+    def api_conn_save(self, conn, secret="", username=None):
+        """secret خالی = بدون تغییر، "__clear__" = پاک. اتصال تازه‌ی غیرادمین همیشه شخصی است."""
+        from . import apitool
+        if not self._vault.unlocked():
+            raise VaultError("برنامه قفل است.")
+        p = conn if isinstance(conn, dict) else {}
+        try:
+            d = apitool.clean_conn(p)
+        except apitool.ApiError as e:
+            raise ConnectorError(str(e))
+        admin = (self._current_user() or {"role": "admin"}).get("role") == "admin"
+        if p.get("id"):
+            old = self._api_conn(p["id"], edit=True)
+            d["owner"] = old.get("owner") or ""
+            d["id"] = old["id"]
+        else:
+            if len(self._store.api_conns()) >= apitool.CONN_MAX:
+                raise ConnectorError(f"حداکثر {apitool.CONN_MAX} اتصال.")
+            personal = bool(p.get("personal")) or not admin
+            if personal and not self._uname():
+                raise ConnectorError("اتصال شخصی فقط با کاربران فعال (ورود با نام کاربری) معنا دارد.")
+            d["owner"] = self._uname() if personal else ""
+        cid = self._store.api_conn_save(d)
+        pfx = f"api.{cid}."
+        ch = {}
+        if username is not None:
+            ch[pfx + "username"] = str(username or "").strip()[:200]
+        if secret == "__clear__" or d["auth"] == "none":
+            ch[pfx + "secret"] = ""
+        elif secret:
+            ch[pfx + "secret"] = str(secret)[:8000]
+        if ch:
+            self._vault.set_many(ch)
+        self._store.add_history("api", d["name"], "ok", "اتصال API " + ("به‌روز شد" if p.get("id") else "ساخته شد"))
+        self._protect_bg()
+        return {"id": cid}
+
+    @_safe
+    def api_conn_delete(self, cid):
+        c = self._api_conn(cid, edit=True)
+        self._store.api_conn_delete(c["id"])
+        self._vault.delete_prefix(f"api.{c['id']}.")
+        self._store.add_history("api", c["name"], "ok", "اتصال API حذف شد")
+        return {}
+
+    @_safe
+    def api_req_save(self, req):
+        import json as _j
+        from . import apitool
+        p = req if isinstance(req, dict) else {}
+        c = self._api_conn(p.get("conn_id"), edit=True)
+        name = str(p.get("name") or "").strip()[:100]
+        if not name:
+            raise ConnectorError("نام درخواست را وارد کنید.")
+        try:
+            r = apitool.clean_req(p)
+        except apitool.ApiError as e:
+            raise ConnectorError(str(e))
+        rid = None
+        if p.get("id"):
+            old = self._store.api_req_get(int(p["id"]))
+            if not old or old["conn_id"] != c["id"]:
+                raise ConnectorError("درخواست پیدا نشد.")
+            rid = old["id"]
+        elif len(self._store.api_reqs()) >= apitool.REQ_MAX:
+            raise ConnectorError(f"حداکثر {apitool.REQ_MAX} درخواست ذخیره‌شده.")
+        rid = self._store.api_req_save({"id": rid, "conn_id": c["id"], "name": name, "method": r["method"], "path": r["path"],
+                                        "params": _j.dumps(r["params"], ensure_ascii=False), "headers": _j.dumps(r["headers"], ensure_ascii=False),
+                                        "body": r["body"], "body_type": r["body_type"]})
+        return {"id": rid}
+
+    @_safe
+    def api_req_delete(self, rid):
+        old = self._store.api_req_get(int(rid)) if str(rid or "").isdigit() else None
+        if not old:
+            raise ConnectorError("درخواست پیدا نشد.")
+        self._api_conn(old["conn_id"], edit=True)
+        self._store.api_req_delete(old["id"])
+        return {}
+
+    @_safe
+    def api_send(self, conn_id, req):
+        from . import apitool
+        if not self._vault.unlocked():
+            raise VaultError("برنامه قفل است.")
+        c = self._api_conn(conn_id)
+        try:
+            r = apitool.clean_req(req)
+        except apitool.ApiError as e:
+            raise ConnectorError(str(e))
+        pfx = f"api.{c['id']}."
+        try:
+            out = apitool.send(c, self._vault.get(pfx + "secret", ""), self._vault.get(pfx + "username", ""), r)
+        except apitool.ApiError as e:
+            raise ConnectorError(str(e))
+        lg = out.pop("log")
+        lid = self._store.api_log_add({**lg, "ts": time.time(), "user": self._uname(), "conn_id": c["id"], "conn_name": c["name"], "method": r["method"]})
+        st = out.get("status")
+        self._store.add_history("api", c["name"], "ok" if st and st < 400 else "failed",
+                                f"{r['method']} {lg['url']} → {st if st else out.get('error', '')[:120]}")
+        out["log_id"] = lid
+        return out
+
+    @_safe
+    def api_log_list(self, q="", conn_id=None, offset=0, limit=100):
+        u = self._current_user() or {"role": "admin"}
+        rows, total = self._store.api_log_list(None if u.get("role") == "admin" else self._uname(), conn_id, q,
+                                               max(0, int(offset or 0)), max(1, min(500, int(limit or 100))))
+        return {"rows": rows, "total": total, "all_users": u.get("role") == "admin"}
+
+    @_safe
+    def api_log_get(self, lid):
+        r = self._store.api_log_get(int(lid)) if str(lid or "").isdigit() else None
+        u = self._current_user() or {"role": "admin"}
+        if not r or (u.get("role") != "admin" and r.get("user") != self._uname()):
+            raise ConnectorError("مورد پیدا نشد.")
+        return {"row": r}
 
     @_safe
     def cred_list(self):
@@ -4994,13 +5424,32 @@ class Api:
         return {"sent": True, "message": "ایمیل آزمایشی ارسال شد.", "trace": trace}
 
     @_safe
-    def list_history(self):
+    def list_history(self, f="all", q="", rng="", offset=0, limit=200):
+        """1.37: صفحه‌بندی، فیلتر و جستجو سمت سرور (قبلاً فقط ۳۰۰۰ ردیف آخر؛ قدیمی‌ترها «پاک‌شده» به نظر می‌رسیدند)."""
         lv = self._levels()
-        hide = {k for k, t in perms.HISTORY_KIND.items() if lv.get(t, "none") == "none"}
-        rows = self._store.list_history()
-        if hide:                                   # 1.32: ردیف‌های ابزاری که کاربر به آن دسترسی ندارد
-            rows = [r for r in rows if r.get("kind") not in hide]
-        return {"rows": rows, "runs": self._store.list_runs()}
+        hide = sorted({k for k, t in perms.HISTORY_KIND.items() if lv.get(t, "none") == "none"})   # 1.32
+        f = str(f or "all")
+        kinds, status = None, None
+        if f == "error":
+            status = "error"
+        elif f == "ban":
+            kinds = ["ban", "fortigate"]
+        elif f == "ticket":
+            kinds = ["ticket", "redmine"]
+        elif f != "all" and re.fullmatch(r"[a-z_]{1,20}", f):
+            kinds = [f]
+        since = None
+        days = {"24h": 1, "7d": 7, "30d": 30, "90d": 90, "365d": 365}.get(str(rng or ""))
+        if days:
+            since = time.time() - days * 86400
+        try:
+            offset, limit = max(0, int(offset or 0)), max(1, min(1000, int(limit or 200)))
+        except (TypeError, ValueError):
+            offset, limit = 0, 200
+        rows, total = self._store.history_query(kinds, status, str(q or "")[:200], since, None, hide, offset, limit)
+        ids = {r.get("run_id") for r in rows if r.get("run_id")}
+        runs = [x for x in self._store.list_runs(5000) if x["id"] in ids]
+        return {"rows": rows, "runs": runs, "total": total, "offset": offset}
 
     @_safe
     def history_view(self, hid, fname=None, q=None):
@@ -5046,6 +5495,10 @@ class Api:
                     return {"type": "text", "text": self._ssh.output(p.name, int(b.stem)), "title": row["target"]}
             raise ConnectorError("خروجی این دستگاه پیدا نشد یا دسترسی ندارید.")
         p = paths.inside(f, [paths.runs_dir()]) if f else None
+        if (p is None or not p.exists()) and row.get("run_id"):     # 1.37: پوشه‌ی اجرا پاک شده؛ گزارش از پایگاه داده
+            text = self._store.run_get_log(row["run_id"])
+            if text is not None:
+                return {"type": "text", "text": text, "files": ["run.log"], "file": "run.log", "title": row["target"]}
         if p is not None and not p.exists() and p.parent.is_dir() and p.parent != paths.runs_dir().resolve():
             p = p.parent          # فایل کمکی اجرا (مثلاً test_*.json نسخه‌های قبل) پاک شده؛ پوشه‌ی همان اجرا
         if p is None or not p.exists():
@@ -5172,7 +5625,7 @@ class Api:
         if p.is_file():
             p = p.parent
         if p == paths.runs_dir().resolve() or not p.is_dir():
-            raise ConnectorError("پوشه‌ی اجرا پیدا نشد.")
+            raise ConnectorError("پس از پایان اجرا فقط گزارش اجرا نگه داشته می‌شود؛ آن را از «تاریخچه ← نمایش» ببینید.")
         return self._export_plain(p, p.name)
 
     @_safe

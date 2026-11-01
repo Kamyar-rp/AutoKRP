@@ -125,6 +125,30 @@ def save_location(root):
 LANG_FILE = ".lang"
 
 
+def terms_file() -> Path:
+    """1.39: پذیرش متن استفاده در پنجره‌ی اولین اجرا (پیش از انتخاب پوشه‌ی داده و حالت)."""
+    return default_root() / APP_ID / "terms_accepted.json"
+
+
+def terms_accepted_v() -> int:
+    try:
+        import json
+        return int(json.loads(terms_file().read_text(encoding="utf-8")).get("v") or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0
+
+
+def save_terms_accepted(v: int):
+    import json
+    import time
+    try:
+        f = terms_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({"v": int(v), "at": time.time()}), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def ui_lang() -> str:
     try:
         v = (default_root() / APP_ID / LANG_FILE).read_text(encoding="ascii").strip()

@@ -283,7 +283,27 @@ def _m18(c):
         c.execute("ALTER TABLE mon_targets ADD COLUMN tpl TEXT DEFAULT ''")
 
 
-MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17, _m18]
+def _m19(c):
+    """1.37: متن گزارش اجرا در پایگاه داده (فشرده)؛ پوشه‌ی اجرا (CSV و run.log) بعد از پایان کار پاک می‌شود."""
+    have = {r[1] for r in c.execute("PRAGMA table_info(runs)")}
+    if "log" not in have:
+        c.execute("ALTER TABLE runs ADD COLUMN log TEXT")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_hist_ts ON history(ts)")
+
+
+def _m20(c):
+    """1.40: ابزار API — اتصال‌ها (آدرس پایه و نوع احراز؛ رمز و توکن در vault)، درخواست‌های ذخیره‌شده، لاگ درخواست‌ها."""
+    c.execute("CREATE TABLE IF NOT EXISTS api_conns(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, base_url TEXT, auth TEXT DEFAULT 'none',"
+              " key_name TEXT DEFAULT '', verify INTEGER DEFAULT 1, timeout INTEGER DEFAULT 30, headers TEXT DEFAULT '{}', owner TEXT DEFAULT '',"
+              " notes TEXT DEFAULT '', created REAL, updated REAL)")
+    c.execute("CREATE TABLE IF NOT EXISTS api_requests(id INTEGER PRIMARY KEY AUTOINCREMENT, conn_id INTEGER, name TEXT, method TEXT, path TEXT,"
+              " params TEXT DEFAULT '[]', headers TEXT DEFAULT '[]', body TEXT DEFAULT '', body_type TEXT DEFAULT 'json', created REAL, updated REAL)")
+    c.execute("CREATE TABLE IF NOT EXISTS api_log(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, user TEXT, conn_id INTEGER, conn_name TEXT, method TEXT,"
+              " url TEXT, req_headers TEXT, req_body TEXT, status INTEGER, ms INTEGER, size INTEGER, resp_head TEXT, error TEXT)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_api_log_ts ON api_log(ts)")
+
+
+MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17, _m18, _m19, _m20]
 # ستون‌هایی که مهاجرت‌ها اضافه می‌کنند؛ هر بار باز شدن بررسی می‌شود و اگر نباشد اضافه می‌شود
 # (پایگاه داده‌ای که شماره‌ی نسخه‌اش جلوتر از ستون‌هایش است، مثلاً بازگردانی فایل قدیمی، دیگر خطا نمی‌دهد)
 REQUIRED_COLUMNS = {
@@ -291,6 +311,7 @@ REQUIRED_COLUMNS = {
                     "legacy": "INTEGER DEFAULT 0", "owner": "TEXT DEFAULT ''", "cred_id": "INTEGER",
                     "protocol": "TEXT DEFAULT 'ssh'"},
     "history": {"user": "TEXT"},
+    "runs": {"log": "TEXT"},
     "ips": {c: "TEXT" for c in INTEL_FIELDS},
     "mon_targets": {"snmp": "TEXT", "cred_id": "INTEGER", "parent_id": "INTEGER", "cert_days": "INTEGER DEFAULT 0",
                     "policy_id": "INTEGER", "tpl": "TEXT DEFAULT ''"},
@@ -1012,8 +1033,11 @@ class Store:
     # ------------------------------------------------------------ runs
     def save_run(self, run: dict):
         with self._lock:
+            # 1.37: ستون‌ها با نام (ستون log اضافه شد) و بدون پاک کردن log ذخیره‌شده (REPLACE ردیف را کامل عوض می‌کرد)
             self.db.execute(
-                "INSERT OR REPLACE INTO runs VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO runs(id, started, finished, trigger, steps, status, summary, dir) VALUES(?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET started=excluded.started, finished=excluded.finished, trigger=excluded.trigger, "
+                "steps=excluded.steps, status=excluded.status, summary=excluded.summary, dir=excluded.dir",
                 (run["id"], run.get("started"), run.get("finished"), run.get("trigger"),
                  json.dumps(run.get("steps", {}), ensure_ascii=False), run.get("status"),
                  json.dumps(run.get("summary", {}), ensure_ascii=False), run.get("dir")))
@@ -1024,8 +1048,12 @@ class Store:
         out = []
         for r in rows:
             d = dict(r)
+            d["has_log"] = bool(d.pop("log", None))       # 1.37: متن گزارش جدا خوانده می‌شود (حجم)
             d["steps"] = json.loads(d["steps"] or "{}")
-            d["summary"] = json.loads(d["summary"] or "{}")
+            try:
+                d["summary"] = json.loads(d["summary"] or "{}")
+            except ValueError:
+                d["summary"] = {}
             out.append(d)
         return out
 
@@ -1050,6 +1078,65 @@ class Store:
         with self._lock:
             r = self.db.execute("SELECT * FROM history WHERE file=? ORDER BY id DESC LIMIT 1", (str(file),)).fetchone()
             return dict(r) if r else None
+
+    # ---- 1.37: تاریخچه با صفحه‌بندی و جستجوی سمت سرور (قبلاً فقط ۳۰۰۰ ردیف آخر به رابط می‌رسید)
+    def history_query(self, kinds=None, status=None, q="", since=None, until=None, hide=(), offset=0, limit=200, target=None):
+        where, args = [], []
+        if kinds:
+            where.append(f"kind IN ({','.join('?' * len(kinds))})")
+            args += list(kinds)
+        if hide:
+            where.append(f"kind NOT IN ({','.join('?' * len(hide))})")
+            args += list(hide)
+        if status:
+            where.append("status=?")
+            args.append(status)
+        if since:
+            where.append("ts>=?")
+            args.append(float(since))
+        if until:
+            where.append("ts<=?")
+            args.append(float(until))
+        if target:
+            where.append("target=?")
+            args.append(str(target))
+        q = str(q or "").strip()[:200]
+        if q:
+            like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            where.append("(" + " OR ".join(f"COALESCE({c},'') LIKE ? ESCAPE '\\'" for c in ("target", "detail", "run_id", "kind", "user")) + ")")
+            args += [like] * 5
+        w = (" WHERE " + " AND ".join(where)) if where else ""
+        with self._lock:
+            total = self.db.execute(f"SELECT COUNT(*) FROM history{w}", args).fetchone()[0]  # nosec B608 — ستون‌ها از کد، مقدارها پارامتر
+            rows = self.db.execute(f"SELECT * FROM history{w} ORDER BY id DESC LIMIT ? OFFSET ?",  # nosec B608
+                                   args + [int(limit), int(offset)]).fetchall()
+        return [dict(r) for r in rows], total
+
+    def run_set_log(self, run_id, text, started=None):
+        """متن گزارش اجرا (فشرده و base64)؛ اگر ردیف اجرا نیست (اجرای خیلی قدیمی) ردیف کوتاه ساخته می‌شود."""
+        import base64
+        import zlib
+        z = "z:" + base64.b64encode(zlib.compress(text.encode("utf-8"), 6)).decode("ascii")
+        with self._lock:
+            n = self.db.execute("UPDATE runs SET log=? WHERE id=?", (z, str(run_id))).rowcount
+            if not n:
+                self.db.execute("INSERT INTO runs(id, started, finished, trigger, steps, status, summary, dir, log) VALUES(?,?,?,?,?,?,?,?,?)",
+                                (str(run_id), started or time.time(), started or time.time(), "", "{}", "done", "", "", z))
+
+    def run_get_log(self, run_id):
+        import base64
+        import zlib
+        with self._lock:
+            r = self.db.execute("SELECT log FROM runs WHERE id=?", (str(run_id),)).fetchone()
+        v = r[0] if r else None
+        if not v:
+            return None
+        if v.startswith("z:"):
+            try:
+                return zlib.decompress(base64.b64decode(v[2:])).decode("utf-8", "replace")
+            except Exception:  # noqa
+                return None
+        return v
 
     def list_history(self, limit=3000):
         with self._lock:
@@ -1297,6 +1384,92 @@ class Store:
             if kind == "tpl":
                 self.db.execute("UPDATE mon_targets SET tpl='' WHERE tpl=?", (str(int(lid)),))
             self.db.execute("DELETE FROM mon_layouts WHERE id=? AND kind=?", (int(lid), kind))
+
+    # ---- ابزار API (1.40)
+    API_CONN_COLS = ("name", "base_url", "auth", "key_name", "verify", "timeout", "headers", "owner", "notes")
+
+    def api_conns(self):
+        with self._lock:
+            return [dict(r) for r in self.db.execute("SELECT * FROM api_conns ORDER BY name").fetchall()]
+
+    def api_conn_get(self, cid):
+        with self._lock:
+            r = self.db.execute("SELECT * FROM api_conns WHERE id=?", (int(cid),)).fetchone()
+            return dict(r) if r else None
+
+    def api_conn_save(self, p):
+        now = time.time()
+        with self._lock:
+            vals = [p.get(k) for k in self.API_CONN_COLS]
+            if p.get("id"):
+                self.db.execute("UPDATE api_conns SET " + ", ".join(f"{k}=?" for k in self.API_CONN_COLS) + ", updated=? WHERE id=?",  # nosec B608 — نام ستون‌ها ثابت
+                                vals + [now, int(p["id"])])
+                return int(p["id"])
+            return self.db.execute("INSERT INTO api_conns(" + ", ".join(self.API_CONN_COLS) + ", created, updated) VALUES("  # nosec B608
+                                   + ", ".join("?" * len(self.API_CONN_COLS)) + ", ?, ?)", vals + [now, now]).lastrowid
+
+    def api_conn_delete(self, cid):
+        with self._lock:
+            self.db.execute("DELETE FROM api_requests WHERE conn_id=?", (int(cid),))
+            self.db.execute("DELETE FROM api_conns WHERE id=?", (int(cid),))
+
+    def api_reqs(self, cid=None):
+        with self._lock:
+            if cid is None:
+                return [dict(r) for r in self.db.execute("SELECT * FROM api_requests ORDER BY name").fetchall()]
+            return [dict(r) for r in self.db.execute("SELECT * FROM api_requests WHERE conn_id=? ORDER BY name", (int(cid),)).fetchall()]
+
+    def api_req_get(self, rid):
+        with self._lock:
+            r = self.db.execute("SELECT * FROM api_requests WHERE id=?", (int(rid),)).fetchone()
+            return dict(r) if r else None
+
+    def api_req_save(self, p):
+        now = time.time()
+        cols = ("conn_id", "name", "method", "path", "params", "headers", "body", "body_type")
+        with self._lock:
+            vals = [p.get(k) for k in cols]
+            if p.get("id"):
+                self.db.execute("UPDATE api_requests SET " + ", ".join(f"{k}=?" for k in cols) + ", updated=? WHERE id=?",  # nosec B608
+                                vals + [now, int(p["id"])])
+                return int(p["id"])
+            return self.db.execute("INSERT INTO api_requests(" + ", ".join(cols) + ", created, updated) VALUES("  # nosec B608
+                                   + ", ".join("?" * len(cols)) + ", ?, ?)", vals + [now, now]).lastrowid
+
+    def api_req_delete(self, rid):
+        with self._lock:
+            self.db.execute("DELETE FROM api_requests WHERE id=?", (int(rid),))
+
+    API_LOG_KEEP = 20000
+
+    def api_log_add(self, r):
+        cols = ("ts", "user", "conn_id", "conn_name", "method", "url", "req_headers", "req_body", "status", "ms", "size", "resp_head", "error")
+        with self._lock:
+            lid = self.db.execute("INSERT INTO api_log(" + ", ".join(cols) + ") VALUES(" + ", ".join("?" * len(cols)) + ")",  # nosec B608
+                                  [r.get(k) for k in cols]).lastrowid
+            if lid % 500 == 0:                       # فقط آخرین ۲۰٬۰۰۰ درخواست
+                self.db.execute("DELETE FROM api_log WHERE id<=?", (lid - self.API_LOG_KEEP,))
+            return lid
+
+    def api_log_list(self, user=None, conn_id=None, q="", offset=0, limit=100):
+        w, a = [], []
+        if user is not None:
+            w.append("user=?"); a.append(user)
+        if conn_id:
+            w.append("conn_id=?"); a.append(int(conn_id))
+        sql = " FROM api_log" + (" WHERE " + " AND ".join(w) if w else "")
+        with self._lock:
+            rows = [dict(r) for r in self.db.execute("SELECT id, ts, user, conn_id, conn_name, method, url, status, ms, size, error" + sql  # nosec B608
+                                                     + " ORDER BY id DESC LIMIT 5000", a).fetchall()]
+        q = str(q or "").strip().lower()
+        if q:          # جستجو بعد از رمزگشایی (ستون‌های رمزشده در MySQL)
+            rows = [r for r in rows if q in " ".join(str(r.get(k) or "") for k in ("user", "conn_name", "method", "url", "status", "error")).lower()]
+        return rows[int(offset):int(offset) + int(limit)], len(rows)
+
+    def api_log_get(self, lid):
+        with self._lock:
+            r = self.db.execute("SELECT * FROM api_log WHERE id=?", (int(lid),)).fetchone()
+            return dict(r) if r else None
 
     def mon_set_tpl(self, ids, tpl):
         with self._lock:

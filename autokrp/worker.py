@@ -78,8 +78,9 @@ class Worker:
         self._thread = threading.Thread(target=self._loop, name="worker", daemon=True)
         self._thread.start()
         self.monitor.start()
-        from .pipeline import purge_old_runs     # 1.23.1: فایل‌های نمایش‌داده‌نشده‌ی اجراهای قبلی
-        threading.Thread(target=purge_old_runs, name="runs-cleanup", daemon=True).start()
+        from .pipeline import purge_old_runs     # 1.37: گزارش اجراهای قبلی ← پایگاه داده، پوشه‌ها پاک
+        cur = getattr(self.pipeline, "current", None)
+        threading.Thread(target=purge_old_runs, args=(self.store, {cur.id} if cur else set()), name="runs-cleanup", daemon=True).start()
         self.emit("info", "برنامه اجرا شد" + (" (نسخه‌ی Demo)" if self.demo else ""))
 
     def stop(self, wait=0.0):
@@ -306,8 +307,10 @@ class Worker:
                     except Exception as e:
                         self.emit("error", f"اجرای روزانه شروع نشد: {friendly_error(e)}", "schedule")
 
+        from . import perms
+        on = perms.enabled_keys(self.settings)                  # 1.39: زیرمجموعه‌ی خاموش = زمان‌بندی‌اش هم اجرا نمی‌شود
         bk = auto.get("backup") or {}
-        if bk.get("enabled"):
+        if bk.get("enabled") and "ssh.backup" in on:
             try:
                 hh, mm = [int(x) for x in str(bk.get("time", "02:00")).split(":")[:2]]
             except ValueError:
@@ -333,7 +336,7 @@ class Worker:
                         self.notifier.notify("backup_failed", f"پشتیبان‌گیری روزانه شروع نشد: {e}")
 
         ac = self.settings.get("assets") or {}
-        if ac.get("scan_enabled"):
+        if ac.get("scan_enabled") and "asset.scan" in on:
             try:
                 hh, mm = [int(x) for x in str(ac.get("scan_time", "03:00")).split(":")[:2]]
             except ValueError:

@@ -11,8 +11,9 @@ TOOLS = ["splunk", "abuse", "fortigate", "redmine", "dns", "ssh", "scan", "intel
 TOOL_TITLES = {"splunk": "Splunk", "abuse": "AbuseIPDB", "fortigate": "FortiGate", "redmine": "Redmine", "dns": "DNS", "ssh": "SSH", "scan": "اسکن شبکه",
                "intel": "بررسی تکمیلی", "asset": "مدیریت دارایی"}
 # بخش‌هایی که ادمین می‌تواند برای همه خاموش کند (جدا از دسترسی ابزار اپراتورها)
-FEATURES = ["monitor", "term", "offline", "nettools"]
-FEATURE_TITLES = {"monitor": "مانیتورینگ", "term": "ترمینال و انتقال فایل", "offline": "ابزارهای آفلاین", "nettools": "ابزارهای شبکه"}
+FEATURES = ["monitor", "term", "offline", "nettools", "apitool"]
+FEATURE_TITLES = {"monitor": "مانیتورینگ", "term": "ترمینال و انتقال فایل", "offline": "ابزارهای آفلاین", "nettools": "ابزارهای شبکه",
+                  "apitool": "ابزار API"}
 FEATURE_API = {
     "monitor": {"mon_list", "mon_report", "mon_icons", "mon_sound_get", "mon_sound_set", "mon_check_now", "mon_save",
                 "mon_delete", "mon_toggle", "mon_icon_upload", "mon_snmp_live", "mon_snmp_series", "mon_snmp_watch",
@@ -20,8 +21,10 @@ FEATURE_API = {
                 "mon_maint_list", "mon_maint_save", "mon_maint_delete", "mon_parent_group", "mon_noc",
                 "mon_events_query", "mon_events_status", "mon_events_cfg_save", "mon_topo", "mon_topo_scan", "mon_topo_apply",
                 "mon_pol_list", "mon_pol_save", "mon_pol_delete", "mon_capacity", "mon_ts_migrate",
+                "mon_snmp_ifheat", "mon_live_start", "mon_live_get", "mon_live_stop",
                 "mon_rows", "mon_tpl_list", "mon_tpl_save", "mon_tpl_delete", "mon_tpl_set", "mon_show_ports",
                 "mon_noc_list", "mon_noc_save", "mon_noc_delete",
+                "mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status", "mon_map_save", "mon_map_delete", "mon_map_ports", "mon_map_lldp",
                 # 1.27.1: MIB سازنده‌ها ← نوع دستگاه خودکار
                 "mib_list", "mib_upload", "mib_delete", "mib_compile", "mib_types"},
     "term": {"term_open", "term_break", "serial_ports", "term_snips_save", "term_read", "term_write", "term_resize", "term_close", "term_list", "term_stats", "conn_cancel",
@@ -31,6 +34,8 @@ FEATURE_API = {
 }
 FEATURE_API["nettools"] = {"net_oui", "net_oui_update", "net_rdap", "net_trace_start", "net_locate_targets", "net_locate_start",
                            "net_job", "net_job_cancel"}
+API_VIEW = {"api_conn_list", "api_log_list", "api_log_get"}                   # 1.40: ابزار API
+FEATURE_API["apitool"] = API_VIEW | {"api_conn_save", "api_conn_delete", "api_req_save", "api_req_delete", "api_send"}
 FEATURE_API["offline"] = {"fgu_info", "fgu_check_folder", "fgu_start", "fgu_job", "fgu_cancel"}   # 1.22: خاموش بودن واقعاً اجرا نشود
 ROLE_TITLES = {"admin": "ادمین", "operator": "اپراتور", "readonly": "فقط‌خواندنی"}
 # 1.22: دسترسی به «بخش‌ها» برای هر اپراتور جدا (قبلاً مانیتورینگ برای همه‌ی اپراتورها باز بود و ترمینال همراه SSH)
@@ -80,21 +85,25 @@ def hidden_modes():
 # بدون ورود هم مجاز (صفحه‌ی قفل)
 # 1.27.8: security_reset دیگر عمومی نیست (فقط ادمین، از داخل برنامه)؛ security_recover = کد بازیابی در صفحه‌ی قفل
 PUBLIC = {"get_state", "security_status", "security_unlock", "security_check_password", "security_recover",
-          "js_error", "ui_perf", "save_ui", "ui_touch", "get_settings"}
+          "js_error", "ui_perf", "save_ui", "ui_touch", "get_settings", "terms_status", "terms_accept"}
 # همه‌ی نقش‌ها (دیدن)
 READ = {"app_close_choice", "mon_list", "mon_state", "mon_report", "mon_snmp_live", "mon_snmp_series", "mon_icons", "mon_sound_get", "mon_check_now",
         "get_run", "list_ips", "repeat_ips", "ip_detail", "get_stats", "list_history", "history_view", "jobs_list", "get_about", "security_lock",
         "security_change_own", "whoami", "asset_list", "asset_get", "asset_changes", "asset_history",
-        "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list", "mon_rows", "mon_tpl_list", "mon_noc_list"}
+        "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list", "mon_rows", "mon_tpl_list", "mon_noc_list", "mon_snmp_ifheat",
+        "mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status"} | API_VIEW
 # اپراتور (به‌علاوه‌ی READ). چک ابزار داخل خود متدها یا در check_tools انجام می‌شود.
 OPERATOR = {"net_oui", "net_rdap", "net_trace_start", "net_locate_targets", "net_locate_start", "net_job", "net_job_cancel",
             "start_run", "cancel_run", "decide", "job_run", "pick_csv", "ips_action",
-            "export_ips", "export_run_files", "save_export", "save_export_many", "open_folder", "asset_save"}
+            "export_ips", "export_run_files", "save_export", "save_export_many", "open_folder", "asset_save",
+            "api_conn_save", "api_conn_delete", "api_req_save", "api_req_delete", "api_send"}      # 1.40: سطح «اجرا»ی ابزار API لازم است
 # اپراتوری که دسترسی «مانیتورینگ» دارد (هدف‌ها و پروفایل‌های شخصی خودش؛ هدف مشترک فقط ادمین)
 OPERATOR_MON = {"mon_save", "mon_delete", "mon_toggle", "mon_icon_upload", "mon_snmp_watch", "snmp_cred_list", "snmp_cred_save",
                 "snmp_cred_delete", "snmp_test", "snmp_walk", "mon_maint_save", "mon_maint_delete", "mon_parent_group",
                 # 1.27.1: فهرست نوع‌های دستگاه از MIB برای فرم هدف (بارگذاری MIB فقط ادمین)
                 "mib_types",
+                # 1.37: بررسی زنده‌ی موقت (بار روی دستگاه؛ سطح «اجرا»ی مانیتورینگ)
+                "mon_live_start", "mon_live_get", "mon_live_stop", "mon_map_save", "mon_map_delete", "mon_map_ports", "mon_map_lldp",
                 # 1.35: قالب نمایش و پورت‌های نمایشی هدف‌هایی که خودش اجازه‌ی ویرایش دارد
                 "mon_tpl_set", "mon_show_ports"}
 # اپراتوری که «ترمینال و انتقال فایل» دارد
@@ -110,17 +119,59 @@ OPERATOR_SSH = {"ssh_save_device", "ssh_delete_devices", "ssh_list", "cred_list"
 # متدهای SSH که با خاموش بودن ابزار SSH برای همه بسته‌اند
 SSH_RUN = {"ssh_start", "ssh_test", "ssh_preview", "backup_now", "fgu_start", "term_open", "xfer_open", "tftp_start"}
 # درخواست‌های دوره‌ای رابط؛ «فعالیت کاربر» حساب نمی‌شوند (قفل خودکار)
-POLL = {"net_job", "mon_state", "mon_rows", "mon_snmp_live", "asset_scan_status", "term_read", "term_stats", "xfer_jobs", "get_state", "get_run", "ssh_job", "fgu_job", "js_error", "ui_perf", "security_status", "ui_touch", "whoami"}
+POLL = {"net_job", "mon_state", "mon_map_status", "mon_rows", "mon_live_get", "mon_snmp_live", "asset_scan_status", "term_read", "term_stats", "xfer_jobs", "get_state", "get_run", "ssh_job", "fgu_job", "js_error", "ui_perf", "security_status", "ui_touch", "whoami"}
+
+
+# ============================================================== 1.39: درخت بخش‌ها و زیرمجموعه‌ها
+# بخش‌های «sec» و «dev» فقط والد هستند (متد ندارند). زیرمجموعه‌ی نقطه‌دار (monitor.maps) زیر کلید پایه‌اش است.
+# خاموش در «ابزارهای فعال» = برای همه خاموش و متوقف (خود والد خاموش = همه‌ی فرزندان). سطح دسترسی فرزند ≤ والد؛
+# فرزندی که برایش سطحی تعیین نشده، سطح والدش را می‌گیرد (گروه‌ها و کاربرهای پیش از 1.39 بدون تغییر).
+SECTIONS = [("sec", ["splunk", "abuse", "fortigate", "redmine", "dns", "scan", "intel"]),
+            ("dev", ["ssh", "ssh.backup", "term", "term.xfer", "term.tftp", "term.serial", "nettools", "apitool"]),
+            ("monitor", ["monitor.events", "monitor.maps", "monitor.topo", "monitor.noc", "monitor.live"]),
+            ("asset", ["asset.scan"]),
+            ("offline", [])]
+SECTION_TITLES = {"sec": "امنیت (ابزارها، آدرس‌ها، کارهای خودکار)", "dev": "ارتباط با دستگاه‌ها", "monitor": "مانیتورینگ",
+                  "asset": "دارایی‌ها", "offline": "ابزارهای آفلاین"}
+SUB_TITLES = {"ssh": "دستگاه‌ها و اجرای دستور (SSH/Telnet)", "ssh.backup": "پشتیبان کانفیگ", "term": "ترمینال", "term.xfer": "انتقال فایل (SFTP/FTP)",
+              "term.tftp": "سرور TFTP", "term.serial": "کنسول سریال", "nettools": "ابزارهای شبکه", "apitool": "ابزار API",
+              "monitor.events": "دریافت Trap و Syslog", "monitor.maps": "نقشه‌ها", "monitor.topo": "نقشه‌ی خودکار (LLDP)",
+              "monitor.noc": "نمای NOC و داشبوردها", "monitor.live": "بررسی زنده‌ی موقت", "asset.scan": "اسکن دارایی"}
+SUBKEYS = [k for _, kids in SECTIONS for k in kids if "." in k]
+PURE_SECTIONS = ["sec", "dev"]
+
+
+def parent_of(k):
+    if "." in k:
+        return k.split(".")[0]
+    for sec, kids in SECTIONS:
+        if k in kids:
+            return sec
+    return None
+
+
+ALL_KEYS = PURE_SECTIONS + [k for k in TOOLS + FEATURES] + SUBKEYS     # ترتیب: والد پیش از فرزند
+
+
+def enabled_keys(settings):
+    """کلیدهای روشن (خود کلید و همه‌ی والدهایش روشن)."""
+    en = settings.get("tools_enabled", default={}) or {}
+    out = set()
+    for k in ALL_KEYS:
+        p = parent_of(k)
+        if en.get(k.replace(".", ":"), True) is not False and (p is None or p in out):   # زیرمجموعه در تنظیمات با «:» (setPath نقطه را مسیر می‌داند)
+            out.add(k)
+    return out
 
 
 def enabled_tools(settings):
-    en = settings.get("tools_enabled", default={}) or {}
-    return [t for t in TOOLS if en.get(t, True)]
+    on = enabled_keys(settings)
+    return [t for t in TOOLS if t in on]
 
 
 def enabled_features(settings):
-    en = settings.get("tools_enabled", default={}) or {}
-    return [f for f in FEATURES if en.get(f, True)]
+    on = enabled_keys(settings)
+    return [f for f in FEATURES if f in on]
 
 
 def allowed_tools(user, settings, lv=None):
@@ -138,10 +189,11 @@ ACCESS_V = 3
 LEVELS = ("none", "view", "run")
 RANK = {"none": 0, "view": 1, "run": 2}
 ACCESS_KEYS = TOOLS + FEATURES                     # همه‌ی ابزارها و بخش‌ها
-ACCESS_TITLES = {**TOOL_TITLES, **FEATURE_TITLES, "ssh": "ارتباط با دستگاه‌ها (SSH/Telnet)"}
+ACCESS_TITLES = {**TOOL_TITLES, **FEATURE_TITLES, "ssh": "ارتباط با دستگاه‌ها (SSH/Telnet)"}   # 1.39: + SUB_TITLES در پایین
 NO_VIEW = {"term"}                                  # بخش‌هایی که «دیدن» ندارند (view = none)
 _MON_VIEW = {"mon_list", "mon_report", "mon_snmp_live", "mon_snmp_series", "mon_icons", "mon_sound_get", "mon_check_now",
-             "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list", "mon_rows", "mon_tpl_list", "mon_noc_list"}
+             "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list", "mon_rows", "mon_tpl_list", "mon_noc_list", "mon_snmp_ifheat",
+        "mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status"}
 _ASSET_VIEW = {"asset_list", "asset_get", "asset_changes", "asset_history", "asset_scan_status"}
 _SSH_VIEW = {"ssh_list", "ssh_jobs", "ssh_job", "ssh_job_results", "ssh_output", "ssh_export_output", "text_chunk",
              "backup_overview", "backup_versions", "backup_view", "backup_diff", "backup_export", "backup_export_latest"}
@@ -165,17 +217,17 @@ for _m in FEATURE_API["nettools"] - {"net_oui"}:
     METHOD_ACCESS[_m] = ("nettools", "run")
 for _m in FEATURE_API["offline"]:
     METHOD_ACCESS[_m] = ("offline", "run")
+for _m in FEATURE_API["apitool"]:
+    METHOD_ACCESS[_m] = ("apitool", "view" if _m in API_VIEW else "run")
 # متدهای دیگر با همین پیشوندها (بیشترشان فقط ادمین) هم سطح «اجرا»ی همان ابزار را می‌خواهند،
 # تا ادمینی که ادمین اصلی نیست و آن ابزار را ندارد از راه API هم به آن نرسد.
 PREFIX_ACCESS = (("asset_", "asset"), ("ssh_", "ssh"), ("backup_", "ssh"), ("cred_", "ssh"), ("fgu_", "offline"),
                  ("mon_", "monitor"), ("snmp_", "monitor"), ("mib_", "monitor"), ("term_", "term"), ("xfer_", "term"),
-                 ("tftp_", "term"), ("net_", "nettools"))
+                 ("tftp_", "term"), ("net_", "nettools"), ("api_", "apitool"))
 NO_ACCESS_CHECK = {"mon_state"}          # خودش برای سطح none پاسخ خالی می‌دهد (بنر هشدار سراسری)
 
 
-def access_for(name):
-    if name in NO_ACCESS_CHECK:
-        return None
+def _access_base(name):
     if name in METHOD_ACCESS:
         return METHOD_ACCESS[name]
     for p, k in PREFIX_ACCESS:
@@ -184,11 +236,37 @@ def access_for(name):
     return None
 
 
+# 1.39: متد ← زیرمجموعه (سطح لازم همان سطح قبلی متد است، روی زیرمجموعه)
+SUB_API = {
+    "monitor.events": {"mon_events_query", "mon_events_status", "mon_events_cfg_save"},
+    "monitor.maps": {"mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status", "mon_map_save", "mon_map_delete", "mon_map_ports", "mon_map_lldp"},
+    "monitor.topo": {"mon_topo", "mon_topo_scan", "mon_topo_apply"},
+    "monitor.noc": {"mon_noc", "mon_noc_list", "mon_noc_save", "mon_noc_delete"},
+    "monitor.live": {"mon_live_start", "mon_live_get", "mon_live_stop"},
+    "ssh.backup": {"backup_overview", "backup_versions", "backup_view", "backup_delete", "backup_diff", "backup_export", "backup_export_latest", "backup_now"},
+    "term.xfer": {"xfer_open", "xfer_conns", "xfer_ls", "xfer_mkdir", "xfer_delete", "xfer_rename", "xfer_close", "xfer_put_begin", "xfer_put", "xfer_get",
+                  "xfer_local", "local_ls", "xfer_jobs", "xfer_cancel", "xfer_clear", "xfer_clear_one"},
+    "term.tftp": {"tftp_start", "tftp_status", "tftp_stop", "tftp_add_local", "tftp_remove", "tftp_received_get"},
+    "term.serial": {"serial_ports"},
+    "asset.scan": {"asset_scan_start", "asset_scan_status", "asset_scan_cancel"},
+}
+SUB_OF = {m: k for k, ms in SUB_API.items() for m in ms}
+
+
+def access_for(name):
+    if name in NO_ACCESS_CHECK:
+        return None
+    need = _access_base(name)
+    if name in SUB_OF:
+        return (SUB_OF[name], need[1] if need else "run")
+    return need
+
+
 # تاریخچه: نوع ردیف ← ابزار (ردیف ابزار پنهان برای کاربر نشان داده نمی‌شود)
 HISTORY_KIND = {"ssh": "ssh", "backup": "ssh", "fgupdate": "offline", "terminal": "term", "transfer": "term",
                 "monitor": "monitor", "asset": "asset", "nettools": "nettools", "dns": "dns", "scan": "scan",
                 "intel": "intel", "splunk": "splunk", "abuse": "abuse", "fortigate": "fortigate", "ban": "fortigate",
-                "redmine": "redmine", "ticket": "redmine"}
+                "redmine": "redmine", "ticket": "redmine", "api": "apitool"}
 
 
 def _maxl(a, b):
@@ -205,7 +283,7 @@ def legacy_levels(user):
     for k in ACCESS_KEYS:
         if k in ut:
             lv[k] = "run"
-        elif k in ("ssh", "asset", "term"):
+        elif k in ("ssh", "asset", "term", "apitool"):
             lv[k] = "none"
         elif k == "nettools":
             lv[k] = "run" if role == "operator" else "none"
@@ -232,7 +310,8 @@ def groups_of(settings):
 
 def levels(user, settings, superuser=False):
     """{ابزار: none|view|run} برای این کاربر."""
-    en = set(enabled_tools(settings)) | set(enabled_features(settings))
+    en = enabled_keys(settings)
+    ex = {}                                          # 1.39: سطح بخش‌های والد و زیرمجموعه‌ها
     if user is None or superuser:
         lv = {k: "run" for k in ACCESS_KEYS}
     elif int(user.get("access_v") or 0) < ACCESS_V:
@@ -240,17 +319,40 @@ def levels(user, settings, superuser=False):
     else:
         lv = {k: "none" for k in ACCESS_KEYS}
         gs = groups_of(settings)
+        sub_ex = set()                               # زیرمجموعه‌هایی که دست‌کم یک گروه صریحاً تعیین کرده
         for gid in user.get("groups") or []:
-            for k, v in ((gs.get(str(gid)) or {}).get("tools") or {}).items():
-                if k in lv and v in RANK:
-                    lv[k] = _maxl(lv[k], v)
-        for k, v in (user.get("access") or {}).items():
-            if k in lv and v in RANK:
-                lv[k] = v
+            gt = (gs.get(str(gid)) or {}).get("tools") or {}
+            gt = {k: v for k, v in gt.items() if v in RANK}
+            for k in ACCESS_KEYS:
+                lv[k] = _maxl(lv[k], gt.get(k, "none"))
+            for k in PURE_SECTIONS:
+                ex[k] = _maxl(ex.get(k, "none"), gt.get(k, "run"))          # گروه بدون سطح والد سقفی نمی‌گذارد
+            for k in SUBKEYS:
+                if k in gt:
+                    sub_ex.add(k)
+                ex[k] = _maxl(ex.get(k, "none"), gt.get(k, gt.get(parent_of(k), "none")))   # بدون سطح = والدِ همان گروه
+        ua = {k: v for k, v in (user.get("access") or {}).items() if v in RANK}
+        for k in ACCESS_KEYS:
+            if k in ua:
+                lv[k] = ua[k]
+        for k in PURE_SECTIONS + SUBKEYS:
+            if k in ua:
+                ex[k] = ua[k]
+            elif k in SUBKEYS and parent_of(k) in ua and k not in sub_ex:
+                ex[k] = ua[parent_of(k)]             # استثنای کاربر روی والد، زیرمجموعه‌ی بدون تعیین را هم می‌برد
         if user.get("role") == "readonly":
             lv = {k: ("view" if v == "run" else v) for k, v in lv.items()}
-    for k in NO_VIEW:
-        if lv.get(k) == "view":
+            ex = {k: ("view" if v == "run" else v) for k, v in ex.items()}
+    for k in PURE_SECTIONS:
+        lv[k] = ex.get(k, "run")                     # والد بدون سطح صریح سقفی نمی‌گذارد
+    for k in SUBKEYS:
+        lv[k] = ex.get(k, lv[parent_of(k)])          # زیرمجموعه بدون سطح صریح = همان والد
+    for k in ALL_KEYS:                               # سقف والد (ترتیب ALL_KEYS: والد پیش از فرزند)
+        p = parent_of(k)
+        if p and RANK[lv[k]] > RANK[lv[p]]:
+            lv[k] = lv[p]
+    for k in ALL_KEYS:
+        if (k in NO_VIEW or parent_of(k) in NO_VIEW) and lv.get(k) == "view":
             lv[k] = "none"
     return {k: (v if k in en else "none") for k, v in lv.items()}
 
@@ -280,7 +382,7 @@ def device_ok(scope, dev):
 
 
 def clean_levels(d):
-    return {k: v for k, v in (d or {}).items() if k in ACCESS_KEYS and v in RANK} if isinstance(d, dict) else {}
+    return {k: v for k, v in (d or {}).items() if k in ALL_KEYS and v in RANK} if isinstance(d, dict) else {}
 
 
 def clean_devices(d):
@@ -300,6 +402,8 @@ def can_call(user, name, settings, lv=None):
     for f, names in FEATURE_API.items():
         if name in names and f not in enabled_features(settings):
             return f"بخش «{FEATURE_TITLES[f]}» در تنظیمات خاموش است."
+    if name in SUB_OF and SUB_OF[name] not in enabled_keys(settings):
+        return f"بخش «{SUB_TITLES.get(SUB_OF[name], SUB_OF[name])}» در تنظیمات خاموش است."
     if lv is None:
         lv = levels(user, settings)
     need = access_for(name)
@@ -345,3 +449,7 @@ def public_user(u):
             "devices": clean_devices(u.get("devices")), "superuser": bool(u.get("superuser")),
             "access_v": int(u.get("access_v") or 0),
             "last_login": u.get("last_login"), "created": u.get("created"), "source": u.get("source") or "local"}
+
+
+ACCESS_TITLES.update({k: v for k, v in SUB_TITLES.items() if "." in k})
+ACCESS_TITLES.update({k: SECTION_TITLES[k] for k in PURE_SECTIONS})

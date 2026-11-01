@@ -27,7 +27,7 @@ jobs:
           python -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoKRP --icon assets\app.ico
           --add-data "ui;ui" --add-data "assets\app.png;assets" --add-data "assets\mibs;assets\mibs"
           --add-data "autokrp\trapdb.json;autokrp" --add-data "autokrp\oui.dat;autokrp" --add-data "autokrp\build_deps.txt;autokrp" --collect-submodules serial --hidden-import pystray._win32 --hidden-import pymysql
-          --hidden-import autokrp.fgtask_child --hidden-import autokrp.snmpworker --hidden-import autokrp.snmppool --hidden-import autokrp.tsdb --hidden-import autokrp.icmp --hidden-import autokrp.monviews --collect-submodules netmiko --collect-submodules dns
+          --hidden-import autokrp.fgtask_child --hidden-import autokrp.snmpworker --hidden-import autokrp.snmppool --hidden-import autokrp.tsdb --hidden-import autokrp.icmp --hidden-import autokrp.monviews --hidden-import autokrp.netmap --hidden-import autokrp.terms --hidden-import autokrp.apitool --collect-submodules netmiko --collect-submodules dns
           --collect-submodules pysnmp --collect-submodules ldap3 --collect-all pysmi --collect-data lark
           --hidden-import sqlcipher3 --collect-binaries sqlcipher3 app.py
       - name: Smoke test

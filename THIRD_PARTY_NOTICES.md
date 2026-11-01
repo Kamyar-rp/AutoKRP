@@ -10,6 +10,7 @@ AutoKRP itself is licensed under the [MIT License](LICENSE). It bundles or depen
 | IANA port registry data via npm `port-numbers` | `ui/ports_iana.js` | BSD-2-Clause (notice kept in the file) |
 | IEEE MAC vendor registry (MA-L and IAB), from the `netaddr` package data | `autokrp/oui.dat` | Public IEEE Registration Authority data; netaddr is BSD-3-Clause |
 | MIB files | `assets/mibs/src/` | Copyright of their respective vendors/authors; redistributed for SNMP interoperability |
+| SNMP trap names and descriptions | `autokrp/trapdb.json` | Extracted with net-snmp `snmptranslate` from vendor MIB files (as collected by the LibreNMS project); the texts remain the copyright of their vendors/authors and are used for SNMP interoperability |
 
 ## Python dependencies (installed by pip and packed into the exe)
 | Package | License |

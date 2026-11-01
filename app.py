@@ -172,6 +172,8 @@ def _choose_mode(ask_location=False):
     except Exception:
         return "client"
     default = str(paths.default_root())
+    from autokrp import terms
+    need_terms = paths.terms_accepted_v() < terms.VERSION      # 1.39: پیش از انتخاب پوشه و حالت (پیش از ساختن سرور)
     html = """<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1622;color:#e6edf6;font-family:Tahoma,sans-serif}
 .w{width:600px;text-align:center}.cards{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px}
@@ -183,8 +185,13 @@ h1{font-size:22px;margin:0}.s{color:#8aa0b4;font-size:13px;line-height:1.8}h3{fo
 .row{display:flex;gap:8px}input{flex:1;background:#0b1622;color:#e6edf6;border:1px solid #2a3a4c;border-radius:8px;padding:8px;font:13px Consolas,monospace;direction:ltr}
 button{background:#1d6f65;color:#fff;border:0;border-radius:8px;padding:8px 14px;font:13px Tahoma,sans-serif;cursor:pointer}
 button.g{background:#223040}.m{font-size:12.5px;line-height:1.9;margin-top:8px;min-height:20px}.ok{color:#5fd3a7}.er{color:#ff8a8a}
-.ltr{direction:ltr;unicode-bidi:embed;font-family:Consolas,monospace}#ex{display:none;margin-top:10px}</style></head>
-<body><div class=w><button class=g id=lang style="float:right;padding:4px 10px;font-size:12px">English</button><h1>AutoKRP</h1><p class=s data-t=sub>راه‌اندازی اول (بعداً فقط با پاک‌سازی کامل، RESET، عوض می‌شود).</p>
+.ltr{direction:ltr;unicode-bidi:embed;font-family:Consolas,monospace}#ex{display:none;margin-top:10px}
+#terms{text-align:start}#terms h2{font-size:17px;margin:4px 0 8px}#tb{background:#101c2a;border:1px solid #223040;border-radius:14px;padding:12px 16px;
+max-height:52vh;overflow:auto;font-size:12.8px;line-height:1.9;color:#cfd9e4}#tb p{margin:0 0 8px}.tf{display:flex;gap:8px;align-items:center;margin-top:12px}
+.tf label{flex:1;font-size:13px;cursor:pointer}button:disabled{opacity:.45;cursor:default}#main{display:none}</style></head>
+<body><div class=w><div id=terms><button class=g id=lang0 style="float:left;padding:4px 10px;font-size:12px">English</button><h2 id=tt></h2><div id=tb></div>
+<div class=tf><label><input type=checkbox id=tc> <span id=tcl></span></label><button class=g id=tno></button><button id=tyes disabled></button></div></div>
+<div id=main><button class=g id=lang style="float:right;padding:4px 10px;font-size:12px">English</button><h1>AutoKRP</h1><p class=s data-t=sub>راه‌اندازی اول (بعداً فقط با پاک‌سازی کامل، RESET، عوض می‌شود).</p>
 <div id=locBox style="display:none"><h3 data-t=h1>۱. پوشه‌ی ذخیره‌ی داده‌ها</h3><div class=loc>
 <div class=row><input id=p spellcheck=false><button class=g id=br data-t=br>انتخاب پوشه…</button></div>
 <div class=m id=msg></div>
@@ -193,9 +200,13 @@ button.g{background:#223040}.m{font-size:12.5px;line-height:1.9;margin-top:8px;m
 <div id=modes class=cards>
 <div class=c data-m=client><b data-t=cT>کلاینت (دسکتاپ)</b><p data-t=cD>یک کاربر روی همین کامپیوتر، با پنجره‌ی برنامه. بدون رمز (DPAPI) یا یک رمز اصلی.</p></div>
 <div class=c data-m=server><b data-t=sT>سرور (وب)</b><p data-t=sD>چند کاربر از طریق مرورگر و HTTPS، با نقش‌های ادمین/اپراتور/فقط‌خواندنی.</p></div>
-</div></div>
+</div></div></div>
 <script>
-const ASK=__ASK__, $=(x)=>document.getElementById(x);
+const ASK=__ASK__, NEED=__NEED__, TERMS=__TERMS__, $=(x)=>document.getElementById(x);
+const TU={fa:{c:"متن بالا را خواندم و می‌پذیرم",y:"می‌پذیرم و ادامه",n:"نمی‌پذیرم (خروج)",s:"English"},en:{c:"I have read and accept the text above",y:"Accept and continue",n:"I do not accept (exit)",s:"فارسی"}};
+function drawTerms(){const l=LANG,u=TU[l],w=$("terms");w.dir=l==="fa"?"rtl":"ltr";$("tt").textContent=TERMS.title[l];
+ $("tb").innerHTML="";TERMS.text[l].forEach((t)=>{const p=document.createElement("p");p.textContent=t;$("tb").appendChild(p);});
+ $("tcl").textContent=u.c;$("tyes").textContent=u.y;$("tno").textContent=u.n;$("lang0").textContent=u.s;$("lang0").style.float=l==="fa"?"left":"right";}
 const EN={sub:"First run (can be changed later only with a full reset, RESET).",h1:"1. Data folder",br:"Choose folder…",
  note:"The database, settings, secrets, logs, monitoring data and backups are all stored encrypted in the <span class=ltr>AutoKRP</span> subfolder of this location. Default: the Windows user folder. Network drives are not supported.",
  useEx:"Continue with existing data",h2:"2. Run mode",cT:"Client (desktop)",cD:"One user on this computer, with the app window. No password (DPAPI) or one master password.",
@@ -216,6 +227,11 @@ function show(r){LAST=r;const m=$("msg");EX=null;$("ex").style.display="none";co
   $("ex").style.display="block";$("modes").className="cards dis";}
  else $("modes").className="cards";}
 async function check(){const r=await api().check($("p").value);show(r);}
+function initTerms(){if(!NEED){$("terms").style.display="none";$("main").style.display="block";return init();}
+ drawTerms();$("lang0").onclick=()=>{LANG=LANG==="fa"?"en":"fa";api().lang(LANG);drawTerms();};
+ $("tc").onchange=()=>{$("tyes").disabled=!$("tc").checked;};
+ $("tno").onclick=()=>api().decline();
+ $("tyes").onclick=async()=>{await api().accept(TERMS.v);$("terms").style.display="none";$("main").style.display="block";init();};}
 function init(){setLang(LANG);$("lang").onclick=()=>{setLang(LANG==="fa"?"en":"fa");api().lang(LANG);};
  if(!ASK){$("modes").className="cards";return;}
  $("locBox").style.display="block";$("p").value=__DEF__;check();
@@ -223,11 +239,22 @@ function init(){setLang(LANG);$("lang").onclick=()=>{setLang(LANG==="fa"?"en":"f
  $("br").onclick=async()=>{const r=await api().browse();if(r){$("p").value=r;check();}};
  $("useEx").onclick=()=>api().pick(EX,$("p").value);}
 document.querySelectorAll("[data-m]").forEach((c)=>c.onclick=()=>api().pick(c.dataset.m,ASK?$("p").value:""));
-window.addEventListener("pywebviewready",init);
-</script></body></html>""".replace("__ASK__", "true" if ask_location else "false").replace("__DEF__", json.dumps(default)).replace("__LANG__", json.dumps(paths.ui_lang()))
+window.addEventListener("pywebviewready",initTerms);
+</script></body></html>""".replace("__ASK__", "true" if ask_location else "false").replace("__DEF__", json.dumps(default)).replace("__LANG__", json.dumps(paths.ui_lang())).replace(
+        "__NEED__", "true" if need_terms else "false").replace("__TERMS__", json.dumps(terms.payload(), ensure_ascii=False).replace("</", "<\\/"))
     chosen = {"m": None, "root": None}
 
     class ChooseApi:
+        def accept(self, v):
+            if int(v or 0) == terms.VERSION:
+                paths.save_terms_accepted(terms.VERSION)
+            return True
+
+        def decline(self):
+            for w in webview.windows:
+                w.destroy()
+            return True
+
         def lang(self, l):
             paths.set_ui_lang(l)
             return True
@@ -263,7 +290,7 @@ window.addEventListener("pywebviewready",init);
                 w.destroy()
             return True
 
-    webview.create_window("AutoKRP", html=html, js_api=ChooseApi(), width=680, height=600 if ask_location else 380,
+    webview.create_window("AutoKRP", html=html, js_api=ChooseApi(), width=720, height=680 if (ask_location or need_terms) else 380,
                           background_color="#0b1622")
     webview.start(gui="edgechromium" if sys.platform == "win32" else None)
     if not chosen["m"]:

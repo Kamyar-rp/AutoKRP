@@ -157,8 +157,10 @@ function openModal({ title, body, foot = "", wide = false, onOpen }) {
   m.innerHTML = `<div class="m-head"><h2>${esc(title)}</h2><button class="m-close" aria-label="بستن"><svg><use href="#i-x"/></svg></button></div>
     <div class="m-body">${body}</div>${foot ? `<div class="m-foot">${foot}</div>` : ""}`;
   back.hidden = false;
+  back.classList.toggle("over-noc", !!document.getElementById("noc"));   // 1.37: پنجره روی NOC هم دیده شود (مثلاً «بستن برنامه»)
+  clearTips();
   return new Promise((resolve) => {
-    modalClose = (v) => { back.hidden = true; m.innerHTML = ""; m._dirty = false; modalClose = null; resolve(v); };
+    modalClose = (v) => { clearTips(); back.hidden = true; m.innerHTML = ""; m._dirty = false; modalClose = null; back.classList.remove("over-noc"); resolve(v); };
     m._dirty = false;     // 1.23: تغییر فرم با کاربر ← Esc اول می‌پرسد (keys.js)
     $(".m-close", m).onclick = () => modalClose(null);
     // 1.22: کلیک بیرون پنجره آن را نمی‌بندد (داده‌ی فرم با یک کلیک اشتباه پاک نشود)؛ فقط دکمه‌ی بستن یا دکمه‌های خود پنجره
@@ -183,6 +185,14 @@ function confirm2({ title, body, confirm, danger = false, ack = null }) {
 
 /* ---------------------------------------------------------------- nav */
 function clearTips() { document.querySelectorAll(".hover-tip").forEach((x) => x.remove()); }
+// 1.37: راهنمای نمودار وقتی نمودار دوباره رسم یا پنجره بسته شد (mouseleave دیگر نمی‌آید) جا نماند
+let _tipChk = 0;
+document.addEventListener("mousemove", (e) => {
+  const n = Date.now(); if (n - _tipChk < 120) return; _tipChk = n;
+  if (document.querySelector(".hover-tip") && !(e.target && e.target.closest && e.target.closest(".hit"))) clearTips();
+}, { passive: true });
+["scroll", "wheel", "blur"].forEach((ev) => window.addEventListener(ev, clearTips, { passive: true, capture: ev === "scroll" }));
+document.addEventListener("visibilitychange", clearTips);
 function go(page) {
   S.page = page;
   clearTips();          // راهنمای نمودار وقتی صفحه عوض می‌شود (mouseleave دیگر نمی‌آید) وسط صفحه نماند
@@ -315,7 +325,40 @@ function undoDraft() {
   toast("تغییرهای ذخیره‌نشده لغو شد", "warn");
 }
 $$("[data-undo]").forEach((b) => b.addEventListener("click", undoDraft));
+/* 1.39: درخت بخش‌ها و ابزارهای فعال (کلیدها همان perms.SECTIONS؛ زیرمجموعه در تنظیمات با «:») */
+const TE_TREE = [
+  ["sec", "امنیت (ابزارها، آدرس‌ها، کارهای خودکار)", [["splunk", "Splunk"], ["abuse", "AbuseIPDB"], ["fortigate", "FortiGate (بلاک)"], ["redmine", "Redmine (تیکت)"], ["dns", "DNS"], ["scan", "اسکن شبکه"], ["intel", "بررسی تکمیلی"]],
+    "کارهای زمان‌بندی‌شده‌ی همین ابزارها اجرا نمی‌شوند"],
+  ["dev", "ارتباط با دستگاه‌ها", [["ssh", "دستگاه‌ها و اجرای دستور (SSH/Telnet)"], ["ssh.backup", "پشتیبان کانفیگ", 1], ["term", "ترمینال"], ["term.xfer", "انتقال فایل (SFTP/FTP)", 1],
+    ["term.tftp", "سرور TFTP", 1], ["term.serial", "کنسول سریال (فقط دسکتاپ)", 1], ["nettools", "ابزارهای شبکه"], ["apitool", "ابزار API"]],
+    "نشست‌های ترمینال و انتقال فایل بسته، سرور TFTP قطع و پشتیبان‌گیری زمان‌بندی‌شده انجام نمی‌شود"],
+  ["monitor", "مانیتورینگ", [["monitor.events", "دریافت Trap و Syslog", 1], ["monitor.maps", "نقشه‌ها", 1], ["monitor.topo", "نقشه‌ی خودکار (LLDP)", 1], ["monitor.noc", "نمای NOC و داشبوردها", 1],
+    ["monitor.live", "بررسی زنده‌ی موقت", 1]], "همه‌ی بررسی‌ها، کارگرهای SNMP و شنونده‌های Trap/Syslog متوقف می‌شوند"],
+  ["asset", "دارایی‌ها", [["asset.scan", "اسکن دارایی", 1]], "اسکن دارایی (دستی و زمان‌بندی‌شده) انجام نمی‌شود"],
+  ["offline", "ابزارهای آفلاین", [], ""],
+];
+const teKey = (k) => k.replace(".", ":");
+function teOn(D, k) { return ((D.tools_enabled || {})[teKey(k)] ?? true) !== false; }
+function teTreeHtml(D) {
+  return `<div class="te-tree">${TE_TREE.map(([k, t, kids, stop]) => `<div class="te-sec" data-tes="${k}"><div class="te-head">${sw("tools_enabled." + teKey(k), teOn(D, k), `<b>${esc(I18N.t(t))}</b>`)}
+      <span class="tag ${teOn(D, k) ? "ok" : "err"}">${teOn(D, k) ? "فعال" : "متوقف"}</span></div>
+    ${kids.length ? `<div class="te-kids">${kids.map(([c, ct, sub]) => `<label class="chk ${sub ? "te-sub" : ""}"><input type="checkbox" data-type="bool" data-path="tools_enabled.${teKey(c)}" ${teOn(D, c) ? "checked" : ""}>${esc(I18N.t(ct))}</label>`).join("")}</div>` : ""}
+    ${stop ? `<div class="hint te-stop"><span>خاموش کردن:</span> ${esc(I18N.t(stop))}</div>` : ""}</div>`).join("")}</div>`;
+}
+/** کلیدهایی که با این ذخیره خاموش می‌شوند (روشن در تنظیمات فعلی، خاموش در پیش‌نویس) */
+function teTurningOff() {
+  const out = [];
+  for (const [k, t, kids] of TE_TREE) {
+    const was = teOn(S.settings, k), now = teOn(S.draft, k);
+    if (was && !now) { out.push(I18N.t(t)); continue; }
+    if (now) for (const [c, ct] of kids) if (teOn(S.settings, c) && !teOn(S.draft, c) && teOn(S.settings, k)) out.push(I18N.t(ct));
+  }
+  return out;
+}
 async function saveDraft(btn) {
+  const off = S.draft && S.settings ? teTurningOff() : [];
+  if (off.length && !(await confirm2({ title: "خاموش کردن بخش‌ها", confirm: "خاموش و ذخیره", danger: true,
+    body: `<p>${esc("این بخش‌ها برای همه‌ی کاربران خاموش و کارهای در حال اجرایشان متوقف می‌شوند (داده و تنظیماتشان پاک نمی‌شود):")}</p><ul>${off.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` }))) return;
   if (S.draft && S.settings && S.draft.splunk && (S.draft.splunk.query || "") !== (S.settings.splunk.query || "")) {
     const ok = await confirm2({ title: "کوئری Splunk تغییر کرده است", confirm: "ذخیره بدون تأیید نگاشت",
       body: "<p>کوئری عوض شده ولی نگاشت ستون‌ها برایش تأیید نشده است. بهتر است در تب Splunk «اجرا و پیش‌نمایش» را بزنید و «تأیید نگاشت و ذخیره‌ی کوئری» را انتخاب کنید. اگر ستون IP مبدأ در خروجی نباشد، اجرا با خطا متوقف می‌شود.</p>" });
@@ -412,9 +455,16 @@ function renderSide(r) {
 /* ---------------------------------------------------------------- نقش کاربر */
 const ROLE_FA = { admin: "ادمین", operator: "اپراتور", readonly: "فقط‌خواندنی" };
 let roleSig = "";
+const SEC_TOOLS = ["splunk", "abuse", "fortigate", "redmine", "dns", "scan", "intel"];
 function canTool(t) { return !S.state || !S.state.tools || S.state.tools.includes(t); }
 function isAdmin() { return !S.state || !S.state.me || S.state.me.role === "admin"; }
 function isRO() { return !!(S.state && S.state.me && S.state.me.role === "readonly"); }
+/** 1.39: سطح دسترسی این کاربر به یک بخش یا زیرمجموعه (monitor.maps، term.tftp، …) */
+function axOk(k, lvl = "view") {
+  const v = ((S.state && S.state.access) || {})[k];
+  if (v === undefined) return true;          // پیش از رسیدن وضعیت از سرور (سرور خودش بررسی می‌کند)
+  return lvl === "run" ? v === "run" : v !== "none";
+}
 function applyRole(r) {
   const hid = hiddenTools();
   const me = r.me, sig = JSON.stringify([me, r.tools, r.tools_enabled, r.features, hid, r.hidden_modes, r.access]);
@@ -429,12 +479,20 @@ function applyRole(r) {
   const tl = Object.keys(AX).filter((k) => AX[k] !== "none" && !hid.includes(k));
   $$("[data-need-tool]").forEach((el) => el.classList.toggle("tool-off", !tl.includes(el.dataset.needTool)));
   Object.keys(AX).forEach((k) => {
-    document.body.classList.toggle("nrun-" + k, AX[k] !== "run");
-    document.body.classList.toggle("nsee-" + k, AX[k] === "none" || hid.includes(k));
+    document.body.classList.toggle("nrun-" + k.replace(".", "-"), AX[k] !== "run");
+    document.body.classList.toggle("nsee-" + k.replace(".", "-"), AX[k] === "none" || hid.includes(k));
   });
   // 1.31: بخش مخصوص حالت دیگر (مثلاً کابل کنسول فقط در کلاینت) اصلاً دیده نمی‌شود
   $$("[data-mode]").forEach((el) => el.classList.toggle("mode-off", (r.hidden_modes || []).includes(el.dataset.mode)));
-  $("#navSsh").hidden = !["ssh", "term", "nettools"].some((k) => tl.includes(k));      // صفحه‌ی «ارتباط با دستگاه‌ها»
+  $("#navSsh").hidden = !["ssh", "term", "nettools", "apitool"].some((k) => tl.includes(k));      // صفحه‌ی «ارتباط با دستگاه‌ها»
+  const xfTab = $(`#sshTabs button[data-t="xfer"]`);       // 1.39: «انتقال فایل» = SFTP/FTP یا سرور TFTP
+  if (xfTab && !xfTab.classList.contains("tool-off") && !tl.includes("term.xfer") && !tl.includes("term.tftp")) xfTab.classList.add("tool-off");
+  if (typeof MON !== "undefined" && ["events", "maps", "topo"].includes(MON.tab) && !tl.includes("monitor." + MON.tab)) MON.tab = "targets";
+  // 1.37: «فقط مانیتورینگ» — وقتی هیچ ابزار امنیتی (Splunk، AbuseIPDB، FortiGate، …) برای این کاربر نیست، صفحه‌های همان ابزارها
+  // (داشبورد امنیتی، ابزارها، کارهای خودکار، آدرس‌ها) و اتصال‌های کنار منو پنهان و صفحه‌ی اول «مانیتورینگ» است
+  const monOnly = tl.includes("monitor") && !SEC_TOOLS.some((k) => tl.includes(k));
+  document.body.classList.toggle("mon-only", monOnly);
+  if (monOnly && ["dashboard", "run", "auto", "ips"].includes(S.page)) go("monitor");
   // تب یا صفحه‌ای که الان پنهان شد
   const off = (sel) => { const b = $(sel); return !!b && b.classList.contains("tool-off"); };
   if (off(`#setTabs button[data-t="${S.setTab}"]`)) { S.setTab = "general"; if (S.page === "settings") renderSettings(); }
@@ -899,6 +957,7 @@ async function pollRun(force) {
   $("#runArea").hidden = !run;
   const active = run && (run.status === "running" || run.status === "awaiting");
   $("#btnCancel").hidden = !active; $("#btnStart").disabled = !!active;
+  $("#btnRunFolder").hidden = !active;     // 1.37: پس از پایان اجرا فقط گزارش (در تاریخچه) می‌ماند؛ فایل‌های CSV پاک می‌شوند
   if (!run) return;
   const sig = JSON.stringify([run.status, run.stages, run.lines.length, run.approval && run.approval.step, S.resultTab, run.summary]);
   if (!force && sig === S.runSig) return;
@@ -1378,7 +1437,10 @@ function intelTag(r) {
 }
 function filteredIps() {
   const q = $("#ipSearch").value.trim().toLowerCase(), f = S.ipFilter;
+  const cc = $("#ipCountry").value, dmin = Number($("#ipDays").value || 0);     // 1.37: فیلتر دقیق کشور و روزهای بررسی
   let rows = S.ips.filter((r) => {
+    if (cc && (cc === "-" ? r.country_code : String(r.country_code || "").toUpperCase() !== cc)) return false;
+    if (dmin > 0 && (r.seen_days || 0) < dmin) return false;
     if (f === "ABUSE" && r.abuse_status !== "ABUSE") return false;
     if (f === "CLEAN" && r.abuse_status !== "CLEAN") return false;
     if (f === "unchecked" && r.abuse_status && r.abuse_status !== "ERROR") return false;
@@ -1397,7 +1459,19 @@ function filteredIps() {
   });
   return rows;
 }
+function ipCountryOpts() {
+  const sel = $("#ipCountry"), cur = sel.value, n = {};
+  S.ips.forEach((r) => { const c = String(r.country_code || "").toUpperCase() || "-"; n[c] = (n[c] || 0) + 1; });
+  const sig = Object.keys(n).sort().map((k) => k + n[k]).join(",");
+  if (sel._sig === sig) return;
+  sel._sig = sig;
+  const keys = Object.keys(n).filter((k) => k !== "-").sort((a, b) => n[b] - n[a] || a.localeCompare(b));
+  sel.innerHTML = `<option value="">${esc(I18N.t("همه‌ی کشورها"))}</option>` + keys.map((k) => `<option value="${esc(k)}">${esc(k)} (${num(n[k])})</option>`).join("")
+    + (n["-"] ? `<option value="-">${esc(I18N.t("بدون کشور"))} (${num(n["-"])})</option>` : "");
+  sel.value = n[cur] || (cur === "-" && n["-"]) ? cur : "";
+}
 function renderIps() {
+  ipCountryOpts();
   const unchecked = S.ips.filter((r) => !r.abuse_status).length, bu = $("#btnCheckUnchecked");
   bu.hidden = !unchecked; bu.textContent = `بررسی ${num(unchecked)} آدرس بررسی‌نشده در AbuseIPDB`;
   const cols = visibleCols(), allRows = filteredIps();
@@ -1420,6 +1494,7 @@ function updateSelBar() {
   $("#selBar").hidden = !S.ipSel.size;
   $("#selCount").textContent = `${num(S.ipSel.size)} مورد انتخاب شده`;
 }
+["#ipCountry", "#ipDays"].forEach((id) => $(id).addEventListener(id === "#ipDays" ? "input" : "change", () => { S.ipShow = 0; renderIps(); }));
 $("#ipTable").addEventListener("click", (e) => {
   const th = e.target.closest("th[data-sort]");
   if (th) { const k = th.dataset.sort; S.ipSort = { k, d: S.ipSort.k === k ? -S.ipSort.d : 1 }; renderIps(); }
@@ -1628,10 +1703,14 @@ async function showIp(ip) {
 }
 
 /* ================================================================ history */
-async function loadHist() {
-  const r = await api("list_history");
+async function loadHist(more = false) {
+  // 1.37: صفحه‌بندی، فیلتر و جستجو سمت سرور (همه‌ی تاریخچه، نه فقط ۳۰۰۰ ردیف آخر)
+  const off = more ? (S.hist || []).length : 0;
+  const r = await api("list_history", S.histFilter || "all", $("#histSearch").value.trim(), $("#histRange").value, off, 200);
   if (!r.ok) return toast(r.error, "error");
-  S.hist = r.rows; S.runs = r.runs; renderHist();
+  if (more) { S.hist = S.hist.concat(r.rows); S.runs = S.runs.concat(r.runs.filter((x) => !S.runs.some((y) => y.id === x.id))); }
+  else { S.hist = r.rows; S.runs = r.runs; }
+  S.histTotal = r.total; renderHist();
 }
 function isRunDir(p) {
   const r = (S.paths && S.paths.runs) || "";
@@ -1639,35 +1718,32 @@ function isRunDir(p) {
   return /[\\/]runs[\\/]\d{8}_\d{6}_/.test(String(p));   // غیرادمین مسیرها را ندارد: الگوی پوشه‌ی اجرا
 }
 function renderHist() {
-  const q = $("#histSearch").value.trim().toLowerCase(), f = S.histFilter;
   const runDir = Object.fromEntries(S.runs.map((x) => [x.id, x.dir]));
   const KIND = { nettools: "ابزارهای شبکه", terminal: "ترمینال", transfer: "انتقال فایل", fgupdate: "به‌روزرسانی FortiGate", approval: "تأیید", dns: "DNS", ssh: "SSH", scan: "اسکن شبکه", intel: "بررسی تکمیلی", security: "امنیت", splunk: "Splunk", abuse: "AbuseIPDB", fortigate: "FortiGate", ban: "بلاک", ticket: "تیکت", redmine: "Redmine", import: "ورود داده", export: "خروجی" };
   const ST = { ok: ["ok", "موفق"], error: ["err", "خطا"], warn: ["warn", "با هشدار"], test: ["warn", "تست"] };
-  const rows = S.hist.filter((h) => (f === "all" || (f === "error" ? h.status === "error" : h.kind === f || (f === "ban" && h.kind === "fortigate") || (f === "ticket" && h.kind === "redmine")))
-    && (!q || [h.target, h.detail, h.run_id, h.kind, h.user].some((x) => String(x || "").toLowerCase().includes(q))));
-  const allN = rows.length;
-  S.histShow = S.histShow || REC_SHOW;
-  const more = allN > S.histShow;
-  rows.length = Math.min(rows.length, S.histShow);      // فقط ردیف‌های قابل نمایش ساخته می‌شوند
+  const rows = S.hist || [], allN = S.histTotal || 0, more = allN > rows.length;
   $("#histTable").innerHTML = `<thead><tr>${["زمان", "کاربر", "نوع", "هدف", "وضعیت", "جزئیات", "اجرا", ""].map((t) => `<th class="nosort">${t}</th>`).join("")}</tr></thead><tbody>
     ${rows.length ? rows.map((h) => { const st = ST[h.status] || ["mute", h.status]; const dir = h.file || runDir[h.run_id];
       return `<tr><td class="ltr">${fmtDate(h.ts)}</td><td class="ltr">${esc(h.user || "—")}</td><td>${KIND[h.kind] || esc(h.kind)}</td><td class="bidi">${esc(h.target)}</td><td><span class="tag ${st[0]}">${st[1]}</span></td>
-        <td class="wrap">${esc(h.detail)}</td><td class="ltr muted">${esc(h.run_id)}</td><td class="nowrap">${histViewable(h, dir) ? `<button class="btn sm ghost" data-hv="${h.id}" title="نمایش داده‌ها و گزارش">نمایش</button>` : ""}${dir && h.kind !== "terminal" && h.kind !== "transfer" && (isAdmin() && !WEB || isRunDir(dir)) ? `<button class="btn sm ghost no-ro" data-open="${esc(dir)}" title="${isRunDir(dir) ? "خروجی فایل‌های اجرا" : "باز کردن پوشه"}"><svg><use href="#i-folder"/></svg></button>` : ""}</td></tr>`; }).join("")
+        <td class="wrap">${esc(h.detail)}</td><td class="ltr muted">${esc(h.run_id)}</td><td class="nowrap">${histViewable(h, dir) ? `<button class="btn sm ghost" data-hv="${h.id}" title="نمایش داده‌ها و گزارش">نمایش</button>` : ""}${dir && h.kind !== "terminal" && h.kind !== "transfer" && isAdmin() && !WEB && !isRunDir(dir) ? `<button class="btn sm ghost no-ro" data-open="${esc(dir)}" title="${isRunDir(dir) ? "خروجی فایل‌های اجرا" : "باز کردن پوشه"}"><svg><use href="#i-folder"/></svg></button>` : ""}</td></tr>`; }).join("")
       : `<tr><td colspan="8"><div class="empty">موردی در تاریخچه نیست.</div></td></tr>`}</tbody>`;
   if (more) {
-    $("#histTable tbody").insertAdjacentHTML("beforeend", `<tr><td colspan="8" style="text-align:center"><button class="btn sm" id="histMore">نمایش ${num(Math.min(REC_SHOW, allN - rows.length))} ردیف بیشتر (${num(rows.length)} از ${num(allN)})</button></td></tr>`);
-    $("#histMore").onclick = () => { S.histShow += REC_SHOW; renderHist(); };
+    $("#histTable tbody").insertAdjacentHTML("beforeend", `<tr><td colspan="8" style="text-align:center"><button class="btn sm" id="histMore">نمایش ${num(Math.min(200, allN - rows.length))} ردیف بیشتر (${num(rows.length)} از ${num(allN)})</button></td></tr>`);
+    $("#histMore").onclick = (e) => withSpin(e.currentTarget, () => loadHist(true));
   }
   $("#histCount").textContent = `${num(allN)} مورد`;
 }
 function histViewable(h, dir) {
   if (h.kind === "terminal" || h.kind === "transfer") return !!h.file && (isAdmin() || (S.state && S.state.me && String(h.user || "").toLowerCase() === S.state.me.username.toLowerCase()));
   if (h.kind === "ssh") return !!h.file;
-  return !!dir && isRunDir(dir);
+  const run = h.run_id && (S.runs || []).find((x) => x.id === h.run_id);
+  return (!!dir && isRunDir(dir)) || !!(run && run.has_log);      // 1.37: گزارش اجرا در پایگاه داده
 }
 document.addEventListener("click", (e) => { const b = e.target.closest("[data-hv]"); if (b) histView(Number(b.dataset.hv)); });
-$("#histSearch").addEventListener("input", () => { S.histShow = 0; renderHist(); });
-$("#histFilter").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; S.histFilter = b.dataset.f; S.histShow = 0; $$("#histFilter button").forEach((x) => x.classList.toggle("on", x === b)); renderHist(); });
+let _histT = null;
+$("#histSearch").addEventListener("input", () => { clearTimeout(_histT); _histT = setTimeout(() => loadHist(), 350); });
+$("#histRange").addEventListener("change", () => loadHist());
+$("#histFilter").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; S.histFilter = b.dataset.f; $$("#histFilter button").forEach((x) => x.classList.toggle("on", x === b)); loadHist(); });
 $("#btnReloadHist").addEventListener("click", (e) => withSpin(e.currentTarget, loadHist));
 $("#btnRunsFolder").addEventListener("click", () => api("export_logs").then(exportDone));
 document.addEventListener("click", (e) => { const b = e.target.closest("[data-open]"); if (b) api("open_folder", b.dataset.open).then(exportDone); });
@@ -2095,9 +2171,11 @@ function renderSettings() {
         ${inp("poll_minutes", "فاصله‌ی بررسی وضعیت اتصال‌ها (دقیقه)", { type: "num" })}
         ${inp("max_age_hours", "حداکثر قدمت اجرای زمان‌بندی‌شده (ساعت)", { type: "num", hint: "اگر برنامه بسته بوده و نوبت اجرا بیش از این عقب افتاده باشد، آن نوبت رد می‌شود." })}
       </div></div>
-      <div class="form"><h3>ابزارهای فعال برنامه</h3><p class="hint">ابزار خاموش برای همه‌ی کاربران پنهان می‌شود، اجرا نمی‌شود و کارهای زمان‌بندی‌شده‌ای که آن را دارند رد می‌شوند. داده‌ها و تنظیماتش پاک نمی‌شوند.</p>
-        <div class="chks">${UTOOLS.concat(FEATS).map(([k, t]) => `<label class="chk"><input type="checkbox" data-type="bool" data-path="tools_enabled.${k}" ${((D.tools_enabled || {})[k] ?? true) ? "checked" : ""}>${t}</label>`).join("")}</div>
-        <p class="hint">هر کاربر هم می‌تواند ابزارهایی را که لازم ندارد فقط برای خودش پنهان کند: دکمه‌ی «ابزارهای من» پایین منو.</p></div>
+      <div class="form"><h3>بخش‌ها و ابزارهای فعال برنامه</h3><p class="hint">خاموش = برای همه‌ی کاربران پنهان و <b>واقعاً متوقف</b> (کار پس‌زمینه‌اش هم قطع می‌شود). زیرمجموعه‌ها جدا خاموش می‌شوند؛ بخش اصلی خاموش = همه‌ی زیرمجموعه‌ها خاموش. داده‌ها و تنظیمات پاک نمی‌شوند.</p>
+        <div class="row" style="gap:6px;margin:8px 0;flex-wrap:wrap"><button class="btn sm ghost" id="teAll">همه روشن</button><button class="btn sm" id="teMonOnly" title="همه‌ی بخش‌ها جز مانیتورینگ خاموش">فقط مانیتورینگ</button>
+          <button class="btn sm" id="teDevOnly">فقط ارتباط با دستگاه‌ها</button><button class="btn sm" id="teSecOnly">فقط امنیت</button></div>
+        ${teTreeHtml(D)}
+        <p class="hint">هر کاربر هم می‌تواند ابزارهایی را که لازم ندارد فقط برای خودش پنهان کند: دکمه‌ی «ابزارهای من» پایین منو. دسترسی هر کاربر یا گروه: تنظیمات ← کاربران ← دسترسی‌ها (چیزی را متوقف نمی‌کند).</p></div>
       <div class="form"><h3>ظاهر و برند</h3><div class="form-grid">
         ${inp("branding.app_name", "نام برنامه")}${inp("branding.subtitle", "زیرعنوان")}${inp("branding.logo_text", "حرف لوگو، وقتی تصویر نیست (حداکثر ۲ نویسه)")}
         <label class="field"><span>پوسته</span><select data-path="theme"><option value="dark" ${D.theme !== "light" ? "selected" : ""}>تیره</option><option value="light" ${D.theme === "light" ? "selected" : ""}>روشن</option></select></label>
@@ -2105,6 +2183,14 @@ function renderSettings() {
       <div class="form"><h3>پوشه‌ی داده</h3>
         ${[["data", "داده و تنظیمات"], ["runs", "فایل‌های هر اجرا"], ["logs", "لاگ برنامه"]].map(([k, l]) => `<div class="row" style="margin-bottom:8px"><span style="width:130px" class="muted">${l}</span><div class="path ltr" style="flex:1">${esc(S.paths[k])}</div>${WEB ? "" : `<button class="btn sm" data-open="${esc(S.paths[k])}"><svg><use href="#i-folder"/></svg>باز کردن</button>`}</div>`).join("")}
         <p class="hint">اسرار (توکن و رمز) در فایل رمزنگاری‌شده نگهداری می‌شوند؛ «تنظیمات ← امنیت».</p></div>`;
+    const preset = (keep) => {
+      TE_TREE.forEach(([k, , kids]) => { setPath(D, "tools_enabled." + teKey(k), keep ? keep.includes(k) : true); kids.forEach(([c]) => setPath(D, "tools_enabled." + teKey(c), true)); });
+      renderSettings();
+      toast(I18N.t("تغییر کرد؛ برای اعمال «ذخیره» را بزنید."), "info"); };
+    $("#teMonOnly", body).onclick = () => preset(["monitor"]);
+    $("#teAll", body).onclick = () => preset(null);
+    $("#teDevOnly", body).onclick = () => preset(["dev"]);
+    $("#teSecOnly", body).onclick = () => preset(["sec"]);
   } else if (t === "splunk") {
     renderSplunkTab(body, D);
     bindInputs(body);
@@ -2349,7 +2435,56 @@ $("#setBody").addEventListener("input", (e) => {
 window.addEventListener("blur", clearTips);
 document.addEventListener("scroll", clearTips, true);
 setTimeout(() => document.body.classList.remove("booting"), 8000);      // اگر وضعیت هرگز نرسید، صفحه خالی نماند
+/* 1.39: متن پذیرش پیش از استفاده — تا پذیرفته نشود برنامه بالا نمی‌آید (دسکتاپ یک بار؛ سرور هر کاربر؛ با نسخه‌ی تازه‌ی متن دوباره) */
+const TERMS_UI = {
+  fa: { chk: "متن بالا را خواندم", yes: "می‌پذیرم", no: "نمی‌پذیرم (خروج)", sw: "English", bye: "بدون پذیرش این متن نمی‌توان از برنامه استفاده کرد. برنامه را ببندید." },
+  en: { chk: "I have read the text above", yes: "I accept", no: "I do not accept (exit)", sw: "فارسی", bye: "The program cannot be used without accepting this text. Please close it." },
+};
+function termsHtml(r, lang, gate) {
+  const u = TERMS_UI[lang];
+  return `<div class="terms-card" dir="${lang === "en" ? "ltr" : "rtl"}" lang="${lang}"><div class="terms-head"><h2>${esc(r.title[lang])}</h2>
+      <button class="btn sm ghost" data-tl="${lang === "en" ? "fa" : "en"}">${u.sw}</button></div>
+    <div class="terms-body">${r.text[lang].map((p) => `<p>${esc(p)}</p>`).join("")}</div>
+    ${gate ? `<label class="chk"><input type="checkbox" id="trmChk">${u.chk}</label>
+    <div class="terms-foot"><button class="btn ghost" id="trmNo">${u.no}</button><button class="btn primary" id="trmYes" disabled>${u.yes}</button></div>
+    <div class="terms-bye" id="trmBye" hidden>${u.bye}</div>` : ""}</div>`;
+}
+async function termsGate() {
+  let r;
+  try { r = await api("terms_status"); } catch (_) { return; }
+  if (!r || !r.ok || !r.need) return;
+  await new Promise((done) => {
+    const el = document.createElement("div");
+    el.id = "terms"; el.className = "terms-back"; el.setAttribute("data-no-i18n", "");
+    let lang = I18N.lang === "en" ? "en" : "fa";
+    const draw = () => {
+      el.innerHTML = termsHtml(r, lang, true);
+      $("[data-tl]", el).onclick = (e) => { lang = e.currentTarget.dataset.tl; draw(); };
+      $("#trmChk", el).onchange = (e) => ($("#trmYes", el).disabled = !e.target.checked);
+      $("#trmYes", el).onclick = async () => {
+        const x = await api("terms_accept", r.v);
+        if (!x.ok) return toast(x.error, "error");
+        el.remove(); done();
+      };
+      $("#trmNo", el).onclick = async () => {
+        $("#trmBye", el).hidden = false;
+        if (WEB) return webLogout();
+        try { await api("app_close_choice", "quit", false); } catch (_) { /* پیام بالا */ }
+      };
+    };
+    draw();
+    document.body.appendChild(el);
+  });
+}
+async function termsShowAgain() {
+  const r = await api("terms_status"); if (!r.ok) return toast(r.error, "error");
+  let lang = I18N.lang === "en" ? "en" : "fa";
+  openModal({ title: r.title[lang], wide: true, body: `<div data-no-i18n id="trmView">${termsHtml(r, lang, false)}</div>`,
+    onOpen: (m) => { const bind = () => { $("[data-tl]", m).onclick = (e) => { lang = e.currentTarget.dataset.tl; $("#trmView", m).innerHTML = termsHtml(r, lang, false); bind(); }; }; bind(); } });
+}
+
 (async function boot() {
+  await termsGate();
   await loadSettings();
   await refreshState();
   renderFeed();
@@ -3126,7 +3261,11 @@ async function renderAbout() {
       <div class="sec"><h3>محیط اجرا</h3><dl class="kv"><dt>Python</dt><dd class="ltr" style="text-align:start">${esc(r.python)}</dd><dt>سیستم‌عامل</dt><dd class="ltr" style="text-align:start">${esc(r.os)}</dd>
       ${Object.entries(r.libs).map(([k, v]) => `<dt>${esc(k)}</dt><dd class="ltr" style="text-align:start">${esc(v)}</dd>`).join("")}
       <dt>پوشه‌ی داده</dt><dd class="ltr" style="text-align:start">${esc(r.data_dir)}</dd></dl></div>
+      <div class="sec"><h3>متن پذیرش</h3><div class="row" style="gap:10px"><button class="btn sm" id="aboutTerms">نمایش متن پذیرش و سلب مسئولیت</button>
+        <span class="muted" id="aboutTermsAt"></span></div></div>
       ${isAdmin() ? `<div class="sec" id="aboutSec"></div>` : ""}</div>`;
+  $("#aboutTerms").onclick = termsShowAgain;
+  api("terms_status").then((t) => { if (t.ok && t.accepted && $("#aboutTermsAt")) $("#aboutTermsAt").innerHTML = `پذیرفته‌شده: <span class="ltr">${esc(trFmt(t.accepted.at))}</span>`; });
   if (isAdmin()) aboutSec();
 }
 
@@ -3225,6 +3364,7 @@ let CH_DRAG_END = null;
 document.addEventListener("mouseup", () => { const f = CH_DRAG_END; CH_DRAG_END = null; if (f) f(); });
 function drawChart(el, labels, series, { type = "bar", height = 220, fmt = null, yMax = null, dots = null, tips = null, zoom = null, zoomOut = null, stats = false, sync = null, times = null } = {}) {
   const F = fmt || ((v) => num(Math.round(v)));
+  if (el.querySelector(".hit")) clearTips();          // 1.37: رسم دوباره (به‌روزرسانی خودکار) ← راهنمای قبلی پاک شود
   if (dots === null) dots = labels.length <= 120;
   const W = Math.max(360, Math.round(el.clientWidth || 680)), H = height, L = fmt ? 66 : 40, R = 10, T = 12, B = 34, n = labels.length;
   const c = COLORS();
@@ -3553,7 +3693,7 @@ function renderSsh() {
   }
   $$("#sshTabs button").forEach((b) => b.classList.toggle("on", b.dataset.t === SSH.tab));
   if (SSH.tab !== "term") termHide();
-  ({ devices: sshDevices, creds: sshCreds, run: sshRun, term: sshTerm, xfer: sshXfer, net: sshNet, backups: sshBackups, fgu: sshFgu, jobs: sshJobs })[SSH.tab]();
+  ({ devices: sshDevices, creds: sshCreds, run: sshRun, term: sshTerm, xfer: sshXfer, net: sshNet, backups: sshBackups, fgu: sshFgu, jobs: sshJobs, api: sshApi })[SSH.tab]();
 }
 $("#sshTabs").addEventListener("click", (e) => { const b = e.target.closest("button[data-t]"); if (b) { SSH.tab = b.dataset.t; renderSsh(); } });
 function typeOptions(cur, withAny = false) {

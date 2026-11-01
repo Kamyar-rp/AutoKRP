@@ -27,7 +27,7 @@ async function loadAssets() {
   Object.assign(AS, { list: r.assets, titles: r.titles, admin: r.admin, canEdit: r.can_edit, pendN: r.pending });
   asPendBadge();
   $("#asActions").innerHTML = `${AS.canEdit ? `<button class="btn" id="asNew">+ دارایی دستی</button>` : ""}
-    <button class="btn no-ro" id="asCsv">خروجی CSV</button>${AS.admin ? `<button class="btn primary" id="asScanNow">اسکن الان</button>` : ""}`;
+    <button class="btn no-ro" id="asCsv">خروجی CSV</button>${AS.admin && axOk("asset.scan", "run") ? `<button class="btn primary" id="asScanNow">اسکن الان</button>` : ""}`;
   if ($("#asNew")) $("#asNew").onclick = () => asEdit(null);
   $("#asCsv").onclick = asCsv;
   if ($("#asScanNow")) $("#asScanNow").onclick = () => asScan(null);
@@ -247,13 +247,13 @@ async function asScanTab() {
         <td class="wrap">${s.ok ? "" : `<span class="muted">${esc(s.why)}</span>`}</td></tr>`).join("")
         : `<tr><td colspan="5"><div class="empty">منبعی نیست: یک هدف SNMP در «مانیتورینگ» یا دستگاه SSH (Cisco یا لینوکس) مشترک اضافه کنید.</div></td></tr>`}</tbody></table></div>
       <p class="hint">SNMP: جدول استاندارد ENTITY-MIB (سریال، مدل و قطعه‌ها؛ Cisco از جمله Firepower/ASA، سوییچ‌های HP/Aruba و بیشتر تجهیزات) و MIB خود سازنده برای FortiGate، Juniper (با قطعه‌ها)، MikroTik و سرور HP ProLiant (iLO یا عامل HP). SSH: Cisco با show inventory و show version، لینوکس با فایل‌های DMI (بدون دسترسی root شناسه‌ی machine-id). فقط هدف‌ها و دستگاه‌های مشترک (ادمین) اسکن می‌شوند.</p>
-      <div class="row" style="gap:6px"><button class="btn primary" id="asSave">ذخیره‌ی تنظیمات</button><button class="btn" id="asScanSel">اسکن الان</button></div></div>
+      <div class="row" style="gap:6px"><button class="btn primary" id="asSave">ذخیره‌ی تنظیمات</button>${axOk("asset.scan", "run") ? `<button class="btn" id="asScanSel">اسکن الان</button>` : ""}</div></div>
     <div id="asJob"></div>`;
   $("#asAll").onchange = (e) => $$("[data-src]").forEach((x) => { const s = r.sources.find((y) => y.id === x.dataset.src); x.disabled = e.target.checked || !s.ok; if (e.target.checked && s.ok) x.checked = true; });
   const collect = () => ({ scan_enabled: $("#asSchOn").checked, scan_time: $("#asSchT").value.trim(), concurrency: $("#asConc").value, loc_default: $("#asLocDef").checked,
     sources: $("#asAll").checked ? null : { ids: $$("[data-src]").filter((x) => x.checked).map((x) => x.dataset.src) } });
   $("#asSave").onclick = async () => { const x = await api("asset_settings_save", collect()); if (!x.ok) return toast(x.error, "error"); toast("ذخیره شد", "ok"); };
-  $("#asScanSel").onclick = () => asScan($("#asAll").checked ? null : $$("[data-src]").filter((x) => x.checked).map((x) => x.dataset.src));
+  if ($("#asScanSel")) $("#asScanSel").onclick = () => asScan($("#asAll").checked ? null : $$("[data-src]").filter((x) => x.checked).map((x) => x.dataset.src));
   asJobRender(r.job);
   if (r.job && r.job.status === "running") asJobPoll();
 }
