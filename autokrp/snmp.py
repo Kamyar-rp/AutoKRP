@@ -1888,8 +1888,9 @@ class LiveProbe:
             ports.append({"n": x["name"], "a": (x.get("alias") or "")[:40], "o": x["oper"], "sp": x["speed"], "i": ib, "u": ob})
         v["prev"] = {"t": now, "c": {x["name"]: (x["in"], x["out"]) for x in raw["ifs"]}}
         v["err"] = "; ".join(raw.get("errors") or [])[:200]
-        if pv is None:
-            return                      # نمونه‌ی اول فقط پایه‌ی محاسبه‌ی نرخ است
+        if pv is None:                  # نمونه‌ی اول فقط پایه‌ی محاسبه‌ی نرخ است
+            v["next"] = min(v["next"], now + 3)     # 1.42: نمونه‌ی دوم زود (نه بعد از ۳۰ ثانیه) تا نمودار زود شروع شود
+            return
         v["seq"] += 1
         v["samples"].append({"seq": v["seq"], "t": round(now, 1), "cpu": (raw.get("cpu") or {}).get("value"),
                              "mem": (raw.get("mem") or {}).get("pct"), "rtt": raw.get("rtt"), "ports": ports})

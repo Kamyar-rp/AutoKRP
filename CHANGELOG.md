@@ -2,6 +2,65 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.42.1] — 2026-11-02
+
+### Fixed
+- Desktop: clicking an export button again while its **Save as** window was still open opened a second file window, which could freeze or crash the app. Only one file open/save window can be open at a time now (a second request shows a message), and the configuration/settings export buttons are disabled while their window is open.
+
+## [1.42.0] — 2026-11-02
+
+### Added
+- **Widget dashboards** (new **Dashboards** page in the side menu), similar to OpManager or Zabbix:
+  - Each dashboard has **several pages**; each page is a 12-column grid of widgets you can **drag, resize, configure, duplicate and delete**. Add widgets by clicking them in the widget list or dragging them onto the page.
+  - Widgets (monitoring only): device status counts, problems by severity, current problems, port traffic chart (up to 4 ports), value chart (CPU, memory, temperature, disk, response time), gauge with warning/critical thresholds, single value with trend, Top-N (CPU, memory, temperature, response time, port traffic, lowest availability), availability table, network map, clock, latest traps and syslog, and free text.
+  - Each widget can be limited to a group or to selected targets, and chart widgets can use their own time range.
+  - **Shared dashboards** are created and edited by an admin or a user with Monitoring "Run" access; **personal dashboards** can be made by any user and are visible only to their owner.
+  - **Slideshow** of pages with a per-page time, **fullscreen** (F), and a sample layout for a quick start.
+  - Widget data comes only from the normal monitoring checks; dashboards add no extra load on devices.
+  - New access item and on/off switch: Monitoring → Dashboards.
+  - Shared dashboards are included in the configuration package (targets and maps are matched to the new IDs on import).
+- **Collapsible side menu**: the side menu can be collapsed to icons only for more room (names show as tooltips). The choice is remembered in this browser.
+- Temporary live check: click a port in the port list to chart it live (up to 5 ports).
+
+### Fixed
+- Temporary live check: after **Stop**, or after the session ended, choosing an interval did not start it again; there is now also a **Start again** button. The first values now appear within a few seconds even with the 30-second interval, and the live tab works even before the first normal check of the target.
+- Configuration package: importing several access groups on a fresh installation could fail with "only the main admin…" after the first group.
+
+## [1.41.2] — 2026-11-02
+
+### Changed
+- Configuration package: **saved Splunk queries, FortiGate tasks** (for example block an IP or create an Address) **and Redmine ticket templates** are now their own import items, add-only like everything else. Existing queries, tasks and templates are kept, new ones are added and same-name ones are skipped. Applying the Splunk, FortiGate or Redmine settings section no longer replaces these lists.
+
+## [1.41.1] — 2026-11-02
+
+### Changed
+- Configuration package import: the settings in the file can now be applied **per section**:
+  - Splunk; AbuseIPDB; FortiGate (all devices and Python tasks); Redmine; email and notifications; DNS, scan and extra check
+  - monitoring; Trap/Syslog; config backup, terminal, file transfer and offline updates
+  - assets; automation; general and appearance; Active Directory
+  
+  Connections that are not yet set up on this installation are ticked by default. Sections that would overwrite an existing setup are marked. Trap/Syslog settings (previously skipped) and Active Directory settings (server mode) are now imported too.
+- Settings exports and the configuration package no longer contain SNMP trap communities (treated as secrets, like tokens and passwords).
+
+## [1.41.0] — 2026-11-02
+
+### Added
+- **Full configuration package** (Settings → General, main admin only): export and import the whole configuration in one JSON file, **without any passwords, secrets or tokens**.
+  - **Included**: settings, credential profiles (name and username only), devices, scripts, monitoring targets (with dependencies, policies and display templates), monitoring policies, display templates, NOC dashboards, network maps (with background images and submaps), maintenance windows, API connections and their saved requests, access groups, automation jobs and SSH schedules.
+  - **Not included**: users, uploaded icons and MIB files, and data (history, addresses, chart data, config backups).
+  - **Import only adds**: nothing is deleted or overwritten.
+    - An item whose name already exists is skipped, and references point to the existing item (for example, a device on an imported map links to the device you already have).
+    - References between items are rebuilt with the new IDs.
+    - Imported jobs and schedules arrive turned off for review.
+    - Applying the file's settings is optional; passwords, users, access, accepted terms and active parts are never changed.
+  - A preview shows new and same-name items per section. Afterwards a report lists what was added or skipped, any errors, and which devices, profiles and API connections still need a password or token.
+  - Importing the same file twice adds nothing.
+
+## [1.40.1] — 2026-11-02
+
+### Changed
+- The exe now carries Windows version information (Properties → Details): product name, version, description, author, copyright and the source link. Executables without it are more often flagged by antivirus heuristics. Generated from `autokrp/__init__.py` by `dev/version_info.py` in `build.bat` and the release workflow.
+
 ## [1.40.0] — 2026-11-01
 
 ### Added

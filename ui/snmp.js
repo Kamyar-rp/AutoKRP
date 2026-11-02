@@ -378,6 +378,7 @@ function snHead(D) {
 function snRender(D) {
   const b = $("#snBody", D.m); if (!b) return;
   const L = D.live;
+  if (!L && D.tab === "live") return D.liveOn ? null : snLive(D, b);     // 1.42: زنده به بررسی عادی وابسته نیست
   if (!L) { b.innerHTML = `<div class="empty">هنوز داده‌ای نیست؛ بعد از اولین بررسی (حداکثر ${num(D.t.interval)} ثانیه) نمایش داده می‌شود. اگر دستگاه پاسخ نمی‌دهد، علت بالای صفحه است.</div>`; return; }
   D.chartsDone = false;
   if (D.tab === "sum") return snSum(D, b, L);
@@ -665,20 +666,33 @@ async function snLive(D, b) {
   D.liveIv = D.liveIv || 10;
   b.innerHTML = `<div class="toolbar"><b>بررسی زنده‌ی موقت</b>
       <div class="seg" id="slIv">${[5, 10, 30].map((v) => `<button data-v="${v}" class="${D.liveIv === v ? "on" : ""}">${num(v)} ${esc(I18N.t("ثانیه"))}</button>`).join("")}</div>
-      <span class="muted" id="slLeft"></span><button class="btn sm danger-ghost" id="slStop">توقف</button></div>
+      <span class="muted" id="slLeft"></span><button class="btn sm danger-ghost" id="slStop">توقف</button><button class="btn sm primary" id="slGo" hidden>▶ شروع دوباره</button></div>
     <p class="hint">برای عیب‌یابی: CPU و ترافیک همه‌ی پورت‌ها با فاصله‌ی کوتاه خوانده می‌شود. هیچ‌چیز ذخیره نمی‌شود و بررسی عادی، هشدارها و نمودارهای دستگاه تغییری نمی‌کنند. با بستن این پنجره یا پس از ۱۵ دقیقه خودکار متوقف می‌شود. خواندن پرتکرار کمی بار روی CPU دستگاه می‌گذارد.</p>
     <div id="slErr" class="hint" style="color:var(--warn)"></div>
     <div class="chart-grid"><div class="chart-card wide"><div class="chart-head"><h3>CPU و حافظه (٪) — زنده</h3></div><div class="chart" id="slCpu"></div></div>
-      <div class="chart-card wide"><div class="chart-head"><h3>پرترافیک‌ترین پورت‌ها — زنده</h3></div><div class="chart" id="slTop"></div></div></div>
-    <h3 style="margin:12px 0 6px">همه‌ی پورت‌ها (الان)</h3><div id="slPorts"></div>`;
+      <div class="chart-card wide"><div class="chart-head"><h3 id="slTopH">پرترافیک‌ترین پورت‌ها — زنده</h3></div><div class="chart" id="slTop"></div></div></div>
+    <h3 style="margin:12px 0 6px">همه‌ی پورت‌ها (الان)</h3><p class="hint" style="margin-top:0">روی هر پورت کلیک کنید تا نمودار زنده‌ی همان پورت (حداکثر ۵) نمایش داده شود؛ کلیک دوباره = برداشتن.</p><div id="slPorts"></div>`;
+  D.livePin = D.livePin || [];
+  const stopped = (msg) => { D.liveOn = false; clearTimeout(D.liveT); $("#slLeft", b).textContent = I18N.t(msg); $("#slStop", b).hidden = true; $("#slGo", b).hidden = false; };
   const start = async () => {
+    clearTimeout(D.liveT);
     const r = await api("mon_live_start", D.t.id, D.liveIv);
     if (!r.ok) { $("#slErr", b).textContent = r.error; return false; }
-    D.liveOn = true; D.liveSeq = 0; D.liveS = []; return true;
+    D.liveOn = true; D.liveSeq = 0; D.liveS = [];
+    $("#slStop", b).hidden = false; $("#slGo", b).hidden = true;
+    $("#slErr", b).textContent = I18N.t("در انتظار دو بار خواندن برای محاسبه‌ی ترافیک…");
+    tick();
+    return true;
   };
   $$("#slIv button", b).forEach((x) => (x.onclick = async () => { D.liveIv = Number(x.dataset.v); $$("#slIv button", b).forEach((y) => y.classList.toggle("on", y === x)); await start(); }));
-  $("#slStop", b).onclick = async () => { await api("mon_live_stop", D.t.id); D.liveOn = false; clearTimeout(D.liveT); $("#slLeft", b).textContent = I18N.t("متوقف شد"); };
-  if (!(await start())) return;
+  $("#slStop", b).onclick = async () => { await api("mon_live_stop", D.t.id); stopped("متوقف شد"); };
+  $("#slGo", b).onclick = () => start();
+  $("#slPorts", b).onclick = (e) => {          // 1.42: انتخاب پورت برای نمودار زنده
+    const r = e.target.closest("[data-lp]"); if (!r) return;
+    const n = r.dataset.lp, i = D.livePin.indexOf(n);
+    if (i >= 0) D.livePin.splice(i, 1); else { if (D.livePin.length >= 5) D.livePin.shift(); D.livePin.push(n); }
+    snLiveDraw(D, b);
+  };
   const tick = async () => {
     if (!D.liveOn || !$("#slCpu", b)) return;
     const r = await api("mon_live_get", D.t.id, D.liveSeq);
@@ -688,10 +702,10 @@ async function snLive(D, b) {
       $("#slLeft", b).textContent = `${I18N.t("باقی‌مانده")}: ${monDur(r.left)}`;
       $("#slErr", b).textContent = r.err || (D.liveS.length ? "" : I18N.t("در انتظار دو بار خواندن برای محاسبه‌ی ترافیک…"));
       snLiveDraw(D, b);
-    } else if (r.ok && r.stopped) { D.liveOn = false; $("#slLeft", b).textContent = I18N.t("متوقف شد"); return; }
-    D.liveT = setTimeout(tick, Math.max(2000, D.liveIv * 1000 / 2));
+    } else if (r.ok && r.stopped) { stopped("متوقف شد"); return; }
+    D.liveT = setTimeout(tick, D.liveS.length ? Math.max(2000, D.liveIv * 1000 / 2) : 1500);     // 1.42: تا نمونه‌ی اول، زود
   };
-  tick();
+  await start();
 }
 function snLiveDraw(D, b) {
   const S2 = D.liveS; if (!S2.length) return;
@@ -700,13 +714,15 @@ function snLiveDraw(D, b) {
     { type: "line", height: 170, yMax: 100, fmt: (v) => Math.round(v * 10) / 10 + "%" });
   const last = S2[S2.length - 1], peak = {};
   S2.forEach((x) => x.ports.forEach((p) => { peak[p.n] = Math.max(peak[p.n] || 0, p.i || 0, p.u || 0); }));
-  const top = Object.keys(peak).sort((a, b2) => peak[b2] - peak[a]).slice(0, 5).filter((n) => peak[n] > 0);
+  const pin = (D.livePin || []).filter((n) => last.ports.some((p) => p.n === n));
+  const top = pin.length ? pin : Object.keys(peak).sort((a, b2) => peak[b2] - peak[a]).slice(0, 5).filter((n) => peak[n] > 0);
+  const th = $("#slTopH", b); if (th) th.textContent = I18N.t(pin.length ? "پورت‌های انتخابی — زنده" : "پرترافیک‌ترین پورت‌ها — زنده");
   const pal = [c.info, c.ok, c.warn, c.acc, c.err];
   drawChart($("#slTop", b), lab, top.map((n, k) => ({ name: n, color: pal[k], values: S2.map((x) => { const p = x.ports.find((y) => y.n === n); return p ? Math.max(p.i || 0, p.u || 0) : null; }) })),
     { type: "line", height: 170, fmt: fmtBps });
   const ps = [...last.ports].sort((a, b2) => Math.max(b2.i || 0, b2.u || 0) - Math.max(a.i || 0, a.u || 0));
   const mx = Math.max(1, ...ps.map((p) => Math.max(p.i || 0, p.u || 0)));
-  $("#slPorts", b).innerHTML = `<div class="sn-top">${ps.slice(0, 80).map((x) => `<div class="sn-trow"><span class="ltr sn-tn">${esc(x.n)}</span><span class="${snNameCls(x.a)} muted sn-ta">${esc(x.a || "")}</span>
+  $("#slPorts", b).innerHTML = `<div class="sn-top">${ps.slice(0, 80).map((x) => `<div class="sn-trow clickable${pin.includes(x.n) ? " on" : ""}" data-lp="${esc(x.n)}" title="${esc(I18N.t("نمودار زنده‌ی این پورت"))}"><span class="ltr sn-tn">${esc(x.n)}</span><span class="${snNameCls(x.a)} muted sn-ta">${esc(x.a || "")}</span>
     <span class="sn-tbars"><i class="in" style="width:${(100 * (x.i || 0) / mx).toFixed(1)}%"></i><i class="out" style="width:${(100 * (x.u || 0) / mx).toFixed(1)}%"></i></span>
     <span class="ltr sn-tv">↓${esc(fmtBps(x.i))} ↑${esc(fmtBps(x.u))}</span><span class="ltr muted">${x.sp && (x.i || x.u) ? snPct(100 * Math.max(x.i || 0, x.u || 0) / x.sp) : x.o === 1 ? "" : esc(I18N.t("قطع"))}</span></div>`).join("")}</div>`;
 }

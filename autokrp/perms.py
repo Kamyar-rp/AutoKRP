@@ -25,6 +25,7 @@ FEATURE_API = {
                 "mon_rows", "mon_tpl_list", "mon_tpl_save", "mon_tpl_delete", "mon_tpl_set", "mon_show_ports",
                 "mon_noc_list", "mon_noc_save", "mon_noc_delete",
                 "mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status", "mon_map_save", "mon_map_delete", "mon_map_ports", "mon_map_lldp",
+                "dash_list", "dash_save", "dash_delete",
                 # 1.27.1: MIB سازنده‌ها ← نوع دستگاه خودکار
                 "mib_list", "mib_upload", "mib_delete", "mib_compile", "mib_types"},
     "term": {"term_open", "term_break", "serial_ports", "term_snips_save", "term_read", "term_write", "term_resize", "term_close", "term_list", "term_stats", "conn_cancel",
@@ -91,7 +92,7 @@ READ = {"app_close_choice", "mon_list", "mon_state", "mon_report", "mon_snmp_liv
         "get_run", "list_ips", "repeat_ips", "ip_detail", "get_stats", "list_history", "history_view", "jobs_list", "get_about", "security_lock",
         "security_change_own", "whoami", "asset_list", "asset_get", "asset_changes", "asset_history",
         "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list", "mon_rows", "mon_tpl_list", "mon_noc_list", "mon_snmp_ifheat",
-        "mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status"} | API_VIEW
+        "mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status", "dash_list", "dash_save", "dash_delete"} | API_VIEW
 # اپراتور (به‌علاوه‌ی READ). چک ابزار داخل خود متدها یا در check_tools انجام می‌شود.
 OPERATOR = {"net_oui", "net_rdap", "net_trace_start", "net_locate_targets", "net_locate_start", "net_job", "net_job_cancel",
             "start_run", "cancel_run", "decide", "job_run", "pick_csv", "ips_action",
@@ -128,15 +129,15 @@ POLL = {"net_job", "mon_state", "mon_map_status", "mon_rows", "mon_live_get", "m
 # فرزندی که برایش سطحی تعیین نشده، سطح والدش را می‌گیرد (گروه‌ها و کاربرهای پیش از 1.39 بدون تغییر).
 SECTIONS = [("sec", ["splunk", "abuse", "fortigate", "redmine", "dns", "scan", "intel"]),
             ("dev", ["ssh", "ssh.backup", "term", "term.xfer", "term.tftp", "term.serial", "nettools", "apitool"]),
-            ("monitor", ["monitor.events", "monitor.maps", "monitor.topo", "monitor.noc", "monitor.live"]),
+            ("monitor", ["monitor.events", "monitor.maps", "monitor.dash", "monitor.topo", "monitor.noc", "monitor.live"]),
             ("asset", ["asset.scan"]),
             ("offline", [])]
 SECTION_TITLES = {"sec": "امنیت (ابزارها، آدرس‌ها، کارهای خودکار)", "dev": "ارتباط با دستگاه‌ها", "monitor": "مانیتورینگ",
                   "asset": "دارایی‌ها", "offline": "ابزارهای آفلاین"}
 SUB_TITLES = {"ssh": "دستگاه‌ها و اجرای دستور (SSH/Telnet)", "ssh.backup": "پشتیبان کانفیگ", "term": "ترمینال", "term.xfer": "انتقال فایل (SFTP/FTP)",
               "term.tftp": "سرور TFTP", "term.serial": "کنسول سریال", "nettools": "ابزارهای شبکه", "apitool": "ابزار API",
-              "monitor.events": "دریافت Trap و Syslog", "monitor.maps": "نقشه‌ها", "monitor.topo": "نقشه‌ی خودکار (LLDP)",
-              "monitor.noc": "نمای NOC و داشبوردها", "monitor.live": "بررسی زنده‌ی موقت", "asset.scan": "اسکن دارایی"}
+              "monitor.events": "دریافت Trap و Syslog", "monitor.maps": "نقشه‌ها", "monitor.dash": "داشبوردها", "monitor.topo": "نقشه‌ی خودکار (LLDP)",
+              "monitor.noc": "نمای NOC", "monitor.live": "بررسی زنده‌ی موقت", "asset.scan": "اسکن دارایی"}
 SUBKEYS = [k for _, kids in SECTIONS for k in kids if "." in k]
 PURE_SECTIONS = ["sec", "dev"]
 
@@ -193,7 +194,7 @@ ACCESS_TITLES = {**TOOL_TITLES, **FEATURE_TITLES, "ssh": "ارتباط با دس
 NO_VIEW = {"term"}                                  # بخش‌هایی که «دیدن» ندارند (view = none)
 _MON_VIEW = {"mon_list", "mon_report", "mon_snmp_live", "mon_snmp_series", "mon_icons", "mon_sound_get", "mon_check_now",
              "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list", "mon_rows", "mon_tpl_list", "mon_noc_list", "mon_snmp_ifheat",
-        "mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status"}
+        "mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status", "dash_list", "dash_save", "dash_delete"}
 _ASSET_VIEW = {"asset_list", "asset_get", "asset_changes", "asset_history", "asset_scan_status"}
 _SSH_VIEW = {"ssh_list", "ssh_jobs", "ssh_job", "ssh_job_results", "ssh_output", "ssh_export_output", "text_chunk",
              "backup_overview", "backup_versions", "backup_view", "backup_diff", "backup_export", "backup_export_latest"}
@@ -243,6 +244,7 @@ SUB_API = {
     "monitor.topo": {"mon_topo", "mon_topo_scan", "mon_topo_apply"},
     "monitor.noc": {"mon_noc", "mon_noc_list", "mon_noc_save", "mon_noc_delete"},
     "monitor.live": {"mon_live_start", "mon_live_get", "mon_live_stop"},
+    "monitor.dash": {"dash_list", "dash_save", "dash_delete"},
     "ssh.backup": {"backup_overview", "backup_versions", "backup_view", "backup_delete", "backup_diff", "backup_export", "backup_export_latest", "backup_now"},
     "term.xfer": {"xfer_open", "xfer_conns", "xfer_ls", "xfer_mkdir", "xfer_delete", "xfer_rename", "xfer_close", "xfer_put_begin", "xfer_put", "xfer_get",
                   "xfer_local", "local_ls", "xfer_jobs", "xfer_cancel", "xfer_clear", "xfer_clear_one"},

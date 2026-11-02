@@ -208,6 +208,7 @@ function go(page) {
   if (page === "ssh") { loadSsh(); pollSsh(true); }
   if (page === "monitor") { if (typeof MON !== "undefined" && MON.targets.length) renderMon(); loadMon(); }
   if (page === "assets") loadAssets();
+  if (page === "dash") dashRender();
   if (page === "stats" && ST.tab === "monitor") { stTabApply(); renderMonStats(); }
   else if (page === "stats" && ST.tab === "repeat") { stTabApply(); renderRepeat(); loadRepeat(); }
   else if (page === "stats") {
@@ -219,7 +220,24 @@ function go(page) {
   if (page === "run") { runTabApply(); renderStageForm(); loadToolsData(); pollRun(true); }
   $(".main").scrollTop = 0;
 }
-$("#nav").addEventListener("click", (e) => { const b = e.target.closest("button[data-page]"); if (b) go(b.dataset.page); });
+$("#nav").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-page]"); if (!b) return;
+  if (S.page === "dash" && b.dataset.page !== "dash" && typeof dbCanLeave === "function" && !(await dbCanLeave())) return;   // 1.42: ویرایش ذخیره‌نشده‌ی داشبورد
+  go(b.dataset.page);
+});
+/* 1.42: منوی کناری جمع‌شونده (فقط نمادها) — برای جای بیشتر داشبوردها و نقشه‌ها؛ وضعیت در همین مرورگر می‌ماند */
+function sideMini(on, save = true) {
+  document.body.classList.toggle("side-mini", on);
+  const t = $("#sideTog"); if (t) { const s = I18N.t(on ? "باز کردن منو" : "جمع کردن منو"); t.title = s; t.setAttribute("aria-label", s); }
+  if (save) { try { localStorage.setItem("akrp.side.mini", on ? "1" : "0"); } catch (_) { /* */ } }
+  setTimeout(() => window.dispatchEvent(new Event("resize")), 220);
+}
+$("#sideTog").addEventListener("click", () => sideMini(!document.body.classList.contains("side-mini")));
+$("#nav").addEventListener("mouseover", (e) => {        // منوی جمع: نام هر بخش به‌صورت راهنما
+  const b = e.target.closest("button[data-page]"); if (!b) return;
+  b.title = document.body.classList.contains("side-mini") ? [...b.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim() : "";
+});
+try { if (localStorage.getItem("akrp.side.mini") === "1") sideMini(true, false); } catch (_) { /* */ }
 /* صفحه‌ی ابزارها: «اجرای ابزارها» یا «ابزارهای آفلاین» */
 function runTabApply() {
   if (S.runTab === "offline" && !shown("offline")) S.runTab = "run";
@@ -332,7 +350,7 @@ const TE_TREE = [
   ["dev", "ارتباط با دستگاه‌ها", [["ssh", "دستگاه‌ها و اجرای دستور (SSH/Telnet)"], ["ssh.backup", "پشتیبان کانفیگ", 1], ["term", "ترمینال"], ["term.xfer", "انتقال فایل (SFTP/FTP)", 1],
     ["term.tftp", "سرور TFTP", 1], ["term.serial", "کنسول سریال (فقط دسکتاپ)", 1], ["nettools", "ابزارهای شبکه"], ["apitool", "ابزار API"]],
     "نشست‌های ترمینال و انتقال فایل بسته، سرور TFTP قطع و پشتیبان‌گیری زمان‌بندی‌شده انجام نمی‌شود"],
-  ["monitor", "مانیتورینگ", [["monitor.events", "دریافت Trap و Syslog", 1], ["monitor.maps", "نقشه‌ها", 1], ["monitor.topo", "نقشه‌ی خودکار (LLDP)", 1], ["monitor.noc", "نمای NOC و داشبوردها", 1],
+  ["monitor", "مانیتورینگ", [["monitor.events", "دریافت Trap و Syslog", 1], ["monitor.maps", "نقشه‌ها", 1], ["monitor.dash", "داشبوردها", 1], ["monitor.topo", "نقشه‌ی خودکار (LLDP)", 1], ["monitor.noc", "نمای NOC", 1],
     ["monitor.live", "بررسی زنده‌ی موقت", 1]], "همه‌ی بررسی‌ها، کارگرهای SNMP و شنونده‌های Trap/Syslog متوقف می‌شوند"],
   ["asset", "دارایی‌ها", [["asset.scan", "اسکن دارایی", 1]], "اسکن دارایی (دستی و زمان‌بندی‌شده) انجام نمی‌شود"],
   ["offline", "ابزارهای آفلاین", [], ""],
@@ -493,6 +511,7 @@ function applyRole(r) {
   const monOnly = tl.includes("monitor") && !SEC_TOOLS.some((k) => tl.includes(k));
   document.body.classList.toggle("mon-only", monOnly);
   if (monOnly && ["dashboard", "run", "auto", "ips"].includes(S.page)) go("monitor");
+  if (S.page === "dash" && !tl.includes("monitor.dash")) { if (typeof DB !== "undefined") { DB.edit = false; DB.draft = null; } go(tl.includes("monitor") ? "monitor" : "dashboard"); }
   // تب یا صفحه‌ای که الان پنهان شد
   const off = (sel) => { const b = $(sel); return !!b && b.classList.contains("tool-off"); };
   if (off(`#setTabs button[data-t="${S.setTab}"]`)) { S.setTab = "general"; if (S.page === "settings") renderSettings(); }
@@ -508,6 +527,7 @@ function applyRole(r) {
   const chip = $("#userChip");
   chip.hidden = !(me && !me.single);
   if (me && !me.single) chip.innerHTML = `<svg style="width:14px;height:14px"><use href="#i-lock"/></svg><b class="ltr">${esc(me.username)}</b> — ${ROLE_FA[me.role] || me.role}`;
+  if (me && !me.single) chip.title = me.username;
   if (!me) return;
   const forbidden = (role !== "admin" && S.page === "settings") || ($("#navSsh").hidden && S.page === "ssh");
   if (forbidden) go("dashboard");
@@ -3316,7 +3336,39 @@ function brandingSection() {
       <button class="btn sm" data-logo="icon">انتخاب فایل…</button>${b.icon_file ? `<button class="btn sm ghost" data-logoclr="icon">حذف</button>` : ""}</div>
       <small class="hint">آیکون خود فایل exe موقع ساخت از assets\\app.ico برداشته می‌شود؛ فایل خودتان را جایگزین کنید و build.bat را اجرا کنید.</small></div></div></div>
   <div class="form"><h3>خروجی و ورود تنظیمات</h3><p class="hint">همه‌ی تنظیمات بدون توکن و رمزها در یک فایل JSON. برای پشتیبان‌گیری یا انتقال تنظیمات سازمان خود به نسخه‌ی تازه.</p>
-    <div class="form-foot"><button class="btn" id="btnSetExport">خروجی تنظیمات</button><button class="btn" id="btnSetImport">ورود تنظیمات…</button></div></div>`;
+    <div class="form-foot"><button class="btn" id="btnSetExport">خروجی تنظیمات</button><button class="btn" id="btnSetImport">ورود تنظیمات…</button></div></div>
+  ${!S.state || S.state.superuser !== false ? `<div class="form"><h3>بسته‌ی پیکربندی کامل</h3>
+    <p class="hint">همه‌ی پیکربندی در یک فایل: تنظیمات، دستگاه‌ها، اسکریپت‌ها، هدف‌های مانیتورینگ، سیاست‌ها، قالب‌ها، داشبوردهای NOC، نقشه‌ها، پنجره‌های نگهداری، اتصال‌های API، گروه‌های دسترسی، کارها و زمان‌بندی‌ها؛ <b>بدون هیچ رمز، secret یا توکن.</b></p>
+    <p class="hint">ورود فقط اضافه می‌کند: هیچ چیزی پاک یا بازنویسی نمی‌شود و موردی با همان نام رد می‌شود. زمان‌بندی‌ها خاموش وارد می‌شوند. داده‌ها (تاریخچه، آدرس‌ها، نمودارها، پشتیبان‌ها) جزو بسته نیستند.</p>
+    <div class="form-foot"><button class="btn" id="btnCfgExport">خروجی بسته‌ی پیکربندی</button><button class="btn" id="btnCfgImport">ورود بسته‌ی پیکربندی…</button></div></div>` : ""}`;
+}
+/* 1.41: ورود بسته‌ی پیکربندی — پیش‌نمایش (تازه / هم‌نام = رد)، انتخاب بخش‌ها، گزارش و فهرست رمزهای لازم */
+async function cfgImport() {
+  let pv;
+  if (WEB) { const up = await webPickFile(".json,application/json"); if (!up.ok) return toast(up.error, "error"); if (!up.path) return; pv = await api("cfg_import_preview", up.path); }
+  else pv = await api("cfg_import_preview");
+  if (!pv.ok) return toast(pv.error, "error"); if (pv.cancelled) return;
+  const go = await openModal({ title: "ورود بسته‌ی پیکربندی", wide: true,
+    body: `<p class="muted">${esc("ساخته‌شده با نسخه‌ی ")}<span class="ltr">${esc(pv.version || "?")}</span>${pv.created ? ` · <span class="ltr">${esc(trFmt(pv.created))}</span>` : ""}${pv.by ? ` · <span class="ltr">${esc(pv.by)}</span>` : ""}</p>
+      <table class="grid"><thead><tr><th></th><th>بخش</th><th>در فایل</th><th>تازه</th><th>هم‌نام (رد می‌شود)</th></tr></thead><tbody>
+      ${pv.cats.filter((c) => c.total).map((c) => `<tr><td><input type="checkbox" data-cic="${c.cat}" ${c.new ? "checked" : "disabled"}></td><td>${esc(I18N.t(c.title))}</td><td>${num(c.total)}</td>
+        <td>${c.new ? `<b>${num(c.new)}</b>` : "—"}</td><td class="muted" title="${esc(c.skip_names.join("، "))}">${c.skip ? num(c.skip) : "—"}</td></tr>`).join("") || `<tr><td colspan="5"><div class="empty">بسته خالی است.</div></td></tr>`}</tbody></table>
+      ${(pv.settings || []).length ? `<h3 style="margin:12px 0 4px">${esc("تنظیمات")}</h3><p class="hint">${esc("بخش‌هایی که تیک بزنید از فایل اعمال می‌شوند و مقدارهای فعلی همان بخش عوض می‌شود؛ رمزها، توکن‌ها، کاربران، دسترسی‌ها و بخش‌های فعال هیچ‌وقت عوض نمی‌شوند. اتصال‌هایی که این‌جا هنوز تنظیم نشده‌اند از پیش تیک خورده‌اند.")}</p>
+        <div class="cfg-secs">${pv.settings.map((x) => `<label class="chk"><input type="checkbox" data-cis="${x.id}" ${x.default ? "checked" : ""}>${esc(I18N.t(x.title))}${x.configured_here ? ` <small class="tag warn">${esc("این‌جا تنظیم شده؛ بازنویسی می‌شود")}</small>` : ""}</label>`).join("")}</div>` : ""}
+      <p class="hint">${esc("هیچ داده‌ای پاک نمی‌شود. پس از ورود، رمز و توکن دستگاه‌ها، پروفایل‌ها و اتصال‌های تازه را وارد کنید (فهرستش نمایش داده می‌شود).")}</p>`,
+    foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">ورود</button>`,
+    onOpen: (m, close) => $$("[data-r]", m).forEach((b) => (b.onclick = () => close(b.dataset.r === "1" ? { cats: $$("[data-cic]", m).filter((c) => c.checked).map((c) => c.dataset.cic), set: $$("[data-cis]", m).filter((c) => c.checked).map((c) => c.dataset.cis) } : null))) });
+  if (!go) return;
+  const r = await api("cfg_import_apply", pv.file, go.cats, go.set);
+  if (!r.ok) return toast(r.error, "error");
+  const titles = Object.fromEntries(pv.cats.map((c) => [c.cat, c.title]));
+  openModal({ title: "نتیجه‌ی ورود", wide: true,
+    body: `<table class="grid"><thead><tr><th>بخش</th><th>افزوده شد</th><th>هم‌نام، رد شد</th><th>خطا</th></tr></thead><tbody>
+      ${Object.entries(r.result).filter(([, v]) => v.added || v.skipped || v.failed).map(([k, v]) => `<tr><td>${esc(I18N.t(titles[k] || k))}</td><td>${num(v.added)}</td><td>${num(v.skipped)}</td><td>${v.failed ? `<span class="tag err">${num(v.failed)}</span>` : "—"}</td></tr>`).join("")}</tbody></table>
+      ${r.settings && r.settings.applied && r.settings.applied.length ? `<p>${esc("بخش‌های تنظیمات اعمال‌شده: ")}${r.settings.applied.map((s) => esc(I18N.t((pv.settings.find((x) => x.id === s) || {}).title || s))).join("، ")}</p>` : ""}
+      ${r.needs.length ? `<h3>${esc("رمز یا توکن لازم دارند")}</h3><ul class="cfg-needs">${r.needs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      ${r.errors.length ? `<h3>${esc("خطاها")}</h3><ul class="cfg-needs">${r.errors.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}` });
+  await loadSettings(); refreshState();
 }
 document.addEventListener("click", async (e) => {
   const lg = e.target.closest("[data-logo]"), lc = e.target.closest("[data-logoclr]");
@@ -3331,7 +3383,11 @@ document.addEventListener("click", async (e) => {
     if (r.cancelled) return;
     S.state.branding = r.branding; applyLogo(r.branding); toast("ذخیره شد", "ok"); renderSettings(); return;
   }
-  if (e.target.closest("#btnSetExport")) { const r = await api("export_settings"); if (r.ok && !r.cancelled) toast("ذخیره شد: " + r.path, "ok"); else if (!r.ok) toast(r.error, "error"); }
+  const busy = e.target.closest("#btnCfgExport, #btnSetExport, #btnCfgImport, #btnSetImport");   // 1.42.1: دو کلیک = دو پنجره‌ی Save as
+  if (busy) { if (busy.disabled) return; if (/Import/.test(busy.id)) { busy.disabled = true; setTimeout(() => (busy.disabled = false), 1500); } }
+  if (e.target.closest("#btnCfgExport")) { busy.disabled = true; const r = await api("cfg_export"); busy.disabled = false; if (r.ok && !r.cancelled) toast(I18N.t("ذخیره شد") + (r.path ? ": " + r.path : ""), "ok"); else if (!r.ok) toast(r.error, "error"); }
+  if (e.target.closest("#btnCfgImport")) cfgImport();
+  if (e.target.closest("#btnSetExport")) { busy.disabled = true; const r = await api("export_settings"); busy.disabled = false; if (r.ok && !r.cancelled) toast("ذخیره شد: " + r.path, "ok"); else if (!r.ok) toast(r.error, "error"); }
   if (e.target.closest("#btnSetImport")) {
     let r;
     if (WEB) { const up = await webPickFile(".json,application/json"); if (!up.ok) return toast(up.error, "error"); if (!up.path) return; r = await api("import_settings", up.path); }

@@ -144,6 +144,26 @@ def _safe(fn):
     return wrap
 
 
+
+class _DialogGuard:
+    """1.42.1: فقط یک پنجره‌ی انتخاب/ذخیره‌ی فایل در هر لحظه. کلیک دوباره روی دکمه‌ی خروجی وقتی Save as باز است
+    پنجره‌ی دوم را از ترد دیگر باز می‌کرد و WebView2/WinForms قفل یا کرش می‌کرد. بقیه‌ی ویژگی‌های پنجره دست نمی‌خورد."""
+
+    def __init__(self, w):
+        self._w = w
+        self._dlg = threading.Lock()
+
+    def __getattr__(self, name):
+        return getattr(self._w, name)
+
+    def create_file_dialog(self, *a, **k):
+        if not self._dlg.acquire(blocking=False):
+            raise ConnectorError("یک پنجره‌ی انتخاب یا ذخیره‌ی فایل باز است؛ اول همان را ببندید.")
+        try:
+            return self._w.create_file_dialog(*a, **k)
+        finally:
+            self._dlg.release()
+
 class Api:
     def __init__(self, settings, store, worker, demo=False, vault=None):
         self._vault = vault
@@ -302,7 +322,7 @@ class Api:
         self._store.add_history("security", conn, "ok", f"گواهی {hostport} پین شد — SHA-256 {fmt_fp(fp)}")
 
     def _set_window(self, w):
-        self._window = w
+        self._window = _DialogGuard(w) if w is not None else None
 
     # ------------------------------------------------------------ کاربر جاری و قفل خودکار
     def _current_user(self):
@@ -385,7 +405,11 @@ class Api:
         u = self._current_user() if _cur and u is None else u
         if u is None:
             return paths.is_server() is False      # کلاینت بدون کاربر = تک‌کاربره
-        return perms.is_super(u, self._all_users())
+        au = self._all_users()
+        # 1.42: رکورد تازه‌ی همین کاربر (کاربرِ نشست ممکن است قدیمی باشد؛ مثلاً پرچم «ادمین اصلی» وسط همین درخواست داده شد)
+        name = str(u.get("username") or "").lower()
+        fresh = next((x for x in au or [] if str(x.get("username") or "").lower() == name and x.get("source") == u.get("source")), None) if name else None
+        return perms.is_super(fresh or u, au)
 
     def _levels(self, u=None, _cur=True):
         u = self._current_user() if _cur and u is None else u
@@ -1504,15 +1528,21 @@ class Api:
         return {"wiped": True, "left": left[:20], "closing": bool(self._window)}
 
     # ------------------------------------------------------------ settings export / import (بدون اسرار)
-    @_safe
-    def export_settings(self):
+    def _export_settings_dict(self):
+        """تنظیمات بدون اسرار (همان خروجی «خروجی تنظیمات»؛ 1.41: در بسته‌ی پیکربندی هم)."""
         data = self._settings.public()
         for c in ("splunk", "abuseipdb", "fortigate", "redmine"):
             for k in list(data.get(c, {})):
                 if k.startswith("has_"):
                     del data[c][k]
         data.pop("security", None)
-        data = {"autokrp_settings": 1, "version": __version__, "settings": data}
+        if isinstance(data.get("events"), dict):       # 1.41.1: community‌های Trap هم راز است
+            data["events"] = {k: v for k, v in data["events"].items() if k != "communities"}
+        return data
+
+    @_safe
+    def export_settings(self):
+        data = {"autokrp_settings": 1, "version": __version__, "settings": self._export_settings_dict()}
         name = f"autokrp_settings_{datetime.now():%Y%m%d_%H%M}.json"
         if self._window:
             import webview
@@ -1545,7 +1575,13 @@ class Api:
             raise ConnectorError(f"فایل تنظیمات خوانده نشد: {e}")
         if not isinstance(raw, dict) or raw.get("autokrp_settings") != 1 or not isinstance(raw.get("settings"), dict):
             raise ConnectorError("این فایل خروجی تنظیمات AutoKRP نیست.")
-        patch = raw["settings"]
+        self._import_settings_dict(raw["settings"])
+        self._store.add_history("security", "تنظیمات", "ok", f"ورود تنظیمات از فایل {Path(str(path)).name}")
+        return {"settings": self._settings.public()}
+
+    def _import_settings_dict(self, patch):
+        """همان بررسی‌های «ذخیره‌ی تنظیمات»؛ هیچ رازی وارد نمی‌شود. خطا = ConnectorError."""
+        patch = dict(patch)
         # 1.27.7: همان کلیدهایی که «ذخیره‌ی تنظیمات» هم نمی‌پذیرد (ad و events فقط از متدهای خودشان با اعتبارسنجی)
         for k in ("security", "secrets", "has_password", "users", "server", "ui_users", "jobs", "ssh_schedules", "ad", "events", "access"):
             patch.pop(k, None)
@@ -1556,11 +1592,75 @@ class Api:
         if isinstance(patch.get("branding"), dict):  # نام فایل لوگو/آیکون فقط از set_logo (جلوگیری از خواندن فایل دلخواه)
             for k in ("logo_file", "icon_file", "logo_data"):
                 patch["branding"].pop(k, None)
+        for k in ("terms", "tools_enabled"):         # 1.41: پذیرش متن و بخش‌های فعال همین نصب عوض نمی‌شود
+            patch.pop(k, None)
         self._validate(patch)                        # همان بررسی‌های «ذخیره‌ی تنظیمات»
         self._check_secret_dest(patch)               # تغییر مقصد اتصال بدون وارد کردن دوباره‌ی راز رد می‌شود
         self._settings.update(patch)
-        self._store.add_history("security", "تنظیمات", "ok", f"ورود تنظیمات از فایل {Path(str(path)).name}")
-        return {"settings": self._settings.public()}
+        return True
+
+    # ------------------------------------------------------------ 1.41: بسته‌ی پیکربندی کامل (بدون اسرار)
+    @_safe
+    def cfg_export(self):
+        from . import cfgpack
+        self._need_super()
+        pkg = cfgpack.build(self)
+        name = f"autokrp_config_{datetime.now():%Y%m%d_%H%M}.json"
+        data = json.dumps(pkg, ensure_ascii=False, indent=1).encode("utf-8")
+        n = {c: len(pkg.get(c) or []) for c in cfgpack.CATS}
+        self._store.add_history("security", "بسته‌ی پیکربندی", "ok", "خروجی بسته‌ی پیکربندی (بدون رمز و توکن): "
+                                + "، ".join(f"{cfgpack.CAT_TITLES[c]} {v}" for c, v in n.items() if v))
+        return self._save_bytes(name, ".json", data)
+
+    def _cfg_read(self, path):
+        from . import atrest, cfgpack
+        path = server_path(path)
+        if not path:
+            if not self._window:
+                raise ConnectorError("انتخاب فایل در این محیط در دسترس نیست.")
+            import webview
+            res = self._window.create_file_dialog(webview.OPEN_DIALOG, file_types=("JSON (*.json)",))
+            if not res:
+                return None, None
+            path = res[0] if isinstance(res, (list, tuple)) else res
+        try:
+            if Path(path).stat().st_size > cfgpack.MAX_BYTES:
+                raise ConnectorError("فایل بزرگ‌تر از حد مجاز (۵۰ مگابایت) است.")
+            raw = json.loads(atrest.read_text(path, "utf-8-sig"))
+            return path, cfgpack.load(raw)
+        except cfgpack.PackError as e:
+            raise ConnectorError(str(e))
+        except (OSError, ValueError) as e:
+            raise ConnectorError(f"فایل خوانده نشد: {e}")
+
+    @_safe
+    def cfg_import_preview(self, path=None):
+        from . import cfgpack
+        self._need_super()
+        path, pkg = self._cfg_read(path)
+        if pkg is None:
+            return {"cancelled": True}
+        return {"file": str(path), **cfgpack.preview(self, pkg)}     # «path» در حالت سرور به دانلود تبدیل می‌شد
+
+    @_safe
+    def cfg_import_apply(self, path, cats=None, with_settings=False):
+        """with_settings: true/false یا فهرست بخش‌های تنظیمات (cfgpack.SET_SECTIONS)."""
+        from . import cfgpack
+        self._need_super()
+        if not self._vault.unlocked():
+            raise VaultError("برنامه قفل است.")
+        path, pkg = self._cfg_read(path)
+        if pkg is None:
+            raise ConnectorError("فایل انتخاب نشد.")
+        allc = list(cfgpack.CATS) + [x[0] for x in cfgpack.LISTS]
+        cats = [c for c in (cats or allc) if c in allc]
+        ws = [str(x) for x in with_settings][:20] if isinstance(with_settings, list) else bool(with_settings)
+        out = cfgpack.apply(self, pkg, cats, ws)
+        tot = sum(v["added"] for v in out["result"].values())
+        self._store.add_history("security", "بسته‌ی پیکربندی", "ok" if not out["errors"] else "failed",
+                                f"ورود بسته‌ی پیکربندی از {Path(str(path)).name}: {tot} مورد افزوده شد، "
+                                f"{sum(v['skipped'] for v in out['result'].values())} مورد هم‌نام رد شد، {len(out['errors'])} خطا")
+        return out
 
     @_safe
     def get_run(self, run_id=None, have=None):
@@ -3640,6 +3740,71 @@ class Api:
         d = self._noc_dash(lid)
         self._store.lay_delete(int(lid), "noc")
         self._store.add_history("monitor", d["name"], "ok", "داشبورد NOC حذف شد")
+        return {}
+
+    # ---- داشبوردهای ویجتی (1.42)
+    def _dash_visible(self, x):
+        o = (x.get("owner") or "").lower()
+        return not o or o == (self._uname() or "").lower()
+
+    def _dash_can_edit(self, x):
+        return self._dash_visible(x) and (bool(x.get("owner")) or self._mon_can_add())
+
+    @_safe
+    def dash_list(self):
+        from .dashboards import clean
+        out = []
+        for x in self._store.lay_list("dash"):
+            if not self._dash_visible(x):
+                continue
+            try:
+                d = clean(x["data"])
+            except Exception:  # noqa
+                d = clean({})
+            out.append({"id": x["id"], "name": x["name"], "personal": bool(x.get("owner")), "can_edit": self._dash_can_edit(x), "data": d})
+        out.sort(key=lambda z: (z["personal"], z["name"].lower()))
+        return {"dashboards": out, "can_shared": self._mon_can_add(), "personal_ok": bool(self._uname())}
+
+    @_safe
+    def dash_save(self, dash):
+        from .dashboards import DASH_MAX, clean
+        p = dash if isinstance(dash, dict) else {}
+        name = str(p.get("name") or "").strip()[:60]
+        if not name:
+            raise ConnectorError("نام داشبورد را وارد کنید.")
+        have = self._store.lay_list("dash")
+        did = int(p["id"]) if str(p.get("id") or "").isdigit() else None
+        if did:
+            old = next((x for x in have if x["id"] == did), None)
+            if not old or not self._dash_visible(old):
+                raise ConnectorError("داشبورد پیدا نشد.")
+            if not self._dash_can_edit(old):
+                raise ConnectorError("داشبوردهای مشترک را فقط ادمین یا کاربر با دسترسی «اجرا»ی مانیتورینگ تغییر می‌دهد.")
+            owner = old.get("owner") or ""
+        else:
+            if len(have) >= DASH_MAX:
+                raise ConnectorError(f"حداکثر {DASH_MAX} داشبورد.")
+            personal = (bool(p.get("personal")) or not self._mon_can_add()) and bool(self._uname())
+            if not personal and not self._mon_can_add():
+                raise ConnectorError("ساخت داشبورد مشترک نیاز به دسترسی «اجرا»ی مانیتورینگ دارد.")
+            owner = self._uname() if personal else ""
+        data = clean(p.get("data"))
+        if did:
+            self._store.lay_save(did, "dash", name, data)
+        else:
+            did = self._store.lay_save(None, "dash", name, data, owner)
+        self._store.add_history("monitor", name, "ok", "داشبورد " + ("شخصی " if owner else "") + "ذخیره شد")
+        return {"id": did}
+
+    @_safe
+    def dash_delete(self, did):
+        x = next((x for x in self._store.lay_list("dash") if x["id"] == int(did)), None) if str(did or "").isdigit() else None
+        if not x or not self._dash_visible(x):
+            raise ConnectorError("داشبورد پیدا نشد.")
+        if not self._dash_can_edit(x):
+            raise ConnectorError("داشبوردهای مشترک را فقط ادمین یا کاربر با دسترسی «اجرا»ی مانیتورینگ حذف می‌کند.")
+        self._store.lay_delete(x["id"], "dash")
+        self._store.add_history("monitor", x["name"], "ok", "داشبورد حذف شد")
         return {}
 
     # ---- نقشه‌های دستی شبکه (1.38)
