@@ -12,6 +12,7 @@
   <symbol id="i-run" viewBox="0 0 24 24"><path d="M7 5v14l11-7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
   <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
   <symbol id="i-ip" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-todo" viewBox="0 0 24 24"><path d="M4 6.5l1.6 1.6L8.5 5M4 12.5l1.6 1.6 2.9-3.1M4 18.5l1.6 1.6 2.9-3.1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M11.5 7h8.5M11.5 13h8.5M11.5 19h8.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
   <symbol id="i-hist" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 8v4l2.5 1.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
   <symbol id="i-set" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
@@ -42,6 +43,7 @@
     </div>
     <nav class="nav" id="nav">
       <button data-page="dashboard" class="active"><svg><use href="#i-dash"/></svg>داشبورد</button>
+      <button data-page="todo"><svg><use href="#i-todo"/></svg>کارهای من<span class="nav-count warn" id="navTodo" hidden></span></button>
       <button data-page="run"><svg><use href="#i-run"/></svg>ابزارها<span class="nav-dot" id="navRunDot" hidden></span></button>
       <button data-page="auto"><svg><use href="#i-auto"/></svg>کارهای خودکار</button>
       <button data-page="ips"><svg><use href="#i-ip"/></svg>آدرس‌ها<span class="nav-count" id="navReview" hidden></span></button>
@@ -254,6 +256,10 @@
     </section>
 
     <!-- ========== داشبوردهای ویجتی (1.42) ========== -->
+    <section class="page" id="page-todo">
+      <div id="todoBody"></div>
+    </section>
+
     <section class="page" id="page-dash">
       <div id="dashBody"></div>
     </section>
@@ -310,6 +316,7 @@
 <script src="apitool.js"></script>
 <script src="dash.js"></script>
 <script src="audit.js"></script>
+<script src="todo.js"></script>
 <script src="assets.js"></script>
 <script src="offhash.js"></script>
 <script src="offline.js"></script>

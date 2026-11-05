@@ -56,6 +56,10 @@ ENC_COLS = {
     "assets": {"notes", "descr"},
     "asset_changes": {"data", "note"},
     "audit_log": {"target", "detail", "ip"},                           # 1.46: لاگ ممیزی (mac روی متن اصلی است)
+    "todo_items": {"title", "note", "email_to"},                       # 1.47: کارهای من
+    "todo_marks": {"note"},
+    "todo_tasks": {"title", "note", "email_to"},                       # 1.48: To-do
+    "todo_msgs": {"text", "ref_title"},                                # 1.49: پیام‌ها
 }
 ENC_PREFIX = "enc1:"
 

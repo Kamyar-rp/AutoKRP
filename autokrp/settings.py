@@ -140,6 +140,8 @@ DEFAULTS = {
     # 1.46: ارسال لاگ ممیزی به Syslog/SIEM (فقط ادمین اصلی از audit_cfg_save)
     "audit": {"enabled": False, "host": "", "port": 514, "proto": "udp", "format": "syslog", "cats": ["auth", "security", "tools", "devices", "monitor"],
               "verify_tls": True, "facility": 13, "hostname": ""},
+    # 1.47: کارهای من — روزهای کاری شرکت برای کارهای «روزانه» (دوشنبه=۰ … یکشنبه=۶؛ پیش‌فرض شنبه تا پنجشنبه)
+    "todo": {"workdays": [5, 6, 0, 1, 2, 3]},
     "health": {"enabled": True, "disk_min_gb": 10, "disk_min_pct": 10, "ram_max_mb": 2048, "cpu_max_pct": 90},
     # ابزار «بررسی تکمیلی»: فید آنلاین FFraud و لیست داخلی (IP/CIDR)
     "intel": {"feed_enabled": True, "feed_url": "https://raw.githubusercontent.com/FFraud-com/ip-fraud-database/main/threat-ips/confirmed-abusive.csv",

@@ -309,7 +309,36 @@ def _m21(c):
               " ip TEXT DEFAULT '', target TEXT, status TEXT, detail TEXT, mac TEXT DEFAULT '')")
 
 
-MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17, _m18, _m19, _m20, _m21]
+def _m22(c):
+    """1.47: «کارهای من» — کارهای تکراری چک‌لیست، تیک هر نوبت، و یادآوری‌های فرستاده‌شده."""
+    c.execute("CREATE TABLE IF NOT EXISTS todo_items(id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT DEFAULT '', kind TEXT DEFAULT 'check',"
+              " title TEXT, note TEXT DEFAULT '', rule TEXT DEFAULT '{}', start TEXT, time TEXT DEFAULT '', email INTEGER DEFAULT 0,"
+              " email_to TEXT DEFAULT '', active INTEGER DEFAULT 1, created REAL, updated REAL)")
+    c.execute("CREATE TABLE IF NOT EXISTS todo_marks(id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INTEGER, due TEXT, status TEXT,"
+              " user TEXT DEFAULT '', at REAL, note TEXT DEFAULT '', UNIQUE(item_id, due))")
+    c.execute("CREATE TABLE IF NOT EXISTS todo_rem(id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INTEGER, due TEXT, at REAL, UNIQUE(item_id, due))")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_todo_owner ON todo_items(owner)")
+
+
+def _m23(c):
+    """1.48: To-do (کارهای یک‌باره با سررسید). یادآوری‌ها در همان todo_rem با شناسه‌ی منفی (-id)."""
+    c.execute("CREATE TABLE IF NOT EXISTS todo_tasks(id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT DEFAULT '', title TEXT, note TEXT DEFAULT '',"
+              " due TEXT DEFAULT '', time TEXT DEFAULT '', prio INTEGER DEFAULT 0, email INTEGER DEFAULT 0, email_to TEXT DEFAULT '',"
+              " done_at REAL, done_by TEXT DEFAULT '', created REAL, updated REAL)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_todo_tasks_owner ON todo_tasks(owner)")
+
+
+def _m24(c):
+    """1.49: اشتراک کارهای چک‌لیست (share)، سپردن To-do به کاربر دیگر (assignee)، پیام‌های کوتاه بین کاربران."""
+    for t, col in (("todo_items", "share"), ("todo_tasks", "assignee")):
+        if col not in {r[1] for r in c.execute(f"PRAGMA table_info({t})")}:      # nosec B608 — نام‌های ثابت
+            c.execute(f"ALTER TABLE {t} ADD COLUMN {col} TEXT DEFAULT ''")
+    c.execute("CREATE TABLE IF NOT EXISTS todo_msgs(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, sender TEXT, recipient TEXT, text TEXT,"
+              " ref_kind TEXT DEFAULT '', ref_id INTEGER DEFAULT 0, ref_title TEXT DEFAULT '', read_at REAL)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_todo_msgs_rcpt ON todo_msgs(recipient, read_at)")
+
+
+MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17, _m18, _m19, _m20, _m21, _m22, _m23, _m24]
 # ستون‌هایی که مهاجرت‌ها اضافه می‌کنند؛ هر بار باز شدن بررسی می‌شود و اگر نباشد اضافه می‌شود
 # (پایگاه داده‌ای که شماره‌ی نسخه‌اش جلوتر از ستون‌هایش است، مثلاً بازگردانی فایل قدیمی، دیگر خطا نمی‌دهد)
 REQUIRED_COLUMNS = {
@@ -1487,6 +1516,150 @@ class Store:
             if kind == "tpl":
                 self.db.execute("UPDATE mon_targets SET tpl='' WHERE tpl=?", (str(int(lid)),))
             self.db.execute("DELETE FROM mon_layouts WHERE id=? AND kind=?", (int(lid), kind))
+
+    # ---- کارهای من (1.47)
+    TODO_COLS = ("title", "note", "rule", "start", "time", "email", "email_to", "active", "share")
+
+    def todo_items(self, owner=None):
+        with self._lock:
+            if owner is None:
+                rows = self.db.execute("SELECT * FROM todo_items ORDER BY id").fetchall()
+            else:
+                rows = self.db.execute("SELECT * FROM todo_items WHERE owner=? ORDER BY id", (owner,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def todo_get(self, iid):
+        with self._lock:
+            r = self.db.execute("SELECT * FROM todo_items WHERE id=?", (int(iid),)).fetchone()
+            return dict(r) if r else None
+
+    def todo_save(self, iid, item, owner=""):
+        vals = [json.dumps(item[k], ensure_ascii=False) if k in ("rule", "share") else (int(item[k]) if k in ("email", "active") else item[k])
+                for k in self.TODO_COLS]
+        now = time.time()
+        with self._lock:
+            if iid:
+                self.db.execute(f"UPDATE todo_items SET {', '.join(c + '=?' for c in self.TODO_COLS)}, updated=? WHERE id=?",  # nosec B608 — نام ستون‌ها ثابت
+                                (*vals, now, int(iid)))
+                return int(iid)
+            return self.db.execute(f"INSERT INTO todo_items(owner, kind, {', '.join(self.TODO_COLS)}, created, updated)"  # nosec B608 — نام ستون‌ها ثابت
+                                   f" VALUES(?, 'check', {', '.join('?' * len(self.TODO_COLS))}, ?, ?)", (owner, *vals, now, now)).lastrowid
+
+    def todo_delete(self, iid):
+        with self._lock:
+            for t in ("todo_marks", "todo_rem"):
+                self.db.execute(f"DELETE FROM {t} WHERE item_id=?", (int(iid),))  # nosec B608 — نام جدول ثابت
+            self.db.execute("DELETE FROM todo_items WHERE id=?", (int(iid),))
+
+    def todo_marks(self, ids, since):
+        ids = [int(x) for x in ids]
+        if not ids:
+            return []
+        with self._lock:
+            q = f"SELECT * FROM todo_marks WHERE due>=? AND item_id IN ({','.join('?' * len(ids))})"  # nosec B608 — فقط علامت ?
+            return [dict(r) for r in self.db.execute(q, (since, *ids)).fetchall()]
+
+    def todo_mark(self, iid, due, status, user="", note=""):
+        with self._lock:
+            if not status:
+                self.db.execute("DELETE FROM todo_marks WHERE item_id=? AND due=?", (int(iid), due))
+                return
+            self.db.execute("INSERT INTO todo_marks(item_id, due, status, user, at, note) VALUES(?,?,?,?,?,?)"
+                            " ON CONFLICT(item_id, due) DO UPDATE SET status=excluded.status, user=excluded.user, at=excluded.at, note=excluded.note",
+                            (int(iid), due, status, user, time.time(), note))
+
+    def todo_history(self, iid, limit=60):
+        with self._lock:
+            return [dict(r) for r in self.db.execute("SELECT due, status, user, at, note FROM todo_marks WHERE item_id=? ORDER BY due DESC LIMIT ?",
+                                                     (int(iid), int(limit))).fetchall()]
+
+    TASK_COLS = ("title", "note", "due", "time", "prio", "email", "email_to", "assignee")
+
+    def task_list(self, owner=None, done_since=None):
+        """کارهای To-do: همه‌ی باز + انجام‌شده‌ها از done_since به بعد (None = همه)."""
+        w, a = [], []
+        if owner is not None:                       # 1.49: کارهای خودش + کارهایی که به او سپرده شده
+            w.append("(owner=? OR assignee=?)"); a += [owner, owner]
+        if done_since is not None:
+            w.append("(done_at IS NULL OR done_at>=?)"); a.append(done_since)
+        with self._lock:
+            return [dict(r) for r in self.db.execute("SELECT * FROM todo_tasks" + (" WHERE " + " AND ".join(w) if w else "") + " ORDER BY id", a).fetchall()]  # nosec B608 — شرط‌های ثابت
+
+    def task_get(self, tid):
+        with self._lock:
+            r = self.db.execute("SELECT * FROM todo_tasks WHERE id=?", (int(tid),)).fetchone()
+            return dict(r) if r else None
+
+    def task_save(self, tid, t, owner=""):
+        vals = [int(t[k]) if k in ("prio", "email") else t[k] for k in self.TASK_COLS]
+        now = time.time()
+        with self._lock:
+            if tid:
+                self.db.execute(f"UPDATE todo_tasks SET {', '.join(c + '=?' for c in self.TASK_COLS)}, updated=? WHERE id=?", (*vals, now, int(tid)))  # nosec B608 — ستون‌های ثابت
+                self.db.execute("DELETE FROM todo_rem WHERE item_id=?", (-int(tid),))      # سررسید یا ساعت عوض شد ← یادآوری دوباره
+                return int(tid)
+            return self.db.execute(f"INSERT INTO todo_tasks(owner, {', '.join(self.TASK_COLS)}, created, updated)"  # nosec B608 — ستون‌های ثابت
+                                   f" VALUES(?, {', '.join('?' * len(self.TASK_COLS))}, ?, ?)", (owner, *vals, now, now)).lastrowid
+
+    def task_done(self, tid, done, user=""):
+        with self._lock:
+            self.db.execute("UPDATE todo_tasks SET done_at=?, done_by=? WHERE id=?", (time.time() if done else None, user if done else "", int(tid)))
+
+    def task_delete(self, tid):
+        with self._lock:
+            self.db.execute("DELETE FROM todo_rem WHERE item_id=?", (-int(tid),))
+            self.db.execute("DELETE FROM todo_tasks WHERE id=?", (int(tid),))
+
+    # ---- پیام‌های کوتاه (1.49)
+    def msg_add(self, sender, recipient, text, ref_kind="", ref_id=0, ref_title=""):
+        with self._lock:
+            mid = self.db.execute("INSERT INTO todo_msgs(ts, sender, recipient, text, ref_kind, ref_id, ref_title) VALUES(?,?,?,?,?,?,?)",
+                                  (time.time(), sender, recipient, text, ref_kind, int(ref_id or 0), ref_title)).lastrowid
+            self.db.execute("DELETE FROM todo_msgs WHERE ts<?", (time.time() - 365 * 86400,))
+            return mid
+
+    def msg_thread(self, a, b, limit=100, before=None, after=None):
+        q = "SELECT * FROM todo_msgs WHERE ((sender=? AND recipient=?) OR (sender=? AND recipient=?))"
+        args = [a, b, b, a]
+        if before:
+            q += " AND id<?"; args.append(int(before))
+        if after:
+            q += " AND id>?"; args.append(int(after))
+        with self._lock:
+            rows = self.db.execute(q + " ORDER BY id DESC LIMIT ?", (*args, int(limit))).fetchall()
+            return [dict(r) for r in reversed(rows)]
+
+    def msg_read(self, recipient, sender):
+        with self._lock:
+            self.db.execute("UPDATE todo_msgs SET read_at=? WHERE recipient=? AND sender=? AND read_at IS NULL", (time.time(), recipient, sender))
+
+    def msg_peers(self, me):
+        """هم‌صحبت‌ها: آخرین پیام و شمار نخوانده."""
+        with self._lock:
+            rows = self.db.execute("SELECT * FROM todo_msgs WHERE id IN (SELECT MAX(id) FROM todo_msgs WHERE sender=? OR recipient=?"
+                                   " GROUP BY CASE WHEN sender=? THEN recipient ELSE sender END)", (me, me, me)).fetchall()
+            unread = dict(self.db.execute("SELECT sender, COUNT(*) FROM todo_msgs WHERE recipient=? AND read_at IS NULL GROUP BY sender", (me,)).fetchall())
+        out = {}
+        for r in rows:
+            r = dict(r)
+            peer = r["recipient"] if r["sender"] == me else r["sender"]
+            out[peer] = {"last": r, "unread": unread.get(peer, 0)}
+        for p, n in unread.items():
+            out.setdefault(p, {"last": None, "unread": n})
+        return out
+
+    def msg_unread(self, me):
+        with self._lock:
+            n = self.db.execute("SELECT COUNT(*) FROM todo_msgs WHERE recipient=? AND read_at IS NULL", (me,)).fetchone()[0]
+            last = self.db.execute("SELECT id, sender, text, ref_title FROM todo_msgs WHERE recipient=? AND read_at IS NULL ORDER BY id DESC LIMIT 1", (me,)).fetchone()
+            return n, dict(last) if last else None
+
+    def todo_rem_add(self, iid, due):
+        """True اگر این یادآوری تازه ثبت شد (قبلاً فرستاده نشده بود)."""
+        with self._lock:
+            cur = self.db.execute("INSERT OR IGNORE INTO todo_rem(item_id, due, at) VALUES(?,?,?)", (int(iid), due, time.time()))
+            self.db.execute("DELETE FROM todo_rem WHERE at<?", (time.time() - 90 * 86400,))
+            return cur.rowcount > 0
 
     # ---- ابزار API (1.40)
     API_CONN_COLS = ("name", "base_url", "auth", "key_name", "verify", "timeout", "headers", "owner", "notes")

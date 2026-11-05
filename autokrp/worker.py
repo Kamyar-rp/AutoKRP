@@ -58,6 +58,7 @@ class Worker:
         from . import __version__
         from .auditlog import Forwarder                   # 1.46: مهر لاگ ممیزی و ارسال به Syslog/SIEM
         self.audit = Forwarder(store, settings, __version__)
+        self._next_todo = 0.0
         from .assets import AssetManager
         self.assets = AssetManager(settings, store, settings.vault, self.monitor.snmp.client, self.ssh.hostkeys, emit=self.emit,
                                    notify=self.notifier.notify, demo=demo)
@@ -165,6 +166,9 @@ class Worker:
                 if now >= next_sched:
                     self._scheduler_tick()
                     next_sched = now + 20
+                if now >= self._next_todo:
+                    self._next_todo = now + 30
+                    self._todo_tick()
                 if now >= self._next_flush:
                     self.notifier.flush()
                     self._next_flush = now + 30
@@ -182,6 +186,28 @@ class Worker:
             except Exception:
                 log.exception("worker loop")
             self._stop.wait(1.0)
+
+    def _todo_tick(self):
+        """1.47: ایمیل یادآوری کارهای چک‌لیست (فقط کارهایی که «ایمیل هم» دارند؛ اعلان داخل برنامه را خود رابط نشان می‌دهد)."""
+        from .todo import clean_workdays, email_due, task_email_due
+        due = email_due(self.store, clean_workdays((self.settings.get("todo") or {}).get("workdays")))
+        due += [({**t, "time": t.get("time") or "09:00"}, t["due"]) for t in task_email_due(self.store)]      # 1.48: To-do
+        if not due:
+            return
+        c = self.notifier.cfg()
+        for it, day in due:
+            to = [x for x in (it.get("email_to") or "").split(",") if x] or list(c.get("to") or [])
+            if not c.get("host") or not to:
+                self.emit("warn", f"یادآوری «{it['title']}»: ایمیل فرستاده نشد — سرور ایمیل یا گیرنده در تنظیمات «اعلان‌ها» تعریف نشده است", "todo")
+                continue
+            text = f"{it['title']}\n{it.get('note') or ''}".strip() + f"\n\n({day} {it['time']})"
+            threading.Thread(target=self._todo_mail, args=(text, to), daemon=True, name="todo-mail").start()
+
+    def _todo_mail(self, text, to):
+        try:
+            self.notifier.send("todo", [(time.time(), text)], override={"to": to})
+        except Exception as e:  # noqa
+            self.emit("error", f"ایمیل یادآوری چک‌لیست فرستاده نشد: {str(e)[:200]}", "todo")
 
     def _health_check(self):
         try:

@@ -2,6 +2,53 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.49.0] — 2026-11-05
+
+### Added
+- **Sharing tasks between users** (available when users are set up, in server mode or desktop multi-user mode).
+  - **Checklist tasks** can be personal, or shared with the team in one of two ways:
+    - **One tick for all**: one person ticks, and everyone sees it done, by whom and with the note.
+    - **Each person ticks**: every member has their own tick, missed items and history.
+  - A shared task can go to all users or only to chosen members. Only its creator can edit or delete it.
+- **Assigning To-do tasks**: a To-do task can be assigned to another user.
+  - The assignee sees it with "from …", can tick it and gets an automatic message.
+  - When the assignee marks it done, the creator gets a message.
+  - Only the creator can edit or delete the task.
+- **Messages** (My tasks → Messages): short direct messages between users.
+  - A list of people with unread counts, a conversation view that updates every few seconds, read marks (✓✓), and Enter to send.
+  - Unread messages count in the sidebar, and a notice appears when a new message arrives.
+- **Remind…** on any checklist or To-do task sends the task, with its title and an optional note, to another user as a message.
+- Messages are kept for one year and are stored in the app database (encrypted columns in MySQL "cols" mode). Users can only read their own conversations.
+
+## [1.48.0] — 2026-11-05
+
+### Added
+- **My tasks → To-do** (one-off tasks with an optional due date).
+  - **Quick add**: type a title and press Enter. You can also pick the due date from the calendar and mark the task as important (★).
+  - The list is grouped into **Overdue** (in red; stays until done), **Today**, **Tomorrow**, **Next 7 days**, **Later**, **No date** and **Done** (last 30 days, collapsed). Important tasks come first.
+  - Each task has an optional time, a multi-line note, an in-app reminder on the due date and an optional **reminder email** on the due date (at the set time, or 09:00).
+  - Overdue and today's To-do tasks also appear on the **Today** tab and in the sidebar count.
+- **Month calendar** beside the To-do list (Persian or Gregorian, following the app setting). Days are marked with dots for open, overdue and checklist tasks.
+  - Click a day to see that day's To-do tasks, checklist items and completed tasks, or to add a task for that day.
+- Each user sees only their own tasks (all roles). Sharing between users and messages come in 1.49.
+
+### Changed
+- The reminder email subject is now "Reminder (My tasks)".
+
+## [1.47.0] — 2026-11-05
+
+### Added
+- **My tasks: recurring checklist** (new page in the sidebar, with a count of what is left today).
+  - Repeat a task **daily** (on the company's workdays), **weekly** on any days you pick, **monthly** on a day of the month or the last day (Persian or Gregorian calendar, following the app's calendar setting; a day the month doesn't have falls on the month's last day), or **one time** on a date.
+  - **Today** lists what is due, with a progress bar. Tick a task when it's done, skip it, or add a short note to the tick.
+  - A task that wasn't done shows at the top on the following days, marked **Missed**, until it is ticked or skipped (up to 60 days back). All missed occurrences of a task can be ticked or skipped at once.
+  - **Coming up** shows the next occurrences. **Checklists** lists all tasks with their rule, next due date, the last 30 days (done of due) and the tick history.
+  - Optional **reminder time**: an in-app notice if the task hasn't been ticked by then, and optionally a **reminder email** (to addresses set on the task, or to the recipients in Notifications settings). At most one email per occurrence.
+  - **Workdays** (which days count as "daily") are chosen by an admin, because they differ between companies. The default is Saturday to Thursday.
+  - Dates are picked from a calendar.
+  - Each user sees and ticks only their own tasks (all roles, including read-only). Sharing between users and messages come in a later version.
+  - Data is stored in the app database (encrypted columns in MySQL "cols" mode).
+
 ## [1.46.1] — 2026-11-05
 
 ### Changed

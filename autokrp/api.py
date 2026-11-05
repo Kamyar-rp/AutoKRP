@@ -4182,6 +4182,283 @@ class Api:
         return {"cfg": clean_cfg(self._settings.get("audit") or {}), "cats": CATS, "stats": st, "status": f.status,
                 "pending": max(0, st["last_id"] - sent) if clean_cfg(self._settings.get("audit") or {})["enabled"] else 0, "sent_id": sent}
 
+    # ================================================================ 1.47: کارهای من (چک‌لیست تکراری) — 1.48 To-do — 1.49 اشتراک و پیام
+    def _todo_workdays(self):
+        from .todo import clean_workdays
+        return clean_workdays((self._settings.get("todo") or {}).get("workdays"))
+
+    def _todo_people(self):
+        """کاربران فعال دیگر (برای اشتراک، سپردن و پیام). بدون مدیریت کاربران ← خالی (بخش‌های تیمی پنهان)."""
+        if self._current_user() is None:
+            return []
+        me = self._uname()
+        out = []
+        for u in self._all_users():
+            n = str(u.get("username") or "").lower()
+            if n and n != me and not u.get("disabled"):
+                out.append({"username": n, "role": u.get("role") or ""})
+        return sorted(out, key=lambda x: x["username"])
+
+    def _todo_visible_items(self):
+        from .todo import item_row, visible
+        me = self._uname()
+        return [it for it in (item_row(r) for r in self._store.todo_items()) if visible(it, me)]
+
+    def _todo_get(self, iid, edit=False):
+        """کار چک‌لیست قابل دیدن (edit=True: فقط سازنده‌اش)."""
+        from .todo import item_row, visible
+        r = self._store.todo_get(iid) if str(iid).isdigit() else None
+        it = item_row(r) if r else None
+        if not it or not visible(it, self._uname()) or (edit and (it.get("owner") or "") != self._uname()):
+            raise ConnectorError("کار پیدا نشد." if not it or not visible(it, self._uname()) else "فقط سازنده‌ی این کار می‌تواند آن را تغییر دهد.")
+        return it
+
+    def _todo_mine(self, iid):              # سازگاری با 1.47
+        return self._todo_get(iid, edit=True)
+
+    def _todo_view(self):
+        from datetime import date, datetime, timedelta
+        from .todo import DONE_KEEP_DAYS, LOOKBACK, task_badge, task_remind, task_row, view
+        me = self._uname()
+        items = self._todo_visible_items()
+        since = (date.today() - timedelta(days=max(LOOKBACK, 30) + 1)).isoformat()
+        marks = self._store.todo_marks([x["id"] for x in items], since)
+        v = view(items, marks, self._todo_workdays(), me=me)
+        v["items"] = [{**{k: x.get(k) for k in ("id", "title", "note", "rule", "start", "time", "email", "email_to", "active", "created", "share")},
+                       "owner": x.get("owner") or "", "mine": (x.get("owner") or "") == me} for x in items]
+        # 1.48: To-do — باز + انجام‌شده‌های ۳۰ روز اخیر (1.49: + سپرده‌شده به من)
+        now = datetime.now()
+        tasks = [task_row(r) for r in self._store.task_list(me, time.time() - DONE_KEEP_DAYS * 86400)]
+        for t in tasks:
+            t["remind"] = task_remind(t, now)
+            t["mine"] = (t.get("owner") or "") == me
+        v["tasks"] = [{k: t.get(k) for k in ("id", "title", "note", "due", "time", "prio", "email", "email_to", "done", "done_at", "done_by", "created",
+                                              "remind", "owner", "assignee", "mine")} for t in tasks]
+        v["tbadge"] = task_badge(tasks, now.date())
+        v["badge"] += v["tbadge"]
+        return v
+
+    @_safe
+    def todo_state(self):
+        v = self._todo_view()
+        v["workdays"] = self._todo_workdays()
+        v["can_cfg"] = (self._current_user() or {"role": "admin"}).get("role") == "admin"
+        n = self._worker.notifier.cfg() if self._worker else {}
+        v["mail_ok"] = bool(n.get("host") and n.get("to"))
+        v["me"] = self._uname()
+        v["people"] = self._todo_people()
+        v["unread"] = self._store.msg_unread(v["me"])[0] if v["people"] else 0
+        return v
+
+    @_safe
+    def todo_badge(self):
+        """درخواست دوره‌ای رابط: عدد نوار کناری، یادآوری‌های رسیده و آخرین پیام نخوانده."""
+        v = self._todo_view()
+        names = {x["id"]: x["title"] for x in v["items"]}
+        out = {"badge": v["badge"], "today": v["today"],
+               "due": [{"id": x["id"], "title": names.get(x["id"], "")} for x in v["items_today"] if x["remind"]]
+               + [{"id": -t["id"], "title": t["title"]} for t in v["tasks"] if t["remind"]]}
+        if self._current_user() is not None:
+            n, last = self._store.msg_unread(self._uname())
+            out["unread"], out["last_msg"] = n, last
+        return out
+
+    def _task_get(self, tid, edit=False):
+        """کار To-do قابل دیدن (سازنده یا کسی که به او سپرده شده)؛ edit=True فقط سازنده."""
+        t = self._store.task_get(tid) if str(tid).isdigit() else None
+        me = self._uname()
+        if not t or me not in ((t.get("owner") or ""), (t.get("assignee") or "")):
+            raise ConnectorError("کار پیدا نشد.")
+        if edit and (t.get("owner") or "") != me:
+            raise ConnectorError("فقط سازنده‌ی این کار می‌تواند آن را تغییر دهد.")
+        return t
+
+    def _task_mine(self, tid):              # سازگاری با 1.48
+        return self._task_get(tid, edit=True)
+
+    @_safe
+    def task_save(self, task):
+        """1.48: کار To-do (یک‌باره با سررسید اختیاری). 1.49: assignee = سپردن به کاربر دیگر (+ پیام خودکار)."""
+        from .todo import TASK_MAX, TodoError, clean_task
+        p = task if isinstance(task, dict) else {}
+        try:
+            t = clean_task(p)
+        except TodoError as e:
+            raise ConnectorError(str(e)) from None
+        me = self._uname()
+        if t["assignee"] == me:
+            t["assignee"] = ""
+        if t["assignee"] and t["assignee"] not in {x["username"] for x in self._todo_people()}:
+            raise ConnectorError("کاربر انتخاب‌شده پیدا نشد یا غیرفعال است.")
+        tid = p.get("id")
+        old = self._task_get(tid, edit=True) if tid else None
+        if not tid and len(self._store.task_list(me)) >= TASK_MAX:
+            raise ConnectorError(f"حداکثر {TASK_MAX} کار.")
+        nid = self._store.task_save(int(tid) if tid else None, t, me)
+        if t["assignee"] and (not old or (old.get("assignee") or "") != t["assignee"]):
+            self._store.msg_add(me, t["assignee"], "این کار به شما سپرده شد.", "task", nid, t["title"])
+        return {"id": nid, **self.todo_state()}
+
+    @_safe
+    def task_done(self, tid, done=True):
+        t = self._task_get(tid)
+        self._store.task_done(int(tid), bool(done), self._uname())
+        me = self._uname()
+        if done and (t.get("assignee") or "") == me and (t.get("owner") or "") != me:          # انجام کار سپرده‌شده ← خبر به سازنده
+            self._store.msg_add(me, t["owner"], "این کار انجام شد.", "task", int(tid), t.get("title") or "")
+        return self.todo_state()
+
+    @_safe
+    def task_delete(self, tid):
+        self._task_get(tid, edit=True)
+        self._store.task_delete(int(tid))
+        return self.todo_state()
+
+    @_safe
+    def todo_month(self, a, b):
+        """کارهای هر روز برای تقویم (حداکثر ۴۵ روز)."""
+        from datetime import date
+        from .todo import month, pday, task_row
+        da, db = pday(a), pday(b)
+        if not da or not db or db < da or (db - da).days > 45:
+            raise ConnectorError("بازه‌ی تقویم نامعتبر.")
+        items = self._todo_visible_items()
+        tasks = [task_row(r) for r in self._store.task_list(self._uname())]
+        names = {t["id"]: {"title": t["title"], "prio": t["prio"], "time": t.get("time") or ""} for t in tasks if da.isoformat() <= (t.get("due") or "") <= db.isoformat()}
+        return {"days": month(items, tasks, self._todo_workdays(), da, db), "tasks": names, "today": date.today().isoformat()}
+
+    @_safe
+    def todo_save(self, item):
+        from .todo import ITEM_MAX, TodoError, clean_item
+        p = item if isinstance(item, dict) else {}
+        try:
+            it = clean_item(p)
+        except TodoError as e:
+            raise ConnectorError(str(e)) from None
+        if it["share"]:
+            if self._current_user() is None:
+                it["share"] = {}
+            else:
+                ok = {x["username"] for x in self._todo_people()}
+                it["share"]["users"] = [u for u in it["share"]["users"] if u in ok]
+        iid = p.get("id")
+        if iid:
+            self._todo_get(iid, edit=True)
+        elif len(self._store.todo_items(self._uname())) >= ITEM_MAX:
+            raise ConnectorError(f"حداکثر {ITEM_MAX} کار.")
+        nid = self._store.todo_save(int(iid) if iid else None, it, self._uname())
+        return {"id": nid, **self.todo_state()}
+
+    @_safe
+    def todo_delete(self, iid):
+        self._todo_get(iid, edit=True)
+        self._store.todo_delete(int(iid))
+        return self.todo_state()
+
+    @_safe
+    def todo_mark(self, iid, dues, status, note=""):
+        """status: done، skip یا "" (برداشتن تیک). dues: یک تاریخ یا فهرست (همه‌ی نوبت‌های جامانده‌ی یک کار با هم).
+        کار مشترک «یک نفر برای همه»: تیک هر عضو برای همه؛ «هر نفر جدا»: تیک هر عضو مال خودش."""
+        from datetime import date
+        from .todo import mkey, occurs, pday
+        it = self._todo_get(iid)
+        if status not in ("done", "skip", ""):
+            raise ConnectorError("وضعیت نامعتبر.")
+        dl = dues if isinstance(dues, list) else [dues]
+        wd, today, me = self._todo_workdays(), date.today(), self._uname()
+        note = re.sub(r"[\x00-\x1f\x7f]", " ", str(note or "")).strip()[:300]
+        n = 0
+        for x in dl[:400]:
+            d = pday(x)
+            if not d or d > today or not occurs(it, d, wd):
+                continue                       # نوبت آینده یا روزی که این کار نوبت ندارد ← نه
+            self._store.todo_mark(it["id"], mkey(it, d.isoformat(), me), status, me, note)
+            n += 1
+        if not n and dl:
+            raise ConnectorError("این نوبت قابل ثبت نیست.")
+        return self.todo_state()
+
+    @_safe
+    def todo_history(self, iid):
+        self._todo_get(iid)
+        rows = self._store.todo_history(int(iid))
+        for r in rows:
+            r["due"] = str(r["due"]).split("@")[0]
+        return {"rows": rows}
+
+    @_safe
+    def todo_cfg_save(self, workdays):
+        """روزهای کاری شرکت (فقط ادمین)."""
+        from .todo import clean_workdays
+        if not isinstance(workdays, list) or not workdays:
+            raise ConnectorError("دست‌کم یک روز کاری انتخاب کنید.")
+        wd = clean_workdays(workdays)
+        self._settings.update({"todo": {**(self._settings.get("todo") or {}), "workdays": wd}})
+        return self.todo_state()
+
+    # ---------------------------------------------------------------- 1.49: پیام‌های کوتاه بین کاربران
+    def _chat_peer(self, peer):
+        if self._current_user() is None:
+            raise ConnectorError("پیام فقط وقتی کاربران تعریف شده‌اند در دسترس است.")
+        p = str(peer or "").strip().lower()
+        if p not in {x["username"] for x in self._todo_people()}:
+            raise ConnectorError("کاربر پیدا نشد یا غیرفعال است.")
+        return p
+
+    def _chat_rows(self, rows):
+        return [{k: r.get(k) for k in ("id", "ts", "sender", "recipient", "text", "ref_kind", "ref_id", "ref_title", "read_at")} for r in rows]
+
+    @_safe
+    def chat_list(self):
+        """هم‌صحبت‌ها (همه‌ی کاربران فعال) با آخرین پیام و شمار نخوانده."""
+        if self._current_user() is None:
+            return {"peers": [], "me": ""}
+        me = self._uname()
+        info = self._store.msg_peers(me)
+        out = []
+        for u in self._todo_people():
+            x = info.get(u["username"]) or {}
+            last = x.get("last")
+            out.append({**u, "unread": x.get("unread", 0), "last": self._chat_rows([last])[0] if last else None})
+        out.sort(key=lambda z: (-(z["last"]["id"] if z["last"] else 0), z["username"]))
+        return {"peers": out, "me": me}
+
+    @_safe
+    def chat_thread(self, peer, before=None):
+        p = self._chat_peer(peer)
+        me = self._uname()
+        rows = self._store.msg_thread(me, p, 100, before=before)
+        self._store.msg_read(me, p)
+        return {"peer": p, "me": me, "msgs": self._chat_rows(rows), "more": len(rows) == 100}
+
+    @_safe
+    def chat_poll(self, peer, after=0):
+        """درخواست دوره‌ای پنجره‌ی باز گفت‌وگو: پیام‌های تازه بعد از after (و خوانده شدن آن‌ها)."""
+        p = self._chat_peer(peer)
+        me = self._uname()
+        rows = self._store.msg_thread(me, p, 200, after=int(after or 0))
+        if any(r["recipient"] == me and not r["read_at"] for r in rows):
+            self._store.msg_read(me, p)
+        return {"msgs": self._chat_rows(rows)}
+
+    @_safe
+    def chat_send(self, peer, text, ref=None):
+        """ref: {"kind": "task"|"item", "id": n} — یادآوری یک کار (عنوانش همراه پیام می‌رود)."""
+        p = self._chat_peer(peer)
+        me = self._uname()
+        text = re.sub(r"[\x00-\x09\x0b-\x1f\x7f]", " ", str(text or "")).strip()[:2000]
+        kind, rid, title = "", 0, ""
+        if isinstance(ref, dict) and ref.get("kind") in ("task", "item"):
+            if ref["kind"] == "task":
+                title = self._task_get(ref.get("id")).get("title") or ""
+            else:
+                title = self._todo_get(ref.get("id")).get("title") or ""
+            kind, rid = ref["kind"], int(ref.get("id"))
+        if not text and not kind:
+            raise ConnectorError("متن پیام خالی است.")
+        mid = self._store.msg_add(me, p, text, kind, rid, title)
+        return {"id": mid}
+
     @_safe
     def audit_cfg_save(self, cfg, from_start=False):
         """from_start: فرستادن همه‌ی ردیف‌های قبلی هم (وگرنه فقط از همین حالا)."""

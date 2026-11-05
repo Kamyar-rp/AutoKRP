@@ -94,6 +94,11 @@ READ = {"app_close_choice", "mon_list", "mon_state", "mon_report", "mon_snmp_liv
         "security_change_own", "whoami", "asset_list", "asset_get", "asset_changes", "asset_history",
         "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list", "mon_rows", "mon_tpl_list", "mon_noc_list", "mon_snmp_ifheat",
         "mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status", "dash_list", "dash_save", "dash_delete"} | API_VIEW
+# 1.47: «کارهای من» شخصی است (هر کاربر فقط کارهای خودش)؛ همه‌ی نقش‌ها. روزهای کاری شرکت (todo_cfg_save) فقط ادمین.
+TODO_API = {"todo_state", "todo_badge", "todo_save", "todo_delete", "todo_mark", "todo_history",
+            "task_save", "task_done", "task_delete", "todo_month",                      # 1.48: To-do و تقویم
+            "chat_list", "chat_thread", "chat_poll", "chat_send"}                       # 1.49: پیام بین کاربران
+READ |= TODO_API
 # اپراتور (به‌علاوه‌ی READ). چک ابزار داخل خود متدها یا در check_tools انجام می‌شود.
 OPERATOR = {"net_oui", "net_rdap", "net_trace_start", "net_locate_targets", "net_locate_start", "net_job", "net_job_cancel",
             "start_run", "cancel_run", "decide", "job_run", "pick_csv", "ips_action",
@@ -123,7 +128,7 @@ OPERATOR_SSH = {"ssh_save_device", "ssh_delete_devices", "ssh_list", "cred_list"
 # متدهای SSH که با خاموش بودن ابزار SSH برای همه بسته‌اند
 SSH_RUN = {"ssh_start", "ssh_test", "ssh_preview", "backup_now", "fgu_start", "term_open", "xfer_open", "tftp_start"}
 # درخواست‌های دوره‌ای رابط؛ «فعالیت کاربر» حساب نمی‌شوند (قفل خودکار)
-POLL = {"net_job", "mon_map_disc_job", "mon_state", "mon_map_status", "mon_rows", "mon_live_get", "mon_snmp_live", "asset_scan_status", "term_read", "term_stats", "xfer_jobs", "get_state", "get_run", "ssh_job", "fgu_job", "js_error", "ui_perf", "security_status", "ui_touch", "whoami"}
+POLL = {"todo_badge", "chat_poll", "net_job", "mon_map_disc_job", "mon_state", "mon_map_status", "mon_rows", "mon_live_get", "mon_snmp_live", "asset_scan_status", "term_read", "term_stats", "xfer_jobs", "get_state", "get_run", "ssh_job", "fgu_job", "js_error", "ui_perf", "security_status", "ui_touch", "whoami"}
 
 
 # ============================================================== 1.39: درخت بخش‌ها و زیرمجموعه‌ها

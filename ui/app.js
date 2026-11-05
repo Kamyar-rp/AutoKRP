@@ -209,6 +209,7 @@ function go(page) {
   if (page === "monitor") { if (typeof MON !== "undefined" && MON.targets.length) renderMon(); loadMon(); }
   if (page === "assets") loadAssets();
   if (page === "dash") dashRender();
+  if (page === "todo") todoRender();
   if (page === "stats" && ST.tab === "monitor") { stTabApply(); renderMonStats(); }
   else if (page === "stats" && ST.tab === "repeat") { stTabApply(); renderRepeat(); loadRepeat(); }
   else if (page === "stats") {
