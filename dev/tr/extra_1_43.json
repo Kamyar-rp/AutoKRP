@@ -1,0 +1,14 @@
+{
+"این {0}‏ IP از فهرست حذف می‌شوند و دفعه‌ی بعد که از Splunk یا ورودی دیگری بیایند، از نو در AbuseIPDB و بررسی تکمیلی بررسی می‌شوند. آمار و تاریخچه‌ی گذشته می‌ماند. بلاک موجود در FortiGate برداشته نمی‌شود.": "These {0} IPs will be removed from the list and checked again in AbuseIPDB and the extra check the next time they arrive from Splunk or another input. Past statistics and history are kept. An existing FortiGate block is not removed.",
+"تا دفعه‌ی بعد که دیده شد از نو بررسی شود": "So it is checked again the next time it is seen",
+"حذف آدرس فقط برای ادمین است.": "Only an admin can delete addresses.",
+"حذف از فهرست": "Remove from list",
+"حذف از فهرست آدرس‌ها": "Remove from the address list",
+"حذف از فهرست آدرس‌ها (بررسی دوباره در دیدن بعدی): {0}": "Removed from the address list (checked again when seen next): {0}",
+"دستور خالی یعنی برای آن نوع پشتیبان گرفته نمی‌شود. هر خط یک دستور است؛ با چند خط، خروجی همه به همان ترتیب (هرکدام زیر سرتیتر «##### دستور») در یک فایل پشتیبان ذخیره می‌شود. برای لینوکس همه‌ی خط‌ها یک اسکریپت‌اند.": "An empty command means no backup for that type. One command per line; with several lines, all outputs are saved in order in one backup file (each under a “##### command” heading). For Linux all lines are one script.",
+"فقط IPهای مخرب نمایش داده می‌شوند": "Only malicious IPs are shown",
+"هیچ IP مخربی پیدا نشد.": "No malicious IPs found.",
+"گزارش کامل در «خروجی فایل‌ها»": "full report in “Export files”",
+"بررسی شد": "checked",
+"{0}‏ IP از فهرست حذف شد؛ دفعه‌ی بعد که دیده شوند دوباره بررسی می‌شوند": "{0} IPs removed from the list; they will be checked again the next time they are seen"
+}

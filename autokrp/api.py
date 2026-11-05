@@ -2372,7 +2372,24 @@ class Api:
     @_safe
     def intel_status(self):
         from . import intel
-        return {"feed": intel.feed_meta(), "local": intel.local_meta(), "server": paths.is_server()}
+        return {"feed": intel.feed_meta(), "local": intel.local_meta(), "server": paths.is_server(),
+                "lists": {k: {"name": v["name"], "url": v["url"], **intel.list_meta(k)} for k, v in intel.LISTS.items()}}
+
+    @_safe
+    def intel_list_update(self, lid):
+        """1.44: دریافت الان یک فهرست عمومی (FireHOL Level 1، IPsum)."""
+        from . import intel
+        if lid not in intel.LISTS:
+            raise ConnectorError("فهرست ناشناخته.")
+        if self._demo:
+            raise ConnectorError("در حالت Demo فهرست دانلود نمی‌شود.")
+        try:
+            meta, note = intel.update_list(lid, self._settings.get("intel") or {}, force=True)
+        except intel.IntelError as e:
+            self._store.add_history("intel", intel.LISTS[lid]["name"], "error", str(e))
+            raise ConnectorError(str(e))
+        self._store.add_history("intel", intel.LISTS[lid]["name"], "ok", note)
+        return {"list": meta, "message": note}
 
     @_safe
     def intel_feed_update(self):
@@ -2460,6 +2477,8 @@ class Api:
             self._need_tools([need])
         elif action == "ignore" and self._current_user() and self._current_user().get("role") != "admin":
             raise ConnectorError("افزودن به رنج‌های مستثنا فقط برای ادمین است.")
+        elif action == "delete" and self._current_user() and self._current_user().get("role") != "admin":
+            raise ConnectorError("حذف آدرس فقط برای ادمین است.")
         if action == "recheck":
             ex = self._excluded_fn()
             out = [ip for ip in ips if ex(ip)]
@@ -2479,6 +2498,17 @@ class Api:
             for ip in ips:
                 self._store.upsert_ip(ip, review=action)
             return {"message": f"{len(ips)}\u200f IP به‌روزرسانی شد"}
+        if action == "delete":
+            # 1.43: آدرس از فهرست حذف می‌شود تا دفعه‌ی بعد که از Splunk یا ورودی دیگر آمد، از نو بررسی شود (کش AbuseIPDB همین ردیف است).
+            # آمار و تاریخچه‌ی گذشته دست نمی‌خورد. نشانه‌ی «بلاک‌شده» هم برداشته می‌شود تا بلاک دوباره پیشنهاد شود.
+            have = {r["ip"] for r in self._store.ips_brief()}
+            gone = [ip for ip in ips if ip in have]
+            if gone:
+                self._store.delete_ips(gone)
+                self._store.unmark_processed([f"ban:{ip}" for ip in gone])
+                self._store.add_history("import", f"{len(gone)} IP", "ok", f"حذف از فهرست آدرس‌ها (بررسی دوباره در دیدن بعدی): {'، '.join(gone[:20])}"
+                                        + (" …" if len(gone) > 20 else ""), "", "")
+            return {"message": f"{len(gone)}\u200f IP از فهرست حذف شد؛ دفعه‌ی بعد که دیده شوند دوباره بررسی می‌شوند"}
         if action == "ignore":
             cur = self._settings.get("fortigate", "ignore_networks", default=[]) or []
             add = [f"{ip}/32" for ip in ips if f"{ip}/32" not in cur and ip not in cur]
@@ -3444,6 +3474,9 @@ class Api:
     def mon_delete(self, tid):
         t = self._mon_get(tid, edit=True)
         self._store.mon_delete(t["id"])
+        for x in self._store.lay_list("disc"):         # 1.45: نتیجه‌ی کشف اتصال همین دستگاه
+            if str(x["name"]) == str(t["id"]):
+                self._store.lay_delete(x["id"], "disc")
         self._mon.state.pop(t["id"], None)
         self._mon.minutes.pop(t["id"], None)
         self._mon.snmp.clear(t["id"])
@@ -3986,6 +4019,121 @@ class Api:
         out = [{"a": lk["a"], "b": lk["b"], "pa": lk.get("a_port") or "", "pb": lk.get("b_port") or ""}
                for lk in d.get("links") or [] if lk.get("b") and lk["a"] in on and lk["b"] in on]
         return {"links": out, "scanned": bool(d.get("at"))}
+
+    # ---- 1.45: کشف اتصال‌ها از ARP/MAC (فقط با دکمه؛ نتیجه‌ی هر دستگاه برای نقشه‌های دیگر نگه داشته می‌شود)
+    def _disc_jobs(self):
+        if getattr(self, "_discj", None) is None:
+            from .nettools import Jobs
+            self._discj = Jobs()
+        return self._discj
+
+    def _disc_cache(self):
+        """نتیجه‌های ذخیره‌شده؛ داده (IP و MAC شبکه) جدا رمز می‌شود چون ستون mon_layouts در MySQL رمز ستونی ندارد."""
+        import base64
+        from . import atrest
+        out = {}
+        for x in self._store.lay_list("disc"):
+            if not str(x["name"]).isdigit():
+                continue
+            try:
+                x["data"] = json.loads(atrest.decrypt(base64.b64decode(x["data"]["enc"])).decode("utf-8"))
+            except Exception:  # noqa — خراب یا کلید عوض شده ← انگار بررسی نشده
+                continue
+            out[int(x["name"])] = x
+        return out
+
+    def _disc_save(self, lid, tid, d):
+        import base64
+        from . import atrest
+        enc = base64.b64encode(atrest.encrypt(json.dumps(d, ensure_ascii=False).encode("utf-8"))).decode("ascii")
+        self._store.lay_save(lid, "disc", str(tid), {"v": 1, "enc": enc})
+
+    @_safe
+    def mon_map_disc_info(self, tids=None):
+        """آخرین بررسی ذخیره‌شده‌ی هر دستگاه (زمان و خطاها؛ خود جدول‌ها به رابط نمی‌روند)."""
+        self._map_edit_ok()
+        vis = {t["id"] for t in self._store.mon_targets() if self._mon_visible(t)}
+        want = {int(i) for i in (tids or []) if str(i).isdigit()} & vis
+        out = {}
+        for tid, x in self._disc_cache().items():
+            if tid in want:
+                d = x["data"]
+                out[str(tid)] = {"t": d.get("t"), "full": d.get("fdb") is not None, "errors": d.get("errors") or [],
+                                 "ports": len({(f[2], f[3]) for f in d.get("fdb") or []}), "macs": len(d.get("fdb") or [])}
+        return {"info": out}
+
+    @_safe
+    def mon_map_disc_start(self, tids, refresh=False, peers=True, edge_max=4, peer_tids=None):
+        """tids: دستگاه‌هایی که نتیجه برایشان لازم است (یک دستگاه انتخاب‌شده یا همه‌ی دستگاه‌های نقشه).
+        refresh: دوباره خواندن حتی اگر نتیجه‌ی ذخیره‌شده هست. peers: MAC اینترفیس‌های بقیه‌ی دستگاه‌های peer_tids (فقط ifPhysAddress)
+        وقتی هنوز بررسی نشده‌اند. edge_max: حداکثر MAC روی پورت برای «دستگاه ناشناس»."""
+        from . import mapdisc
+        self._map_edit_ok()
+        vis = {t["id"]: t for t in self._mon.targets().values() if self._mon_visible(t)}
+        snmp_ok = lambda tid: tid in vis and vis[tid].get("kind") == "snmp" and vis[tid].get("enabled")  # noqa: E731
+        scope = [int(i) for i in (tids or []) if str(i).isdigit() and snmp_ok(int(i))][:300]
+        if not scope:
+            raise ConnectorError("هیچ دستگاه SNMP فعالی برای کشف اتصال انتخاب نشده است.")
+        peer = [int(i) for i in (peer_tids or []) if str(i).isdigit() and snmp_ok(int(i)) and int(i) not in scope][:300]
+        edge = max(1, min(64, int(edge_max or 4)))
+        cache = self._disc_cache()
+        snmp, demo = self._mon.snmp, self._demo
+        devs = {tid: {"host": t.get("host") or "", "name": t.get("name") or ""} for tid, t in vis.items()}
+        names = ", ".join(vis[t]["name"] for t in scope[:5]) + (" …" if len(scope) > 5 else "")
+        self._store.add_history("monitor", names, "ok", f"کشف اتصال‌ها از ARP/MAC برای {len(scope)} دستگاه")
+
+        def job(j):
+            discs = {tid: x["data"] for tid, x in cache.items() if tid in vis}
+            todo = [t for t in scope if refresh or t not in discs or discs[t].get("fdb") is None]
+            ptodo = [t for t in peer if peers and t not in discs]
+            j["progress"] = [0, len(todo) + len(ptodo)]
+            allp = scope + peer
+
+            def save(tid, d):
+                old = cache.get(tid)
+                self._disc_save(old["id"] if old else None, tid, d)
+
+            for tid in todo:
+                if j["cancel"].is_set():
+                    break
+                t = vis[tid]
+                try:
+                    d = mapdisc.demo_scan(t, [p for p in allp if p != tid], allp.index(tid)) if demo else mapdisc.scan(snmp.client, snmp.cred_for(t), t)
+                    discs[tid] = d
+                    save(tid, d)
+                    j["lines"].append(f"{t['name']}: {len(d['fdb'])} MAC، {len(d['arp'])} ARP" + (f" — {'؛ '.join(d['errors'][:2])}" if d["errors"] else ""))
+                except Exception as e:  # noqa
+                    j["lines"].append(f"{t['name']}: {str(e)[:200]}")
+                j["progress"][0] += 1
+            for tid in ptodo:
+                if j["cancel"].is_set():
+                    break
+                t = vis[tid]
+                try:
+                    own = ([f"00:1a:00:00:{tid // 256 % 256:02x}:{tid % 256:02x}"] if demo else
+                           mapdisc.own_macs(snmp.client, snmp.cred_for(t), t["host"], int(t.get("port") or 161), float(t.get("timeout") or 3)))
+                    d = {"t": time.time(), "own": own, "fdb": None, "arp": [], "errors": []}
+                    discs[tid] = d
+                    save(tid, d)
+                    j["lines"].append(f"{t['name']}: {len(own)} MAC اینترفیس")
+                except Exception as e:  # noqa
+                    j["lines"].append(f"{t['name']}: {str(e)[:200]}")
+                j["progress"][0] += 1
+            res = mapdisc.analyze(scope, discs, devs, edge)
+            res["scope"] = scope
+            res["ages"] = {str(t): discs[t].get("t") for t in scope if t in discs}
+            return res
+        return self._net(self._disc_jobs().start, self._uname(), "mapdisc", names, job)
+
+    @_safe
+    def mon_map_disc_job(self, jid, since=0):
+        from .nettools import Jobs
+        j = self._net(self._disc_jobs().get, jid, self._uname())
+        return Jobs.public(j, int(since or 0))
+
+    @_safe
+    def mon_map_disc_cancel(self, jid):
+        return self._net(self._disc_jobs().cancel, jid, self._uname())
 
     @_safe
     def mon_capacity(self):

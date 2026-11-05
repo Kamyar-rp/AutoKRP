@@ -143,6 +143,8 @@ DEFAULTS = {
               "min_score": 50, "refresh_minutes": 60, "max_age_hours": 24, "verify_ssl": True, "timeout": 120,
               # لیست داخلی: آپلود در تنظیمات (رمزشده) یا مسیر فایلی که هر اجرا خوانده می‌شود (فقط کلاینت؛ اولویت با مسیر)
               "local_enabled": False, "local_path": "",
+              # 1.44: فهرست‌های عمومی دانلودی (FireHOL Level 1، IPsum با حداقل تعداد فهرست)
+              "lists": {"firehol_l1": False, "ipsum": False, "afta": False}, "ipsum_min": 3,
               # بلاک مخرب‌های این ابزار در FortiGate بدون تأیید (فقط در کار زمان‌بندی‌شده با «بلاک بدون تأیید»)
               "auto_ban": False},
     # انتقال فایل: سقف حجم هر فایل به مگابایت (۰ = بدون محدودیت)

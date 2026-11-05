@@ -2,6 +2,7 @@
 
 بدون psutil (در exe نیست): لینوکس از /proc، ویندوز با GetProcessMemoryInfo (مثل memdiag)."""
 import logging
+import collections
 import os
 import shutil
 import threading
@@ -11,7 +12,9 @@ from . import paths
 
 log = logging.getLogger(__name__)
 DEFAULTS = {"enabled": True, "disk_min_gb": 10, "disk_min_pct": 10, "ram_max_mb": 2048, "cpu_max_pct": 90}
-SIZE_EVERY = 1800           # حجم پوشه‌ها (پیمایش فایل‌ها) حداکثر هر ۳۰ دقیقه
+SIZE_EVERY = 1800
+GROWTH_MIN_SPAN = 6 * 3600      # 1.43: رشد روزانه فقط با دست‌کم ۶ ساعت نمونه
+GROWTH_KEEP = 26 * 3600         # نمونه‌های ۲۴ ساعت اخیر (+ حاشیه)           # حجم پوشه‌ها (پیمایش فایل‌ها) حداکثر هر ۳۰ دقیقه
 CHECK_EVERY = 300
 REPEAT_AFTER = 86400        # هشدار تکراری برای همان مشکل حداکثر روزی یک بار
 
@@ -61,6 +64,20 @@ def _dir_size(p):
     return n
 
 
+
+def growth_per_day(hist):
+    """1.43: رشد روزانه از نمونه‌های حجم کل در بازه‌ی حداکثر ۲۴ ساعت.
+    قبلاً اختلاف دو نمونه‌ی ۳۰ دقیقه‌ای ×۴۸ می‌شد؛ یک فایل موقت (zip بکاپ، خروجی، ذخیره‌ی پایگاه داده) همان لحظه
+    رشد چندصد مگابایتی در روز نشان می‌داد. حالا میانه‌ی سه نمونه‌ی اول و آخر و فقط وقتی بازه دست‌کم ۶ ساعت است."""
+    if len(hist) < 4 or hist[-1][0] - hist[0][0] < GROWTH_MIN_SPAN:
+        return None
+    first = sorted(v for _, v in hist[:3])[1]
+    last = sorted(v for _, v in hist[-3:])[1]
+    span = (hist[-2][0] + hist[-1][0] + hist[-3][0]) / 3 - (hist[0][0] + hist[1][0] + hist[2][0]) / 3
+    if span <= 0:
+        return None
+    return max(0, int((last - first) * 86400 / span))
+
 class Health:
     def __init__(self, settings, notify=None, emit=None, history=None):
         self.settings = settings
@@ -70,6 +87,7 @@ class Health:
         self.started = time.time()
         self._cpu_prev = None
         self._sizes, self._sizes_at = {}, 0
+        self._hist = collections.deque()   # (زمان، حجم کل) برای برآورد رشد روزانه
         self._last = {}            # مشکل ← زمان آخرین هشدار
         self._lock = threading.Lock()
         self.last = None
@@ -95,12 +113,12 @@ class Health:
             s = {"monitor": _dir_size(d / "monitor"), "runs": _dir_size(paths.runs_dir()), "backups": _dir_size(d / "backups"),
                  "logs": _dir_size(paths.logs_dir()), "db": sum(f.stat().st_size for f in d.glob("state.*") if f.is_file())}
             s["total"] = _dir_size(d)
-            prev = self._sizes
-            if prev.get("total") and self._sizes_at:
-                s["growth_day"] = max(0, int((s["total"] - prev["total"]) * 86400 / max(60, time.time() - self._sizes_at)))
-            else:
-                s["growth_day"] = prev.get("growth_day")
-            self._sizes, self._sizes_at = s, time.time()
+            now = time.time()
+            self._hist.append((now, s["total"]))
+            while self._hist and now - self._hist[0][0] > GROWTH_KEEP:
+                self._hist.popleft()
+            s["growth_day"] = growth_per_day(list(self._hist))
+            self._sizes, self._sizes_at = s, now
         return dict(self._sizes)
 
     def view(self):

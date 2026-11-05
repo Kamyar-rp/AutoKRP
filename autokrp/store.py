@@ -949,6 +949,10 @@ class Store:
             if not self.db.in_transaction:
                 self.db.execute("BEGIN")
 
+    def unmark_processed(self, keys):
+        with self._lock:
+            self.db.executemany("DELETE FROM processed WHERE key=?", [(k,) for k in keys])
+
     def delete_ips(self, ips):
         with self._lock:
             self.db.executemany("DELETE FROM ips WHERE ip=?", [(i,) for i in ips])

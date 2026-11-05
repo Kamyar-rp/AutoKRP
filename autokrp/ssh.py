@@ -284,6 +284,14 @@ def run_linux(dev, creds, body, use_sudo, timeout, known_hosts, cancel, on_clien
         cli.close()
 
 
+def join_outputs(pairs):
+    """1.43: پشتیبان با چند دستور ← یک فایل. یک دستور = همان خروجی خام قبلی (مقایسه با نسخه‌های قبل به‌هم نمی‌ریزد)؛
+    چند دستور = خروجی هر دستور زیر یک سرتیتر ثابت به همان ترتیب."""
+    if len(pairs) == 1:
+        return pairs[0][1]
+    return "\n".join(f"##### {cmd}\n{(res or '').rstrip()}\n" for cmd, res in pairs)
+
+
 def run_netmiko(dev, creds, body, mode, save_config, timeout, known_hosts, cancel, on_client=None, raw=False, attempt=None,
                 last_out=None):
     from netmiko import ConnectHandler
@@ -321,15 +329,19 @@ def _netmiko_session(conn, dev, lines, mode, save_config, timeout, cancel, on_cl
                 raise SshError("متوقف شد")
             out.append(conn.send_config_set(lines, read_timeout=timeout))
         else:
+            raws = []
             for line in lines:
                 if cancel.is_set():
                     raise SshError("متوقف شد")
                 res = conn.send_command(line, read_timeout=timeout)
-                if raw:   # پشتیبان کانفیگ: فقط خروجی خام دستور
-                    return True, res, "ok"
+                if raw:   # پشتیبان کانفیگ: فقط خروجی خام دستورها
+                    raws.append((line, res))
+                    continue
                 if last_out is not None:      # 1.29: خروجی آخرین دستور برای CSV
                     last_out[:] = [res]
                 out.append(f"{conn.find_prompt()}{line}\n{res}")
+        if raw:
+            return True, join_outputs(raws), "ok"
         if save_config:
             out.append("[save] " + conn.save_config())
         text = "\n".join(out)

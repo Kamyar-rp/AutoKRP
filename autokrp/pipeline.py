@@ -1360,8 +1360,9 @@ class Pipeline:
         from . import intel
         cfg = dict(self.settings.get("intel") or {})
         use_feed, use_local = bool(cfg.get("feed_enabled", True)), bool(cfg.get("local_enabled"))
-        if not use_feed and not use_local:
-            raise ConnectorError("بررسی تکمیلی: هیچ منبعی (فید آنلاین یا لیست داخلی) روشن نیست (تنظیمات ← بررسی تکمیلی).")
+        use_lists = [k for k, on in (cfg.get("lists") or {}).items() if on and k in intel.LISTS]
+        if not use_feed and not use_local and not use_lists:
+            raise ConnectorError("بررسی تکمیلی: هیچ منبعی (فید آنلاین، فهرست‌های عمومی یا لیست داخلی) روشن نیست (تنظیمات ← بررسی تکمیلی).")
         ips, label = self._intel_input(run)
         st = self._st(run)
         nets, _ = fg.parse_ignore(self.settings.get("fortigate", "ignore_networks", default=[]))
@@ -1372,14 +1373,14 @@ class Pipeline:
             else:
                 targets.append(ip)
         self._log(run, f"بررسی تکمیلی: {len(targets)}\u200f IP از {label}" + (f" ({skipped} خصوصی/مستثنا رد شد)" if skipped else ""))
-        sm = {"total": len(targets), "skipped": skipped, "malicious": 0, "feed": 0, "local": 0, "clean": 0}
+        sm = {"total": len(targets), "skipped": skipped, "malicious": 0, "feed": 0, "local": 0, "lists": 0, "clean": 0}
         if not targets:
             st["message"] = "ورودی خالی بود؛ بررسی‌ای انجام نشد"
             self._log(run, "بررسی تکمیلی: " + st["message"], "warn")
             run.summary["intel"] = sm
             run.data["out_path"], run.data["out_ips"] = None, []
             return
-        feed_hits, local_hits, sources = {}, {}, []
+        feed_hits, local_hits, sources, list_hits = {}, {}, [], {}
         try:
             if use_feed:
                 st["message"] = "دریافت فید آنلاین"
@@ -1392,6 +1393,19 @@ class Pipeline:
                     self._log(run, f"بررسی تکمیلی: {note}")
                     feed_hits = intel.feed_lookup(targets, int(cfg.get("min_score") or 0))
                 sources.append("FFraud")
+            for lid in use_lists:             # 1.44: فهرست‌های عمومی
+                nm = intel.LISTS[lid]["name"]
+                st["message"] = f"دریافت {nm}"
+                if self.demo:
+                    hits = {ip: "Demo" for ip in targets if sum(int(x) for x in ip.split(".") if x.isdigit()) % 7 == 0}
+                    self._log(run, f"بررسی تکمیلی (Demo): {nm} نمایشی؛ چیزی دانلود نشد", "warn")
+                else:
+                    _m, note = intel.update_list(lid, cfg, run.cancel, logf=lambda m, lv="info": self._log(run, "بررسی تکمیلی: " + m, lv))
+                    self._log(run, f"بررسی تکمیلی: {note}")
+                    hits = intel.list_lookup(lid, targets, max(1, int(cfg.get("ipsum_min") or 3)) if lid == "ipsum" else 1)
+                for ip, why in hits.items():
+                    list_hits.setdefault(ip, []).append(f"{nm} ({why})" if why and why != ip else nm)
+                sources.append(nm)
             if use_local:
                 lips, lnets, ldesc, bad = intel.load_local(cfg)
                 if bad:
@@ -1422,6 +1436,11 @@ class Pipeline:
                     row = {"ip": ip, "result": "ABUSE", "source": "لیست داخلی", "score": "", "confirmations": "",
                            "category": "", "type": "", "detail": det}
                     sm["local"] += 1
+                elif list_hits.get(ip):
+                    names = list_hits[ip]
+                    row = {"ip": ip, "result": "ABUSE", "source": " + ".join(n.split(" (")[0] for n in names), "score": "", "confirmations": "",
+                           "category": "", "type": "", "detail": "؛ ".join(names)}
+                    sm["lists"] += 1
                 else:
                     row = {"ip": ip, "result": "CLEAN", "source": "", "score": "", "confirmations": "", "category": "", "type": "",
                            "detail": "در " + " و ".join(sources) + " نبود"}
@@ -1446,12 +1465,14 @@ class Pipeline:
             w = csv.DictWriter(fh, fieldnames=self.INTEL_COLS)
             w.writeheader()
             w.writerows(r for r in rows if r["result"] == "ABUSE")
-        run.data.setdefault("intel", {})[run.cur["key"]] = {"rows": sorted(rows, key=lambda r: r["result"] != "ABUSE")[:500],
-                                                           "total": len(rows), "sources": sources}
+        # 1.43: در نتیجه‌ی اجرا فقط مخرب‌ها (پاک‌ها فقط در شمارش و فایل گزارش کامل)
+        bad_rows = [r for r in rows if r["result"] == "ABUSE"]
+        run.data.setdefault("intel", {})[run.cur["key"]] = {"rows": bad_rows[:500], "total": len(bad_rows), "clean": len(rows) - len(bad_rows),
+                                                           "checked": len(rows), "sources": sources}
         # خروجی برای ابزار بعدی (FortiGate، SSH، ...): فقط مخرب‌ها
         run.data["out_path"], run.data["out_ips"] = str(mal_f), mal
         run.summary["intel"] = sm
-        st["message"] = f"{sm['malicious']} مخرب (فید {sm['feed']}، لیست داخلی {sm['local']})، {sm['clean']} پاک"
+        st["message"] = f"{sm['malicious']} مخرب (فید {sm['feed']}، فهرست‌های عمومی {sm['lists']}، لیست داخلی {sm['local']})، {sm['clean']} پاک"
         self._log(run, "بررسی تکمیلی: " + st["message"], "warn" if mal else "ok")
         if mal:
             self._log(run, "بررسی تکمیلی: مخرب‌ها — " + "، ".join(mal[:30]) + (" …" if len(mal) > 30 else ""), "warn")

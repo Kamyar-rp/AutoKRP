@@ -2,6 +2,47 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.45.0] — 2026-11-05
+
+### Added
+- Network map editor: **⇄ Discover connections (ARP/MAC)** — no LLDP/CDP needed.
+  - Select one SNMP device on the map to check only that device, or select nothing to check all SNMP devices on the map.
+  - Reads the same tables as the "IP/MAC location" tool (ARP, MAC table, port names) plus the device's own interface MACs. Read-only, only when you press the button; no periodic polling is added and all the work is done inside the app.
+  - Optionally reads just the interface MACs of the other devices on the map (one small column) so it can tell which device is behind each port.
+  - Finds links between monitored devices with the ports on both sides and a confidence level. A switch is not linked directly to a device that is reached through another monitored switch. When a port sees several known devices and the direct neighbour cannot be told, you can pick it yourself.
+  - Devices behind access ports become new map objects, named by IP (from ARP) or MAC vendor. Several devices on one port are shown behind an "unmanaged switch". Ports with many MACs (uplinks, virtual servers) are skipped; the limit is adjustable.
+  - Results are reviewed in a window before anything is added; new objects are placed in free space, and Undo removes them.
+  - Each device's result is saved (encrypted) and reused in other maps without reading the device again, unless you choose "Read again". It is removed when the monitoring target is deleted.
+
+## [1.44.1] — 2026-11-05
+
+### Changed
+- Extra check, AFTA IOC list: accepted even when it holds only a few IPs (one IP per line). The other lists still need at least 50 entries, so an error page is never taken as a list.
+
+## [1.44.0] — 2026-11-05
+
+### Added
+- Extra check: two free **public downloadable lists** as extra sources, each with its own switch and "Download now" (Settings → Extra check):
+  - **FireHOL Level 1** — DShield, Feodo Tracker (abuse.ch) and Spamhaus DROP combined; few false positives.
+  - **IPsum** — IPs that appear on several public blocklists; an IP counts as malicious from a minimum number of lists (default 3).
+  - **AFTA IOC** — the IOC IP list published by Iran's AFTA center (afta.gov.ir).
+  
+  The lists are plain text, read only as data: lines that are not a valid IP or CIDR are skipped, internal and reserved ranges are never counted as malicious, size is capped, and the saved copy is checked against a fingerprint. No IP from your network is sent out and there is no per-IP quota. A failed download falls back to the saved copy within the allowed age, otherwise the check stops instead of treating IPs as clean.
+
+## [1.43.0] — 2026-11-05
+
+### Added
+- Addresses: **Remove from list** (admin only) for the selected IPs. They are checked again from scratch (AbuseIPDB and extra check) the next time they arrive from Splunk or another input. Past statistics and history are kept; an existing FortiGate block is not removed.
+- Config backup: **several commands per device type** (one per line). All outputs are saved in one backup file, in order, each under a `##### command` heading. A single command is stored exactly as before, so comparisons with older versions are unaffected.
+- A faint handle in the middle of the side menu's edge collapses or expands the menu (same as the button next to the logo).
+
+### Changed
+- Extra check results in a run now list only malicious IPs; the number checked and the number clean are shown above (the full report is still in the exported files).
+- SNMPv3: the DES privacy option is now labelled "DES (DES-56, CBC)".
+
+### Fixed
+- Server health: "data growth per day" could show a huge value (for example 139 MB/day) because the difference between two samples 30 minutes apart was multiplied by 48, so a temporary file (backup zip, export, database save) looked like daily growth. It is now estimated from at least 6 hours (up to 24 hours) of samples, ignoring short spikes, and is shown only after 6 hours of running.
+
 ## [1.42.1] — 2026-11-02
 
 ### Fixed

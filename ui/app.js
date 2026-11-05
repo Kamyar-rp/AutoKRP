@@ -228,11 +228,13 @@ $("#nav").addEventListener("click", async (e) => {
 /* 1.42: منوی کناری جمع‌شونده (فقط نمادها) — برای جای بیشتر داشبوردها و نقشه‌ها؛ وضعیت در همین مرورگر می‌ماند */
 function sideMini(on, save = true) {
   document.body.classList.toggle("side-mini", on);
-  const t = $("#sideTog"); if (t) { const s = I18N.t(on ? "باز کردن منو" : "جمع کردن منو"); t.title = s; t.setAttribute("aria-label", s); }
+  const s0 = I18N.t(on ? "باز کردن منو" : "جمع کردن منو");
+  ["#sideTog", "#sideEdge"].forEach((id) => { const t = $(id); if (t) { t.title = s0; t.setAttribute("aria-label", s0); } });
   if (save) { try { localStorage.setItem("akrp.side.mini", on ? "1" : "0"); } catch (_) { /* */ } }
   setTimeout(() => window.dispatchEvent(new Event("resize")), 220);
 }
 $("#sideTog").addEventListener("click", () => sideMini(!document.body.classList.contains("side-mini")));
+$("#sideEdge").addEventListener("click", () => sideMini(!document.body.classList.contains("side-mini")));   // 1.43: دستگیره‌ی وسط لبه‌ی منو
 $("#nav").addEventListener("mouseover", (e) => {        // منوی جمع: نام هر بخش به‌صورت راهنما
   const b = e.target.closest("button[data-page]"); if (!b) return;
   b.title = document.body.classList.contains("side-mini") ? [...b.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim() : "";
@@ -1222,10 +1224,11 @@ function renderResults(run) {
   }
   else if (S.resultTab.startsWith("intel:")) {
     const d = intL[S.resultTab.slice(6)];
-    body.innerHTML = !d ? `<div class="empty">نتیجه‌ای نیست.</div>` : (d.total > d.rows.length ? `<p class="hint">${num(d.rows.length)} ردیف اول از ${num(d.total)} (مخرب‌ها اول)؛ همه در «خروجی فایل‌ها».</p>` : "")
+    body.innerHTML = !d ? `<div class="empty">نتیجه‌ای نیست.</div>` : (d.clean !== undefined ? `<p class="hint">${esc(I18N.t("فقط IPهای مخرب نمایش داده می‌شوند"))} · <span>${num(d.checked)}</span> ${esc(I18N.t("بررسی شد"))} · <span>${num(d.clean)}</span> ${esc(I18N.t("پاک"))} (${esc(I18N.t("گزارش کامل در «خروجی فایل‌ها»"))})</p>` : "")
+      + (d.total > d.rows.length ? `<p class="hint">${num(d.rows.length)} ردیف اول از ${num(d.total)} (مخرب‌ها اول)؛ همه در «خروجی فایل‌ها».</p>` : "")
       + (d.rows.length ? `<div class="table-wrap inner"><table class="grid"><thead><tr><th>IP</th><th>نتیجه</th><th>منبع</th><th>امتیاز</th><th>تأییدها</th><th>دسته</th><th>نوع</th><th>جزئیات</th></tr></thead><tbody>
       ${d.rows.map((r) => `<tr><td class="ltr"><span class="link ip" data-ipd="${esc(r.ip)}">${esc(r.ip)}</span></td><td>${r.result === "ABUSE" ? `<span class="tag err">مخرب</span>` : `<span class="tag ok">پاک</span>`}</td>
-        <td>${esc(r.source || "—")}</td><td class="num">${r.score === "" ? "—" : num(r.score)}</td><td class="num">${r.confirmations === "" ? "—" : num(r.confirmations)}</td><td class="ltr">${esc(r.category || "—")}</td><td class="ltr">${esc(r.type || "—")}</td><td class="wrap">${esc(String(r.source || "").startsWith("FFraud") ? (String(r.detail).split("؛ ")[1] || "") : r.detail || "")}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">موردی نیست.</div>`);
+        <td>${esc(r.source || "—")}</td><td class="num">${r.score === "" ? "—" : num(r.score)}</td><td class="num">${r.confirmations === "" ? "—" : num(r.confirmations)}</td><td class="ltr">${esc(r.category || "—")}</td><td class="ltr">${esc(r.type || "—")}</td><td class="wrap">${esc(String(r.source || "").startsWith("FFraud") ? (String(r.detail).split("؛ ")[1] || "") : r.detail || "")}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">${d.clean !== undefined ? esc(I18N.t("هیچ IP مخربی پیدا نشد.")) : "موردی نیست."}</div>`);
   }
   else if (S.resultTab.startsWith("scan:")) {
     const d = scanL[S.resultTab.slice(5)];
@@ -1584,6 +1587,7 @@ $("#selBar").addEventListener("click", async (e) => {
   const cfg = {
     recheck: { title: "چک مجدد در AbuseIPDB", body: `<p>${ips.length}‏ IP دوباره بررسی می‌شوند (سهمیه مصرف می‌شود).</p>${list}`, confirm: "بررسی" },
     ban: { title: "بلاک در FortiGate", body: `<p>برای ${ips.length}‏ IP پیش‌نمایش ساخته می‌شود: رنج داخلی، Address و Banned بررسی می‌شوند و در صفحه‌ی «ابزارها» لیست نهایی را تأیید می‌کنید.</p>${list}`, confirm: "ساخت پیش‌نمایش" },
+    delete: { title: "حذف از فهرست آدرس‌ها", body: `<p>این ${ips.length}‏ IP از فهرست حذف می‌شوند و دفعه‌ی بعد که از Splunk یا ورودی دیگری بیایند، از نو در AbuseIPDB و بررسی تکمیلی بررسی می‌شوند. آمار و تاریخچه‌ی گذشته می‌ماند. بلاک موجود در FortiGate برداشته نمی‌شود.</p>${list}`, confirm: "حذف", danger: true },
     ignore: { title: "افزودن به رنج‌های مستثنا", body: `<p>این IPها به‌صورت /32 به فهرست مستثنای FortiGate اضافه می‌شوند و از این پس بررسی و بلاک نمی‌شوند.</p>${list}`, confirm: "افزودن" },
   }[act];
   if (!(await confirm2(cfg))) return;
@@ -2333,6 +2337,12 @@ function renderSettings() {
       ${inp("intel.max_age_hours", "استفاده از نسخه‌ی ذخیره‌شده هنگام خطای دانلود تا (ساعت)", { type: "num", hint: "قدیمی‌تر از این ← ابزار خطا می‌دهد و هیچ IPای پاک حساب نمی‌شود." })}
       ${inp("intel.timeout", "Timeout دانلود (ثانیه)", { type: "num" })}
       <div class="field"><span>&nbsp;</span>${sw("intel.verify_ssl", I.verify_ssl !== false, "بررسی گواهی SSL")}</div></div></div>
+    <div class="form"><h3>فهرست‌های عمومی دانلودی (رایگان)</h3>
+      <p class="hint">فقط متن ساده‌ی IP و رنج‌اند و فقط به‌عنوان داده خوانده می‌شوند (هیچ فایلی اجرا یا باز نمی‌شود)؛ هر خطی که IP یا CIDR معتبر نیست کنار گذاشته می‌شود، رنج‌های داخلی و رزرو هرگز مخرب حساب نمی‌شوند و فایل ذخیره‌شده با اثر انگشت بررسی می‌شود. هیچ IPی از شبکه‌ی شما بیرون فرستاده نمی‌شود و محدودیت تعداد بررسی ندارند. دانلود دوباره مثل فید بالا (حداکثر هر «دانلود دوباره» دقیقه).</p>
+      ${[["firehol_l1", "FireHOL Level 1", "مجموعه‌ی DShield، Feodo Tracker (abuse.ch) و Spamhaus DROP؛ کم‌خطا، مناسب بلاک"], ["ipsum", "IPsum", "IPهایی که در چند فهرست عمومی (بیش از ۳۰ منبع) آمده‌اند؛ هر روز به‌روز می‌شود"], ["afta", "AFTA IOC", "فهرست IP شاخص‌های نفوذ مرکز افتا (afta.gov.ir)"]].map(([k, nm, d]) => `
+        <div class="row" style="justify-content:space-between;margin-top:8px">${sw("intel.lists." + k, !!((I.lists || {})[k]), `<b>${nm}</b> <span class="muted">— ${esc(I18N.t(d))}</span>`)}<button class="btn sm no-ro" data-ilist="${k}">دریافت الان</button></div>
+        <div class="hint" id="intelL_${k}" style="margin:4px 0 0">…</div>`).join("")}
+      <div class="form-grid" style="margin-top:8px">${inp("intel.ipsum_min", "IPsum: حداقل تعداد فهرست‌ها", { type: "num", hint: "IPی مخرب حساب می‌شود که دست‌کم در این تعداد فهرست آمده باشد. پیشنهاد سازنده‌ی IPsum: ۳ (کمتر = خطای بیشتر)." })}</div></div>
     <div class="form"><h3>لیست داخلی</h3>
       <div class="row" style="justify-content:space-between">${sw("intel.local_enabled", !!I.local_enabled, "<b>استفاده از لیست داخلی</b>")}
         <span class="row" style="gap:8px"><button class="btn sm no-ro" id="btnIntelUp">بارگذاری فایل…</button><button class="btn sm danger-ghost no-ro" id="btnIntelClr">حذف</button></span></div>
@@ -2347,9 +2357,13 @@ function renderSettings() {
       const f = r.feed || {}, l = r.local || {};
       $("#intelFeedSt").innerHTML = f.fetched ? `نسخه‌ی ذخیره‌شده: <span class="ltr">${fmtDate(f.fetched)}</span> — ${num(f.rows)}‏ IP، ${num(Math.round((f.size || 0) / 1024))}KB${f.last_error ? `<br><span class="warn">آخرین خطا: ${esc(f.last_error)}</span>` : ""}`
         : (f.last_error ? `<span class="warn">${esc(f.last_error)}</span>` : "هنوز دانلود نشده است (اولین اجرای ابزار یا «دریافت الان»).");
+      Object.entries(r.lists || {}).forEach(([k, m]) => { const el = $("#intelL_" + k); if (!el) return;
+        el.innerHTML = m.fetched ? `${esc(I18N.t("نسخه‌ی ذخیره‌شده"))}: <span class="ltr">${fmtDate(m.fetched)}</span> — ${num(m.ips)}‏ IP، ${num(m.nets)} ${esc(I18N.t("رنج"))}${m.last_error ? `<br><span class="warn">${esc(I18N.t("آخرین خطا"))}: ${esc(m.last_error)}</span>` : ""}`
+          : (m.last_error ? `<span class="warn">${esc(m.last_error)}</span>` : esc(I18N.t("هنوز دانلود نشده است (اولین اجرای ابزار یا «دریافت الان»)."))); });
       $("#intelLocalSt").innerHTML = l.uploaded ? `فایل آپلودشده: <b class="ltr">${esc(l.name)}</b> — <span class="ltr">${fmtDate(l.uploaded)}</span> — ${num(l.ips)}‏ IP و ${num(l.nets)} رنج${l.invalid ? `، <span class="warn">${num(l.invalid)} خط نامعتبر</span>` : ""}` : "فایلی آپلود نشده است.";
     };
     showSt();
+    $$("[data-ilist]").forEach((x) => (x.onclick = (e) => withSpin(e.currentTarget, async () => { const r = await api("intel_list_update", x.dataset.ilist); toast(r.ok ? r.message : r.error, r.ok ? "ok" : "error"); showSt(); })));
     $("#btnIntelFeed").onclick = (e) => withSpin(e.currentTarget, async () => { const r = await api("intel_feed_update"); toast(r.ok ? r.message : r.error, r.ok ? "ok" : "error"); showSt(); });
     $("#btnIntelUp").onclick = (e) => withSpin(e.currentTarget, async () => {
       const p = await api("pick_csv"); if (!p.ok) return toast(p.error, "warn"); if (!p.path) return;
@@ -4260,8 +4274,8 @@ function backupSettingsForm(r) {
       <label class="field"><span>تعداد نسخه‌های نگه‌داشته‌شده برای هر دستگاه</span><input type="number" min="1" max="500" id="bsKeep" value="${esc(b.keep ?? 10)}"></label>
       <label class="field"><span>Timeout دریافت کانفیگ (ثانیه)</span><input type="number" min="30" max="3600" id="bsTo" value="${esc(b.timeout ?? 180)}"></label></div>
     <h3 style="margin:14px 0 8px">دستور پشتیبان هر نوع دستگاه</h3><div class="form-grid">
-      ${r.types.map(([t, nm]) => `<label class="field"><span>${esc(nm)}</span><input type="text" class="ltr bsCmd" data-t="${t}" value="${esc(cmds[t] || "")}" placeholder="${t === "linux" ? "مثلاً cat /etc/nginx/nginx.conf" : ""}"></label>`).join("")}</div>
-    <p class="hint">دستور خالی یعنی برای آن نوع پشتیبان گرفته نمی‌شود.</p>
+      ${r.types.map(([t, nm]) => `<label class="field"><span>${esc(nm)}</span><textarea class="ltr bsCmd code-edit" data-t="${t}" rows="${Math.min(6, Math.max(1, (cmds[t] || "").split("\n").length))}" placeholder="${t === "linux" ? "مثلاً cat /etc/nginx/nginx.conf" : ""}">${esc(cmds[t] || "")}</textarea></label>`).join("")}</div>
+    <p class="hint">دستور خالی یعنی برای آن نوع پشتیبان گرفته نمی‌شود. هر خط یک دستور است؛ با چند خط، خروجی همه به همان ترتیب (هرکدام زیر سرتیتر «##### دستور») در یک فایل پشتیبان ذخیره می‌شود. برای لینوکس همه‌ی خط‌ها یک اسکریپت‌اند.</p>
     <div class="form-grid" style="margin-top:10px">
       <label class="field"><span>خطوط نادیده در مقایسه (regex، هر خط یک الگو)</span><textarea class="ltr code-edit" id="bsIgn" style="min-height:140px">${esc((b.ignore_lines || []).join("\n"))}</textarea></label>
       <label class="field"><span>مقدارهای ماسک‌شده در مقایسه (regex)</span><textarea class="ltr code-edit" id="bsMask" style="min-height:140px">${esc((b.mask || []).join("\n"))}</textarea>
@@ -4271,7 +4285,7 @@ function backupSettingsForm(r) {
 function wireBackupSettings() {
   const sv = $("#bsSave"); if (!sv) return;
   sv.onclick = (e) => withSpin(e.currentTarget, async () => {
-    const commands = {}; $$(".bsCmd").forEach((i) => (commands[i.dataset.t] = i.value.trim()));
+    const commands = {}; $$(".bsCmd").forEach((i) => (commands[i.dataset.t] = i.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean).join("\n")));
     const lines = (id) => $(id).value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
     const r = await api("save_settings", { backup: { keep: Number($("#bsKeep").value) || 10, timeout: Number($("#bsTo").value) || 180,
       commands, ignore_lines: lines("#bsIgn"), mask: lines("#bsMask") } });

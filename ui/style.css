@@ -1135,3 +1135,18 @@ html[dir=rtl] .db-bar .ltr.db-bn { text-align: right; }
 /* 1.42: بررسی زنده — انتخاب پورت برای نمودار */
 .sn-trow.clickable { cursor: pointer; border-radius: 6px; padding: 2px 4px; } .sn-trow.clickable:hover { background: var(--panel2); }
 .sn-trow.on { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+
+/* 1.43: دستگیره‌ی کم‌رنگ وسط لبه‌ی منوی کناری برای جمع/باز کردن */
+.app { position: relative; }
+.side-edge { position: absolute; top: 50%; inset-inline-start: 224px; transform: translateY(-50%); z-index: 20; width: 22px; height: 48px; padding: 0;
+  border: 1px solid var(--line2); border-radius: 11px; background: var(--side); color: var(--faint); cursor: pointer; opacity: .55;
+  display: grid; place-items: center; transition: opacity .15s, color .15s, inset-inline-start .18s ease; }
+.side-edge:hover, .side-edge:focus-visible { opacity: 1; color: var(--text); border-color: var(--line); }
+.side-edge svg { width: 16px; height: 16px; }
+.side-edge svg { transform: scaleX(-1); } .side-mini .side-edge svg { transform: none; }        /* RTL: باز «›»، جمع «‹» */
+html[dir=ltr] .side-edge svg { transform: none; } html[dir=ltr] .side-mini .side-edge svg { transform: scaleX(-1); }
+.side-mini .side-edge { inset-inline-start: 52px; }
+body.noc-on .side-edge, .db-wrap:fullscreen ~ .side-edge { display: none; }
+
+/* 1.45: کشف اتصال‌ها */
+.nd-log { max-height: 220px; overflow: auto; font-size: 12px; background: var(--bg); border: 1px solid var(--line2); border-radius: 8px; padding: 8px; margin: 8px 0 0; white-space: pre-wrap; }

@@ -115,7 +115,7 @@ IF_OPER = {1: "up", 2: "down", 3: "testing", 4: "unknown", 5: "dormant", 6: "not
 
 AUTH_PROTOS = [("none", "بدون احراز هویت (noAuth)"), ("MD5", "MD5"), ("SHA", "SHA-1"), ("SHA224", "SHA-224"),
                ("SHA256", "SHA-256"), ("SHA384", "SHA-384"), ("SHA512", "SHA-512")]
-PRIV_PROTOS = [("none", "بدون رمزنگاری (noPriv)"), ("DES", "DES"), ("3DES", "3DES"), ("AES128", "AES-128"),
+PRIV_PROTOS = [("none", "بدون رمزنگاری (noPriv)"), ("DES", "DES (DES-56, CBC)"), ("3DES", "3DES"), ("AES128", "AES-128"),
                ("AES192", "AES-192 (استاندارد)"), ("AES256", "AES-256 (استاندارد)"),
                ("AES192C", "AES-192 (Cisco)"), ("AES256C", "AES-256 (Cisco)")]
 _OID_RE = re.compile(r"^\.?1(\.(0|[1-9]\d{0,9})){1,127}$")

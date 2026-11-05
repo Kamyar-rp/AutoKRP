@@ -163,6 +163,7 @@ function nmShell() {
     ${E ? `<div class="toolbar nm-etop"><b class="bidi">${esc("ویرایش نقشه: ")}${esc(NM.cur.name)}</b><span style="flex:1"></span>
         <button class="btn sm" id="nmUndo" title="برگرداندن (Ctrl+Z)">↶</button><button class="btn sm" id="nmRedo" title="انجام دوباره (Ctrl+Y)">↷</button>
         <button class="btn sm" id="nmAuto" title="چیدن خودکار دستگاه‌ها بر اساس لینک‌ها">چیدمان خودکار</button>
+        <button class="btn sm" id="nmDisc" title="از جدول ARP و MAC دستگاه انتخاب‌شده (یا همه‌ی دستگاه‌های SNMP نقشه) اتصال‌ها و دستگاه‌های پشت پورت‌ها پیدا می‌شود؛ فقط با همین دکمه خوانده می‌شود">⇄ کشف اتصال‌ها (ARP/MAC)</button>
         <button class="btn sm" id="nmLldp" title="اگر اسکن LLDP/CDP انجام شده باشد، لینک بین دستگاه‌های همین نقشه پیشنهاد می‌شود (اختیاری)">پیشنهاد لینک از LLDP</button>
         <button class="btn sm" id="nmSet">تنظیمات نقشه</button><button class="btn sm ghost" id="nmCancel">انصراف</button><button class="btn sm primary" id="nmSave">ذخیره</button></div>
       <div class="toolbar nm-tools"><div class="seg" id="nmTool">${[["sel", "⬚ انتخاب و جابه‌جایی"], ["link", "⟋ کشیدن لینک"], ["area", "▭ ناحیه"], ["text", "T متن"]]
@@ -209,7 +210,7 @@ function nmBindShell() {
   if ($("#nmRot", el)) $("#nmRot", el).onchange = (e) => nmFullOn(Number(e.target.value));
   $$("[data-z]", el).forEach((b) => (b.onclick = () => nmZoom(b.dataset.z)));
   if (NM.edit) {
-    on("#nmUndo", nmUndo); on("#nmRedo", nmRedo); on("#nmAuto", nmAutoLayout); on("#nmLldp", nmLldp); on("#nmSet", nmSettings);
+    on("#nmUndo", nmUndo); on("#nmRedo", nmRedo); on("#nmAuto", nmAutoLayout); on("#nmLldp", nmLldp); on("#nmDisc", nmDisc); on("#nmSet", nmSettings);
     on("#nmSave", nmSave);
     on("#nmCancel", async () => { if (await nmCanLeave()) { NM.edit = false; nmOpen(NM.cur.id); } });
     $$("#nmTool [data-tool]", el).forEach((b) => (b.onclick = () => nmSetTool(b.dataset.tool)));
@@ -886,4 +887,155 @@ async function nmLldp() {
   nmPush();
   v.forEach((i) => { const x = sug[i]; D.links.push({ id: nmUid("l"), a: x.na.id, b: x.nb.id, pa: x.pa.slice(0, 80), pb: x.pb.slice(0, 80), kind: "cable" }); });
   nmDraw(); toast(`${num(v.length)} لینک اضافه شد`, "ok");
+}
+
+/* ---------------------------------------------------------------- 1.45: کشف اتصال‌ها از ARP/MAC
+ * دستگاه انتخاب‌شده (یا همه‌ی دستگاه‌های SNMP نقشه) فقط با این دکمه خوانده می‌شود؛ نتیجه‌ی هر دستگاه ذخیره می‌شود و در نقشه‌های دیگر
+ * بدون خواندن دوباره قابل استفاده است. پیشنهادها اول در یک پنجره بررسی و تیک زده می‌شوند؛ با «برگرداندن» هم قابل حذف‌اند. */
+const NM_CONF = { high: ["ok", "زیاد"], medium: ["warn", "متوسط"], low: ["mute", "کم"] };
+async function nmDisc() {
+  const D = NM.cur.data;
+  const snmpOf = (n) => n && n.t === "dev" && (NM.devs.get(n.tid) || {}).kind === "snmp";
+  const sel = D.nodes.find((n) => n.id === NM.sel);
+  const all = D.nodes.filter(snmpOf).map((n) => n.tid);
+  if (sel && sel.t === "dev" && !snmpOf(sel)) return toast("کشف اتصال فقط برای دستگاه SNMP است؛ دستگاه SNMP را انتخاب کنید یا هیچ چیزی انتخاب نکنید (همه‌ی نقشه).", "warn");
+  const scope = snmpOf(sel) ? [sel.tid] : all;
+  if (!scope.length) return toast("هیچ دستگاه SNMP روی این نقشه نیست.", "warn");
+  const peers = all.filter((t) => !scope.includes(t));
+  const inf = await api("mon_map_disc_info", scope.concat(peers)); if (!inf.ok) return toast(inf.error, "error");
+  const I = inf.info || {}, nm = (t) => (NM.devs.get(t) || {}).name || "#" + t;
+  const v = await openModal({ title: "کشف اتصال‌ها از جدول ARP و MAC",
+    body: `<p class="hint"><span>${esc(scope.length === 1 && snmpOf(sel) ? "فقط دستگاه انتخاب‌شده بررسی می‌شود." : "همه‌ی دستگاه‌های SNMP این نقشه بررسی می‌شوند (برای یک دستگاه، اول همان را روی نقشه انتخاب کنید).")}</span>
+        <span>${esc("همان خواندنی که ابزار «محل IP/MAC» انجام می‌دهد: فقط خواندن، فقط همین یک بار؛ هیچ خواندن دوره‌ای اضافه نمی‌شود. LLDP/CDP لازم نیست.")}</span></p>
+      <div class="nm-sug">${scope.map((t) => `<div class="row" style="justify-content:space-between"><span>${nmN(nm(t))}</span><span class="muted">${I[t] && I[t].full ? `${esc(I18N.t("آخرین بررسی"))}: <span class="ltr">${fmtDate(I[t].t)}</span> · ${num(I[t].macs)} MAC` : esc(I18N.t("هنوز بررسی نشده"))}</span></div>`).join("")}</div>
+      <label class="chk"><input type="checkbox" id="ndRef" ${scope.some((t) => !(I[t] && I[t].full)) ? "" : ""}>${esc("خواندن دوباره (وگرنه برای دستگاهی که قبلاً بررسی شده، نتیجه‌ی ذخیره‌شده استفاده می‌شود)")}</label>
+      ${peers.length ? `<label class="chk"><input type="checkbox" id="ndPeer" checked>${esc(`MAC اینترفیس‌های ${peers.length} دستگاه دیگر این نقشه هم خوانده شود (فقط آن‌هایی که هنوز بررسی نشده‌اند؛ یک ستون کوچک) — برای تشخیص اینکه پشت هر پورت کدام دستگاه است لازم است`)}</label>` : ""}
+      <label class="field" style="max-width:300px"><span>${esc("پورتی با حداکثر این تعداد MAC = دستگاه‌های پشت همان پورت")}</span><input type="number" id="ndEdge" min="1" max="64" value="4" class="ltr"></label>`,
+    foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">شروع</button>`,
+    onOpen: (m, close) => $$("[data-r]", m).forEach((b) => (b.onclick = () => close(b.dataset.r === "1" ? { refresh: $("#ndRef", m).checked, peers: !!($("#ndPeer", m) || {}).checked, edge: Number($("#ndEdge", m).value) || 4 } : null))) });
+  if (!v) return;
+  const st = await api("mon_map_disc_start", scope, v.refresh, v.peers, v.edge, peers); if (!st.ok) return toast(st.error, "error");
+  const res = await nmDiscWait(st.id); if (!res) return;
+  nmDiscReview(res, v.edge);
+}
+async function nmDiscWait(jid) {
+  let done = null, since = 0, lines = [];
+  const p = openModal({ title: "کشف اتصال‌ها", body: `<div class="hint" id="ndProg">…</div><pre class="ltr nd-log" id="ndLog"></pre>`,
+    foot: `<button class="btn ghost" data-r="0">لغو</button>`,
+    onOpen: (m, close) => { $("[data-r]", m).onclick = async () => { await api("mon_map_disc_cancel", jid); close(null); }; } });
+  for (let i = 0; i < 1800 && !done; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    if (!$("#ndProg")) return null;          // پنجره بسته شد (لغو)
+    const r = await api("mon_map_disc_job", jid, since); if (!r.ok) { toast(r.error, "error"); break; }
+    lines = lines.concat(r.lines); since = r.next;
+    $("#ndProg").textContent = `${num(r.progress[0])} / ${num(r.progress[1])}`;
+    $("#ndLog").textContent = lines.slice(-12).join("\n");
+    if (r.status !== "running") { done = r; break; }
+  }
+  if (modalClose) modalClose(null);
+  await p;
+  if (!done) return null;
+  if (done.status === "error") { toast(done.error, "error"); return null; }
+  if (done.status === "cancelled") { toast("لغو شد", "warn"); return null; }
+  return done.result;
+}
+async function nmDiscReview(res, edge) {
+  const D = NM.cur.data;
+  const byT = new Map(D.nodes.filter((n) => n.t === "dev").map((n) => [n.tid, n]));
+  const nm = (t) => (NM.devs.get(t) || {}).name || "#" + t;
+  const pair = new Set(D.links.map((l) => [l.a, l.b].sort().join("|")));
+  const L = res.links.map((l, i) => {
+    const na = byT.get(l.a), nb = l.b != null ? byT.get(l.b) : null;
+    const dup = na && nb && pair.has([na.id, nb.id].sort().join("|"));
+    return { ...l, i, dup, onMap: !!nb };
+  });
+  const E = res.endpoints, nEp = E.reduce((s, e) => s + e.items.length, 0), nHub = E.filter((e) => e.items.length > 1).length;
+  if (!L.length && !E.length) return toast(`اتصالی پیدا نشد${res.crowded.length ? ` (${num(res.crowded.length)} پورت پرتعداد کنار گذاشته شد)` : ""}.`, "info");
+  const row = (l) => {
+    const cf = NM_CONF[l.conf] || NM_CONF.low;
+    const other = l.b != null ? `${nmN(nm(l.b))}${l.onMap ? "" : ` <span class="tag info">${esc(I18N.t("به نقشه اضافه می‌شود"))}</span>`}`
+      : `<select data-cand="${l.i}" style="width:auto"><option value="">${esc(I18N.t("یکی را انتخاب کنید…"))}</option>${l.cand.map((t) => `<option value="${t}">${esc(nm(t))}</option>`).join("")}</select>`;
+    return `<tr><td><input type="checkbox" data-lk="${l.i}" ${l.conf !== "low" && !l.dup ? "checked" : ""} ${l.dup ? "disabled" : ""}></td>
+      <td>${nmN(nm(l.a))} <span class="ltr muted">${esc(l.pa)}</span> ⇄ ${other} <span class="ltr muted">${esc(l.pb || "")}</span>${l.dup ? ` <span class="muted">${esc(I18N.t("(از قبل روی نقشه هست)"))}</span>` : ""}</td>
+      <td><span class="tag ${cf[0]}">${esc(I18N.t(cf[1]))}</span></td></tr>`;
+  };
+  const v = await openModal({ title: "نتیجه‌ی کشف اتصال‌ها", wide: true,
+    body: `${L.length ? `<div class="table-wrap inner" style="max-height:340px"><table class="grid"><thead><tr><th class="nosort"></th><th class="nosort">${esc(I18N.t("اتصال پیدا‌شده و پورت‌ها"))}</th><th class="nosort">${esc(I18N.t("اطمینان"))}</th></tr></thead><tbody>${L.map(row).join("")}</tbody></table></div>
+        <p class="hint">${esc("«کم» = پورت چند دستگاه شناخته‌شده را می‌بیند و همسایه‌ی مستقیم معلوم نیست؛ اگر آن دستگاه‌ها را هم بررسی کنید، دقیق می‌شود. می‌توانید خودتان یکی را انتخاب کنید.")}</p>` : ""}
+      ${E.length ? `<label class="chk"><input type="checkbox" id="ndEp" checked>${esc(`دستگاه‌های ناشناس پشت پورت‌های دسترسی هم اضافه شوند (${nEp} دستگاه: نام از IP یا سازنده‌ی MAC)`)}</label>
+        <label class="chk"><input type="checkbox" id="ndHub" checked>${esc(`چند دستگاه روی یک پورت ← «سوییچ مدیریت‌نشده» وسط (${nHub} مورد)`)}</label>` : ""}
+      ${res.crowded.length ? `<p class="hint">${esc(`${res.crowded.length} پورت بیش از ${edge} MAC داشت (uplink یا سرور مجازی) و دستگاه‌هایش اضافه نمی‌شوند.`)}</p>` : ""}
+      <p class="hint">${esc("موارد تازه روی نقشه اضافه می‌شوند؛ با «ذخیره» ثابت و با «↶ برگرداندن» حذف می‌شوند.")}</p>`,
+    foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">افزودن به نقشه</button>`,
+    onOpen: (m, close) => {
+      $$("[data-cand]", m).forEach((s) => (s.onchange = () => { const c = $(`[data-lk="${s.dataset.cand}"]`, m); c.checked = !!s.value; }));
+      $$("[data-r]", m).forEach((b) => (b.onclick = () => close(b.dataset.r === "1" ? {
+        links: $$("[data-lk]", m).filter((c) => c.checked).map((c) => { const i = Number(c.dataset.lk), s = $(`[data-cand="${i}"]`, m); return { i, b: s ? Number(s.value) || null : null }; }),
+        ep: !!($("#ndEp", m) || {}).checked, hub: !!($("#ndHub", m) || {}).checked } : null)));
+    } });
+  if (!v) return;
+  nmDiscApply(res, L, v);
+}
+function nmDiscApply(res, L, v) {
+  const D = NM.cur.data;
+  const byT = new Map(D.nodes.filter((n) => n.t === "dev").map((n) => [n.tid, n]));
+  let add = 0, nl = 0;
+  const room = () => D.nodes.length < 500;
+  nmPush();
+  const devNode = (tid, near, k) => {
+    let n = byT.get(tid);
+    if (n) return n;
+    if (!room()) return null;
+    const p = spot(near.x, near.y, Math.PI / 2);
+    n = { id: nmUid("n"), t: "dev", tid, label: "", icon: "", size: "m", x: p.x, y: p.y };
+    D.nodes.push(n); byT.set(tid, n); add++;
+    return n;
+  };
+  /* جای خالی نزدیک یک نقطه (مارپیچ؛ فاصله‌ی دست‌کم ۹۰ از هر شیء دیگر) تا چیزی روی دستگاه‌های موجود نیفتد */
+  const spot = (x0, y0, prefer = 0) => {
+    const busy = D.nodes.filter((n) => n.t !== "area" && n.t !== "text");
+    const free = (x, y) => x > 30 && y > 30 && x < D.w - 30 && y < D.h - 30 && busy.every((n) => Math.hypot(n.x - x, n.y - y) >= 90);
+    for (let r = 120; r <= 1200; r += 60) {
+      const steps = Math.max(8, Math.round(r / 30));
+      for (let k = 0; k < steps; k++) {
+        const ang = prefer + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * (2 * Math.PI / steps);
+        const x = nmSnap(x0 + r * Math.cos(ang)), y = nmSnap(y0 + r * Math.sin(ang));
+        if (free(x, y)) return { x, y };
+      }
+    }
+    if (D.h < 6000) { D.h = Math.min(6000, D.h + 300); return spot(x0, y0, prefer); }      // جا نبود ← صفحه‌ی نقشه بزرگ‌تر
+    return { x: nmSnap(Math.min(D.w - 40, x0 + 100)), y: nmSnap(Math.min(D.h - 40, y0 + 100)) };
+  };
+  const pair = new Set(D.links.map((l) => [l.a, l.b].sort().join("|")));
+  const link = (a, b, pa, pb, kind = "cable") => {
+    const k = [a.id, b.id].sort().join("|"); if (pair.has(k)) return; pair.add(k);
+    D.links.push({ id: nmUid("l"), a: a.id, b: b.id, pa: String(pa || "").slice(0, 80), pb: String(pb || "").slice(0, 80), kind }); nl++;
+  };
+  v.links.forEach((x, k) => {
+    const l = L[x.i], tb = l.b != null ? l.b : x.b; if (tb == null) return;
+    const a = byT.get(l.a); if (!a) return;
+    const b = devNode(tb, a, k); if (!b) return;
+    link(a, b, l.pa, l.b != null ? l.pb : "");
+  });
+  if (v.ep) {
+    const per = {}, have = new Set(D.nodes.filter((n) => n.t === "box").map((n) => n.host));   // اجرای دوباره: دستگاه تکراری اضافه نشود
+    res.endpoints.map((e) => ({ ...e, items: e.items.filter((it) => !have.has(it.ip || it.mac)) })).filter((e) => e.items.length).forEach((e) => {
+      const a = byT.get(e.a); if (!a) return;
+      const i0 = per[e.a] = (per[e.a] || 0);
+      const nameOf = (it) => it.ip || (it.vendor ? `${it.vendor} ${it.mac.slice(-5)}` : it.mac);
+      const leaf = (it, near) => { if (!room()) return null; const p = spot(near.x, near.y, Math.PI / 2); const n = { id: nmUid("n"), t: "box", label: nameOf(it).slice(0, 80), host: it.ip || it.mac, icon: "pc", size: "s", x: p.x, y: p.y }; D.nodes.push(n); add++; return n; };
+      if (e.items.length > 1 && v.hub) {
+        if (!room()) return;
+        const p = spot(a.x, a.y, Math.PI / 2 + i0 * 0.6);
+        const h = { id: nmUid("n"), t: "box", label: I18N.t("سوییچ مدیریت‌نشده"), host: `${e.items.length} ${I18N.t("دستگاه")}`, icon: "switch", size: "s", x: p.x, y: p.y };
+        D.nodes.push(h); add++; link(a, h, e.port, "");
+        e.items.forEach((it) => { const n = leaf(it, h); if (n) link(h, n, "", "", "none"); });
+      } else {
+        e.items.forEach((it) => { const n = leaf(it, a); if (n) link(a, n, e.port, ""); });
+      }
+      per[e.a]++;
+    });
+  }
+  nmAfterChange();
+  toast(`${num(nl)} لینک و ${num(add)} دستگاه اضافه شد${room() ? "" : " (سقف ۵۰۰ شیء)"}`, "ok");
 }

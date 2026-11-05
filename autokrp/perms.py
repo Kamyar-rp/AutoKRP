@@ -25,6 +25,7 @@ FEATURE_API = {
                 "mon_rows", "mon_tpl_list", "mon_tpl_save", "mon_tpl_delete", "mon_tpl_set", "mon_show_ports",
                 "mon_noc_list", "mon_noc_save", "mon_noc_delete",
                 "mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status", "mon_map_save", "mon_map_delete", "mon_map_ports", "mon_map_lldp",
+                "mon_map_disc_info", "mon_map_disc_start", "mon_map_disc_job", "mon_map_disc_cancel",
                 "dash_list", "dash_save", "dash_delete",
                 # 1.27.1: MIB سازنده‌ها ← نوع دستگاه خودکار
                 "mib_list", "mib_upload", "mib_delete", "mib_compile", "mib_types"},
@@ -105,6 +106,8 @@ OPERATOR_MON = {"mon_save", "mon_delete", "mon_toggle", "mon_icon_upload", "mon_
                 "mib_types",
                 # 1.37: بررسی زنده‌ی موقت (بار روی دستگاه؛ سطح «اجرا»ی مانیتورینگ)
                 "mon_live_start", "mon_live_get", "mon_live_stop", "mon_map_save", "mon_map_delete", "mon_map_ports", "mon_map_lldp",
+                # 1.45: کشف اتصال‌ها از ARP/MAC برای نقشه (خواندن SNMP فقط با دکمه)
+                "mon_map_disc_info", "mon_map_disc_start", "mon_map_disc_job", "mon_map_disc_cancel",
                 # 1.35: قالب نمایش و پورت‌های نمایشی هدف‌هایی که خودش اجازه‌ی ویرایش دارد
                 "mon_tpl_set", "mon_show_ports"}
 # اپراتوری که «ترمینال و انتقال فایل» دارد
@@ -120,7 +123,7 @@ OPERATOR_SSH = {"ssh_save_device", "ssh_delete_devices", "ssh_list", "cred_list"
 # متدهای SSH که با خاموش بودن ابزار SSH برای همه بسته‌اند
 SSH_RUN = {"ssh_start", "ssh_test", "ssh_preview", "backup_now", "fgu_start", "term_open", "xfer_open", "tftp_start"}
 # درخواست‌های دوره‌ای رابط؛ «فعالیت کاربر» حساب نمی‌شوند (قفل خودکار)
-POLL = {"net_job", "mon_state", "mon_map_status", "mon_rows", "mon_live_get", "mon_snmp_live", "asset_scan_status", "term_read", "term_stats", "xfer_jobs", "get_state", "get_run", "ssh_job", "fgu_job", "js_error", "ui_perf", "security_status", "ui_touch", "whoami"}
+POLL = {"net_job", "mon_map_disc_job", "mon_state", "mon_map_status", "mon_rows", "mon_live_get", "mon_snmp_live", "asset_scan_status", "term_read", "term_stats", "xfer_jobs", "get_state", "get_run", "ssh_job", "fgu_job", "js_error", "ui_perf", "security_status", "ui_touch", "whoami"}
 
 
 # ============================================================== 1.39: درخت بخش‌ها و زیرمجموعه‌ها
@@ -240,7 +243,8 @@ def _access_base(name):
 # 1.39: متد ← زیرمجموعه (سطح لازم همان سطح قبلی متد است، روی زیرمجموعه)
 SUB_API = {
     "monitor.events": {"mon_events_query", "mon_events_status", "mon_events_cfg_save"},
-    "monitor.maps": {"mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status", "mon_map_save", "mon_map_delete", "mon_map_ports", "mon_map_lldp"},
+    "monitor.maps": {"mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status", "mon_map_save", "mon_map_delete", "mon_map_ports", "mon_map_lldp",
+                     "mon_map_disc_info", "mon_map_disc_start", "mon_map_disc_job", "mon_map_disc_cancel"},
     "monitor.topo": {"mon_topo", "mon_topo_scan", "mon_topo_apply"},
     "monitor.noc": {"mon_noc", "mon_noc_list", "mon_noc_save", "mon_noc_delete"},
     "monitor.live": {"mon_live_start", "mon_live_get", "mon_live_stop"},

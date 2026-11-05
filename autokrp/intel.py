@@ -16,6 +16,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import time
 import types
 from pathlib import Path
@@ -339,3 +340,165 @@ def local_match(ip, ips, nets):
         if n.version == a.version and a in n:
             return str(n)
     return None
+
+
+# ------------------------------------------------------------------ 1.44: فهرست‌های عمومی دانلودی (رایگان)
+# هر دو فقط متن ساده‌اند (IP یا CIDR در هر خط) و فقط به‌عنوان داده خوانده می‌شوند: هیچ چیزی اجرا یا باز نمی‌شود، هر خطی که
+# IP یا CIDR معتبر نیست کنار گذاشته می‌شود، حجم سقف دارد و رنج‌های داخلی/رزرو (مثل 10/8، 100.64/10، 0/8) هرگز
+# «مخرب» حساب نمی‌شوند. اثر انگشت فایل در meta رمزشده است (مثل فید FFraud) تا فایل ذخیره‌شده دست‌کاری نشود.
+# قالب‌ها از فایل واقعی بررسی شد (۱۴۰۵/۰۸/۱۴): firehol_level1.netset = خطوط # + یک IP/CIDR در هر خط؛
+# ipsum.txt = خطوط # + «IP<tab>تعداد فهرست‌ها».
+LISTS = {
+    "firehol_l1": {"name": "FireHOL Level 1", "fmt": "net",
+                   "url": "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset"},
+    "ipsum": {"name": "IPsum", "fmt": "ipsum", "url": "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"},
+    # 1.44: فهرست IOC مرکز افتا (درخواست کاربر). قالب فایل از این محیط دیده نشد (دسترسی بسته بود)؛ با همان خواننده‌ی محتاط
+    # خوانده می‌شود: اولین بخش هر خط (جداشده با فاصله، , یا ;) اگر IP یا CIDR عمومی باشد. بدون هیچ IP ← خطا، نه «پاک».
+    # قالب (تأیید کاربر): هر خط یک IP. ممکن است کوتاه باشد، پس حداقل یک IP معتبر کافی است (صفحه‌ی خطای HTML هیچ IPی ندارد).
+    "afta": {"name": "AFTA IOC", "fmt": "net", "min": 1, "url": "https://afta.gov.ir/uploads/IP/AFTA_IOC_IPs.txt"},
+}
+MAX_LIST_BYTES = 50 * 1024 * 1024
+MIN_LIST_ENTRIES = 50          # کمتر از این ← احتمالاً صفحه‌ی خطا یا فایل ناقص؛ پذیرفته نمی‌شود
+
+
+def _global(net):
+    try:
+        return net.is_global and not net.is_multicast
+    except AttributeError:
+        return False
+
+
+def parse_feed_list(fmt, text, min_level=1):
+    """(ips: {ip: سطح}, nets: [شبکه]) — فقط IP/CIDR معتبر و عمومی. سطح = تعداد فهرست‌ها (IPsum) یا None."""
+    ips, nets = {}, []
+    for line in str(text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        cell, lvl = re.split(r"[\s,;|]+", line)[0].strip().strip('"\''), None
+        if fmt == "ipsum":
+            if len(parts) < 2 or not parts[1].isdigit():
+                continue
+            lvl = int(parts[1])
+            if lvl < min_level:
+                continue
+        try:
+            if "/" in cell:
+                n = ipaddress.ip_network(cell, strict=False)
+                if not _global(n):
+                    continue
+                if n.num_addresses == 1:
+                    ips[str(n.network_address)] = lvl
+                else:
+                    nets.append(n)
+            else:
+                a = ipaddress.ip_address(cell)
+                if _global(ipaddress.ip_network(a)):
+                    ips[str(a)] = lvl
+        except ValueError:
+            continue
+    return ips, nets
+
+
+def list_meta(lid):
+    return _read_json(f"list_{lid}_meta.dat")
+
+
+def _list_file(lid):
+    return _dir() / f"list_{lid}.txt"
+
+
+def update_list(lid, cfg, cancel=None, force=False, logf=None):
+    """نسخه‌ی تازه‌ی یک فهرست عمومی (در صورت نیاز). خروجی: (meta، پیام). خطا ← IntelError."""
+    logf = logf or (lambda m, lv="info": None)
+    spec = LISTS[lid]
+    url, name = spec["url"], spec["name"]
+    meta = list_meta(lid)
+    f = _list_file(lid)
+    have = f.exists() and meta.get("url") == url and hashlib.sha256(f.read_bytes()).hexdigest() == meta.get("sha256")
+    age = time.time() - float(meta.get("fetched") or 0) if have else None
+    refresh = max(30, int(cfg.get("refresh_minutes") or 60)) * 60
+    if have and not force and age is not None and age < refresh:
+        return meta, f"{name}: نسخه‌ی ذخیره‌شده ({_ago(age)} پیش)"
+    headers = {"User-Agent": USER_AGENT}
+    if have and meta.get("etag"):
+        headers["If-None-Match"] = meta["etag"]
+    holder = types.SimpleNamespace(live_resp=None)
+
+    def fetch():
+        with requests.Session() as s:
+            s.verify = bool(cfg.get("verify_ssl", True))
+            r = s.get(url, headers=headers, timeout=(15, max(10, int(cfg.get("timeout") or 120))), stream=True,
+                      allow_redirects=True, verify=s.verify)
+            holder.live_resp = r
+            if r.status_code == 304 and have:
+                return None, None
+            if r.status_code != 200:
+                raise IntelError(f"{name}: دانلود ناموفق (HTTP {r.status_code})")
+            buf, n = io.BytesIO(), 0
+            for chunk in r.iter_content(1024 * 1024):
+                if cancel is not None and cancel.is_set():
+                    raise InterruptedError()
+                n += len(chunk)
+                if n > MAX_LIST_BYTES:
+                    raise IntelError(f"{name}: حجم بیشتر از {MAX_LIST_BYTES // (1024 * 1024)}MB است.")
+                buf.write(chunk)
+            return buf.getvalue(), r.headers.get("ETag") or ""
+
+    def fail(e):
+        msg = str(e) if isinstance(e, IntelError) else f"{name}: دانلود ناموفق: {e.__class__.__name__}: {str(e)[:200]}"
+        meta["last_error"], meta["last_try"] = msg, time.time()
+        _write_json(f"list_{lid}_meta.dat", meta)
+        max_age = float(cfg.get("max_age_hours") or 24) * 3600
+        if have and age is not None and age <= max_age:
+            logf(f"{msg}؛ نسخه‌ی ذخیره‌شده‌ی {_ago(age)} پیش استفاده می‌شود", "warn")
+            return meta, f"{name}: نسخه‌ی ذخیره‌شده ({_ago(age)} پیش) به‌خاطر خطای دانلود"
+        raise IntelError(msg + ". برای جلوگیری از پاک حساب کردن اشتباه، بررسی انجام نشد.")
+    try:
+        if cancel is not None:
+            try:
+                data, etag = run_cancellable(cancel, fetch, holder, name="list")
+            except Cancelled:
+                raise InterruptedError()
+        else:
+            data, etag = fetch()
+    except InterruptedError:
+        raise
+    except (IntelError, requests.RequestException) as e:
+        return fail(e)
+    if data is None:
+        meta.update(fetched=time.time(), last_error="", last_try=time.time())
+        _write_json(f"list_{lid}_meta.dat", meta)
+        return meta, f"{name}: تغییری نکرده بود (304)"
+    text = data.decode("utf-8", "replace")
+    ips, nets = parse_feed_list(spec["fmt"], text, 1)
+    if len(ips) + len(nets) < spec.get("min", MIN_LIST_ENTRIES):
+        return fail(IntelError(f"{name}: فایل دریافتی فهرست معتبری نیست ({len(ips) + len(nets)} مورد)"))
+    tmp = f.with_suffix(".tmp")
+    tmp.write_bytes(data)
+    meta = {"url": url, "fetched": time.time(), "etag": etag, "size": len(data), "ips": len(ips), "nets": len(nets),
+            "last_try": time.time(), "last_error": "", "sha256": hashlib.sha256(data).hexdigest()}
+    _write_json(f"list_{lid}_meta.dat", meta)
+    os.replace(tmp, f)
+    return meta, f"{name}: دانلود شد ({len(data) // 1024:,}KB، {len(ips):,}\u200f IP و {len(nets):,} رنج)"
+
+
+def list_lookup(lid, targets, min_level=1):
+    """{ip: توضیح} برای IPهایی که در فهرست هستند. فایل ذخیره‌شده با اثر انگشت بررسی می‌شود."""
+    spec, f, meta = LISTS[lid], _list_file(lid), list_meta(lid)
+    if not f.exists():
+        raise IntelError(f"{spec['name']}: نسخه‌ای ذخیره نشده است.")
+    raw = f.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != meta.get("sha256"):
+        raise IntelError(f"{spec['name']}: فایل ذخیره‌شده با اثر انگشت ثبت‌شده جور نیست؛ دوباره دانلود کنید.")
+    ips, nets = parse_feed_list(spec["fmt"], raw.decode("utf-8", "replace"), min_level)
+    out = {}
+    for ip in targets:
+        if ip in ips:
+            out[ip] = f"در {ips[ip]} فهرست" if ips[ip] else ip
+            continue
+        m = local_match(ip, set(), nets)
+        if m:
+            out[ip] = f"رنج {m}"
+    return out
