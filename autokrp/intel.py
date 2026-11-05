@@ -401,6 +401,12 @@ def parse_feed_list(fmt, text, min_level=1):
     return ips, nets
 
 
+def list_url(lid, cfg):
+    """1.46.1: آدرس هر فهرست مثل فید FFraud قابل تغییر است (خالی = آدرس پیش‌فرض)."""
+    u = str(((cfg or {}).get("list_urls") or {}).get(lid) or "").strip()
+    return u or LISTS[lid]["url"]
+
+
 def list_meta(lid):
     return _read_json(f"list_{lid}_meta.dat")
 
@@ -413,7 +419,9 @@ def update_list(lid, cfg, cancel=None, force=False, logf=None):
     """نسخه‌ی تازه‌ی یک فهرست عمومی (در صورت نیاز). خروجی: (meta، پیام). خطا ← IntelError."""
     logf = logf or (lambda m, lv="info": None)
     spec = LISTS[lid]
-    url, name = spec["url"], spec["name"]
+    url, name = list_url(lid, cfg), spec["name"]
+    if not url.lower().startswith(("https://", "http://")):
+        raise IntelError(f"{name}: آدرس باید با https:// شروع شود.")
     meta = list_meta(lid)
     f = _list_file(lid)
     have = f.exists() and meta.get("url") == url and hashlib.sha256(f.read_bytes()).hexdigest() == meta.get("sha256")
@@ -484,10 +492,10 @@ def update_list(lid, cfg, cancel=None, force=False, logf=None):
     return meta, f"{name}: دانلود شد ({len(data) // 1024:,}KB، {len(ips):,}\u200f IP و {len(nets):,} رنج)"
 
 
-def list_lookup(lid, targets, min_level=1):
+def list_lookup(lid, targets, min_level=1, cfg=None):
     """{ip: توضیح} برای IPهایی که در فهرست هستند. فایل ذخیره‌شده با اثر انگشت بررسی می‌شود."""
     spec, f, meta = LISTS[lid], _list_file(lid), list_meta(lid)
-    if not f.exists():
+    if not f.exists() or (cfg is not None and meta.get("url") != list_url(lid, cfg)):
         raise IntelError(f"{spec['name']}: نسخه‌ای ذخیره نشده است.")
     raw = f.read_bytes()
     if hashlib.sha256(raw).hexdigest() != meta.get("sha256"):

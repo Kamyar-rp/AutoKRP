@@ -2,6 +2,40 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.46.1] — 2026-11-05
+
+### Changed
+- **Extra check sources look and work the same.** FFraud, FireHOL Level 1, IPsum, AFTA IOC and the local list are now identical cards: on/off switch, short description, action button, status line (saved copy, IP and range counts, last error) and a collapsible **Settings** part.
+  - Each online list's URL can now be changed (empty = default, https only), e.g. for an internal mirror. Changing the URL forces a fresh download before the list is used.
+  - Download settings shared by all online sources (refresh interval, stale-copy limit, timeout, SSL check) are in one section below the cards.
+
+### Fixed
+- Web mode: the sidebar showed an unneeded scrollbar at 100% browser zoom on some screen heights. Compact spacing now starts earlier, so the sidebar fits from 700 to 1040 px height without scrolling.
+
+## [1.46.0] — 2026-11-05
+
+### Added
+- **Tamper-evident audit log** (Settings → Audit log, main admin only).
+  - Every History event (sign-in, sign-out and failed sign-in with the client IP, changes to users, access and settings, tool runs, blocks, terminal, file transfer, …) is also written to an audit log.
+  - Records are chained with HMAC-SHA256 using a key derived from the app's data key. **Integrity check** reports any changed, deleted or reordered record, including records removed from the end (signed chain head).
+  - There is no way inside the app to edit or delete audit records (only a full RESET).
+  - Cost: about 160 bytes and under half a millisecond per event; checking 60,000 records takes about a second.
+- **Audit log forwarding to Syslog/SIEM**: RFC 5424 Syslog (structured data) or **CEF**, over **UDP, TCP or TLS** (certificate check optional), with selectable categories (sign-in, users/access/settings, security tools, device access, monitoring). Each message carries its chain signature.
+  - With TCP/TLS, records are queued while the destination is unreachable and sent when it is back.
+  - Optionally send earlier records when turning it on. A test message button is included.
+  - The destination can only be changed by the main admin and is not taken from imported settings files.
+
+### Note
+- The audit log starts when you upgrade; earlier History rows are not added to it.
+
+## [1.45.1] — 2026-11-05
+
+### Fixed
+- Network tools → MAC vendor: the IEEE update now sends normal browser headers and retries once (the IEEE server sometimes drops other clients). If the main list still cannot be downloaded, the message explains what to do. Only the main list (MA-L) is required; MA-M and MA-S are added when they download.
+
+### Added
+- **Import IEEE file…**: for networks where the IEEE site does not open, download `oui.csv` (and optionally `mam.csv`, `oui36.csv`) in a browser from standards-oui.ieee.org and import them; they are merged into the current table.
+
 ## [1.45.0] — 2026-11-05
 
 ### Added

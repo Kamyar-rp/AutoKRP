@@ -2158,6 +2158,7 @@ function renderSettings() {
   $$("#setTabs button").forEach((b) => b.classList.toggle("on", b.dataset.t === S.setTab));
   const body = $("#setBody"), D = S.draft, t = S.setTab;
   if (t === "security") { renderSecurityTab(body); return; }
+  if (t === "audit") { renderAuditTab(body); return; }
   if (t === "users") { renderUsersTab(body); return; }
   if (t === "database") { renderDatabaseTab(body); return; }
   if (t === "notify") {
@@ -2327,40 +2328,46 @@ function renderSettings() {
   } else if (t === "intel") {
     if (!D.intel) D.intel = {};
     const I = D.intel;
-    body.innerHTML = `<div class="form"><h3>فید آنلاین FFraud</h3>
-      <div class="row" style="justify-content:space-between">${sw("intel.feed_enabled", I.feed_enabled !== false, "<b>استفاده از فید آنلاین</b>")}<button class="btn sm no-ro" id="btnIntelFeed">دریافت الان</button></div>
-      <div id="intelFeedSt" class="hint" style="margin:8px 0">…</div>
-      <div class="form-grid">
-      ${inp("intel.feed_url", "آدرس فید (CSV با ستون ip)", { ltr: true, wide: true })}
-      ${inp("intel.min_score", "حداقل امتیاز ffraud_score", { type: "num", hint: "۰ تا ۱۰۰. خود فید فقط IPهای با امتیاز ۵۰ و بیشتر را دارد." })}
-      ${inp("intel.refresh_minutes", "دانلود دوباره حداکثر هر (دقیقه)", { type: "num", hint: "تا این مدت نسخه‌ی ذخیره‌شده استفاده می‌شود؛ بعد از آن فقط اگر فید تغییر کرده باشد دانلود می‌شود (ETag). فید هر ۳۰ دقیقه به‌روز می‌شود." })}
+    if (!I.lists) I.lists = {};
+    if (!I.list_urls) I.list_urls = {};
+    /* 1.46.1: همه‌ی منبع‌ها یک شکل: کلید روشن/خاموش، توضیح، دکمه، وضعیت و «تنظیمات» همان منبع؛ تنظیمات دانلود مشترک پایین */
+    const SRC = [
+      { k: "ffraud", name: "FFraud", on: "intel.feed_enabled", onv: I.feed_enabled !== false, d: "IPهای سوءاستفاده‌گر تأییدشده با امتیاز و دسته؛ هر ۳۰ دقیقه به‌روز می‌شود",
+        btn: `<button class="btn sm no-ro" id="btnIntelFeed">دریافت الان</button>`,
+        opts: `${inp("intel.feed_url", "آدرس (CSV با ستون ip)", { ltr: true, wide: true })}${inp("intel.min_score", "حداقل امتیاز ffraud_score", { type: "num", hint: "۰ تا ۱۰۰. خود فید فقط IPهای با امتیاز ۵۰ و بیشتر را دارد." })}` },
+      ...[["firehol_l1", "FireHOL Level 1", "مجموعه‌ی DShield، Feodo Tracker (abuse.ch) و Spamhaus DROP؛ کم‌خطا، مناسب بلاک"],
+        ["ipsum", "IPsum", "IPهایی که در چند فهرست عمومی (بیش از ۳۰ منبع) آمده‌اند؛ هر روز به‌روز می‌شود"],
+        ["afta", "AFTA IOC", "فهرست IP شاخص‌های نفوذ مرکز افتا (afta.gov.ir)"]].map(([k, nm, d]) => ({ k, name: nm, on: "intel.lists." + k, onv: !!I.lists[k], d,
+        btn: `<button class="btn sm no-ro" data-ilist="${k}">دریافت الان</button>`,
+        opts: `${inp("intel.list_urls." + k, "آدرس (خالی = پیش‌فرض)", { ltr: true, wide: true, ph: "", hint: "" })}${k === "ipsum" ? inp("intel.ipsum_min", "حداقل تعداد فهرست‌ها", { type: "num", hint: "IPی مخرب حساب می‌شود که دست‌کم در این تعداد فهرست آمده باشد. پیشنهاد سازنده‌ی IPsum: ۳ (کمتر = خطای بیشتر)." }) : ""}` })),
+      { k: "local", name: "لیست داخلی", on: "intel.local_enabled", onv: !!I.local_enabled, d: "فهرست IP یا رنج خودتان (مثل malicious.csv)",
+        btn: `<button class="btn sm no-ro" id="btnIntelUp">بارگذاری فایل…</button><button class="btn sm danger-ghost no-ro" id="btnIntelClr">حذف</button>`,
+        opts: `${WEB ? "" : inp("intel.local_path", "یا مسیر فایل (هر اجرا خوانده می‌شود)", { ltr: true, wide: true, ph: "C:\\lists\\malicious.csv", hint: "اگر پر باشد همین فایل در هر اجرا خوانده می‌شود و فایل آپلودشده استفاده نمی‌شود؛ وقتی فایل را به‌روز می‌کنید لازم نیست دوباره بارگذاری کنید. فایل در همان مسیر رمزنشده می‌ماند." })}
+          <p class="hint">قالب: هر خط یک IP یا رنج CIDR در ستون اول (مثل malicious.csv)؛ سرستون‌هایی مثل ip و src_ip و خطوط # نادیده گرفته می‌شوند. فایل آپلودشده رمزشده نگه داشته می‌شود؛ وقتی فایل شما به‌روز شد دوباره بارگذاری کنید.</p>` },
+    ];
+    body.innerHTML = `<div class="form"><h3>منبع‌های بررسی تکمیلی</h3>
+      <p class="hint">فهرست‌ها فقط متن ساده‌ی IP و رنج‌اند و فقط به‌عنوان داده خوانده می‌شوند (هیچ فایلی اجرا یا باز نمی‌شود)؛ هر خطی که IP یا CIDR معتبر نیست کنار گذاشته می‌شود، رنج‌های داخلی و رزرو هرگز مخرب حساب نمی‌شوند و فایل ذخیره‌شده با اثر انگشت بررسی می‌شود. هیچ IPی از شبکه‌ی شما بیرون فرستاده نمی‌شود و محدودیت تعداد بررسی ندارند.</p>
+      <div class="isrc-list">${SRC.map((x) => `<div class="isrc" data-isrc="${x.k}">
+        <div class="isrc-head">${sw(x.on, x.onv, `<b>${esc(x.name)}</b>`)}<span class="muted isrc-d">${esc(I18N.t(x.d))}</span><span class="isrc-b">${x.btn}</span></div>
+        <div class="hint isrc-st" id="intelSt_${x.k}">…</div>
+        <details class="isrc-opt"><summary>تنظیمات</summary><div class="form-grid">${x.opts}</div></details></div>`).join("")}</div></div>
+    <div class="form"><h3>دانلود منبع‌های آنلاین</h3><div class="form-grid">
+      ${inp("intel.refresh_minutes", "دانلود دوباره حداکثر هر (دقیقه)", { type: "num", hint: "تا این مدت نسخه‌ی ذخیره‌شده استفاده می‌شود؛ بعد از آن فقط اگر تغییر کرده باشد دانلود می‌شود (ETag)." })}
       ${inp("intel.max_age_hours", "استفاده از نسخه‌ی ذخیره‌شده هنگام خطای دانلود تا (ساعت)", { type: "num", hint: "قدیمی‌تر از این ← ابزار خطا می‌دهد و هیچ IPای پاک حساب نمی‌شود." })}
       ${inp("intel.timeout", "Timeout دانلود (ثانیه)", { type: "num" })}
       <div class="field"><span>&nbsp;</span>${sw("intel.verify_ssl", I.verify_ssl !== false, "بررسی گواهی SSL")}</div></div></div>
-    <div class="form"><h3>فهرست‌های عمومی دانلودی (رایگان)</h3>
-      <p class="hint">فقط متن ساده‌ی IP و رنج‌اند و فقط به‌عنوان داده خوانده می‌شوند (هیچ فایلی اجرا یا باز نمی‌شود)؛ هر خطی که IP یا CIDR معتبر نیست کنار گذاشته می‌شود، رنج‌های داخلی و رزرو هرگز مخرب حساب نمی‌شوند و فایل ذخیره‌شده با اثر انگشت بررسی می‌شود. هیچ IPی از شبکه‌ی شما بیرون فرستاده نمی‌شود و محدودیت تعداد بررسی ندارند. دانلود دوباره مثل فید بالا (حداکثر هر «دانلود دوباره» دقیقه).</p>
-      ${[["firehol_l1", "FireHOL Level 1", "مجموعه‌ی DShield، Feodo Tracker (abuse.ch) و Spamhaus DROP؛ کم‌خطا، مناسب بلاک"], ["ipsum", "IPsum", "IPهایی که در چند فهرست عمومی (بیش از ۳۰ منبع) آمده‌اند؛ هر روز به‌روز می‌شود"], ["afta", "AFTA IOC", "فهرست IP شاخص‌های نفوذ مرکز افتا (afta.gov.ir)"]].map(([k, nm, d]) => `
-        <div class="row" style="justify-content:space-between;margin-top:8px">${sw("intel.lists." + k, !!((I.lists || {})[k]), `<b>${nm}</b> <span class="muted">— ${esc(I18N.t(d))}</span>`)}<button class="btn sm no-ro" data-ilist="${k}">دریافت الان</button></div>
-        <div class="hint" id="intelL_${k}" style="margin:4px 0 0">…</div>`).join("")}
-      <div class="form-grid" style="margin-top:8px">${inp("intel.ipsum_min", "IPsum: حداقل تعداد فهرست‌ها", { type: "num", hint: "IPی مخرب حساب می‌شود که دست‌کم در این تعداد فهرست آمده باشد. پیشنهاد سازنده‌ی IPsum: ۳ (کمتر = خطای بیشتر)." })}</div></div>
-    <div class="form"><h3>لیست داخلی</h3>
-      <div class="row" style="justify-content:space-between">${sw("intel.local_enabled", !!I.local_enabled, "<b>استفاده از لیست داخلی</b>")}
-        <span class="row" style="gap:8px"><button class="btn sm no-ro" id="btnIntelUp">بارگذاری فایل…</button><button class="btn sm danger-ghost no-ro" id="btnIntelClr">حذف</button></span></div>
-      <div id="intelLocalSt" class="hint" style="margin:8px 0">…</div>
-      ${WEB ? "" : `<div class="form-grid">${inp("intel.local_path", "یا مسیر فایل (هر اجرا خوانده می‌شود)", { ltr: true, wide: true, ph: "C:\\lists\\malicious.csv", hint: "اگر پر باشد همین فایل در هر اجرا خوانده می‌شود و فایل آپلودشده استفاده نمی‌شود؛ وقتی فایل را به‌روز می‌کنید لازم نیست دوباره بارگذاری کنید. فایل در همان مسیر رمزنشده می‌ماند." })}</div>`}
-      <p class="hint">قالب: هر خط یک IP یا رنج CIDR در ستون اول (مثل malicious.csv)؛ سرستون‌هایی مثل ip و src_ip و خطوط # نادیده گرفته می‌شوند. فایل آپلودشده رمزشده نگه داشته می‌شود؛ وقتی فایل شما به‌روز شد دوباره بارگذاری کنید.</p></div>
     <div class="form"><h3>بلاک</h3>
       ${sw("intel.auto_ban", !!I.auto_ban, "بلاک مخرب‌های بررسی تکمیلی در FortiGate بدون تأیید")}
       <p class="hint">فقط در کار زمان‌بندی‌شده‌ای که «بلاک بدون تأیید» آن روشن است اثر دارد (با همان سقف بلاک). پیش‌فرض خاموش: پیش از بلاک، فهرست را می‌بینید و تأیید می‌کنید.</p></div>`;
+    const stLine = (m, what) => m.fetched ? `${esc(I18N.t("نسخه‌ی ذخیره‌شده"))}: <span class="ltr">${fmtDate(m.fetched)}</span> — ${what}${m.last_error ? `<br><span class="warn">${esc(I18N.t("آخرین خطا"))}: ${esc(m.last_error)}</span>` : ""}`
+      : (m.last_error ? `<span class="warn">${esc(m.last_error)}</span>` : esc(I18N.t("هنوز دانلود نشده است (اولین اجرای ابزار یا «دریافت الان»).")));
     const showSt = async () => {
       const r = await api("intel_status"); if (!r.ok) return;
-      const f = r.feed || {}, l = r.local || {};
-      $("#intelFeedSt").innerHTML = f.fetched ? `نسخه‌ی ذخیره‌شده: <span class="ltr">${fmtDate(f.fetched)}</span> — ${num(f.rows)}‏ IP، ${num(Math.round((f.size || 0) / 1024))}KB${f.last_error ? `<br><span class="warn">آخرین خطا: ${esc(f.last_error)}</span>` : ""}`
-        : (f.last_error ? `<span class="warn">${esc(f.last_error)}</span>` : "هنوز دانلود نشده است (اولین اجرای ابزار یا «دریافت الان»).");
-      Object.entries(r.lists || {}).forEach(([k, m]) => { const el = $("#intelL_" + k); if (!el) return;
-        el.innerHTML = m.fetched ? `${esc(I18N.t("نسخه‌ی ذخیره‌شده"))}: <span class="ltr">${fmtDate(m.fetched)}</span> — ${num(m.ips)}‏ IP، ${num(m.nets)} ${esc(I18N.t("رنج"))}${m.last_error ? `<br><span class="warn">${esc(I18N.t("آخرین خطا"))}: ${esc(m.last_error)}</span>` : ""}`
-          : (m.last_error ? `<span class="warn">${esc(m.last_error)}</span>` : esc(I18N.t("هنوز دانلود نشده است (اولین اجرای ابزار یا «دریافت الان»)."))); });
-      $("#intelLocalSt").innerHTML = l.uploaded ? `فایل آپلودشده: <b class="ltr">${esc(l.name)}</b> — <span class="ltr">${fmtDate(l.uploaded)}</span> — ${num(l.ips)}‏ IP و ${num(l.nets)} رنج${l.invalid ? `، <span class="warn">${num(l.invalid)} خط نامعتبر</span>` : ""}` : "فایلی آپلود نشده است.";
+      const f = r.feed || {}, l = r.local || {}, set = (k, h) => { const el = $("#intelSt_" + k); if (el) el.innerHTML = h; };
+      set("ffraud", stLine(f, `${num(f.rows)}‏ IP، ${num(Math.round((f.size || 0) / 1024))}KB`));
+      Object.entries(r.lists || {}).forEach(([k, m]) => set(k, stLine(m, `${num(m.ips)}‏ IP، ${num(m.nets)} ${esc(I18N.t("رنج"))}`)));
+      set("local", l.uploaded ? `${esc(I18N.t("فایل آپلودشده"))}: <b class="ltr">${esc(l.name)}</b> — <span class="ltr">${fmtDate(l.uploaded)}</span> — ${num(l.ips)}‏ IP، ${num(l.nets)} ${esc(I18N.t("رنج"))}${l.invalid ? `، <span class="warn">${num(l.invalid)} ${esc(I18N.t("خط نامعتبر"))}</span>` : ""}` : esc(I18N.t("فایلی آپلود نشده است.")));
+      Object.entries(r.lists || {}).forEach(([k, m]) => { const x = $(`[data-path="intel.list_urls.${k}"]`); if (x) x.placeholder = m.default_url || ""; });
     };
     showSt();
     $$("[data-ilist]").forEach((x) => (x.onclick = (e) => withSpin(e.currentTarget, async () => { const r = await api("intel_list_update", x.dataset.ilist); toast(r.ok ? r.message : r.error, r.ok ? "ok" : "error"); showSt(); })));

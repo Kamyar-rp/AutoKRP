@@ -1,0 +1,17 @@
+{
+ "IPهای سوءاستفاده‌گر تأییدشده با امتیاز و دسته؛ هر ۳۰ دقیقه به‌روز می‌شود": "Confirmed abusive IPs with score and category; updated every 30 minutes",
+ "{0}: آدرس باید با https:// شروع شود.": "{0}: the URL must start with https://.",
+ "{0}‏ IP، {1} {2}": "{0} IPs, {1} {2}",
+ "{0}‏ IP، {1}KB": "{0} IPs, {1} KB",
+ "آدرس (CSV با ستون ip)": "URL (CSV with an ip column)",
+ "آدرس (خالی = پیش‌فرض)": "URL (empty = default)",
+ "آدرس فهرست {0} باید با https:// شروع شود.": "The {0} list URL must start with https://.",
+ "تا این مدت نسخه‌ی ذخیره‌شده استفاده می‌شود؛ بعد از آن فقط اگر تغییر کرده باشد دانلود می‌شود (ETag).": "The saved copy is used for this long; after that it is downloaded only if it has changed (ETag).",
+ "حداقل تعداد فهرست‌ها": "Minimum number of lists",
+ "خط نامعتبر": "invalid lines",
+ "دانلود منبع‌های آنلاین": "Online source downloads",
+ "فایل آپلودشده": "Uploaded file",
+ "فهرست IP یا رنج خودتان (مثل malicious.csv)": "Your own IP or range list (like malicious.csv)",
+ "فهرست‌ها فقط متن ساده‌ی IP و رنج‌اند و فقط به‌عنوان داده خوانده می‌شوند (هیچ فایلی اجرا یا باز نمی‌شود)؛ هر خطی که IP یا CIDR معتبر نیست کنار گذاشته می‌شود، رنج‌های داخلی و رزرو هرگز مخرب حساب نمی‌شوند و فایل ذخیره‌شده با اثر انگشت بررسی می‌شود. هیچ IPی از شبکه‌ی شما بیرون فرستاده نمی‌شود و محدودیت تعداد بررسی ندارند.": "Lists are plain IP and range text and are only read as data (no file is run or opened); any line that is not a valid IP or CIDR is dropped, private and reserved ranges are never counted as malicious, and the saved file is checked against its fingerprint. No IP from your network is sent out and there is no lookup limit.",
+ "منبع‌های بررسی تکمیلی": "Extra check sources"
+}

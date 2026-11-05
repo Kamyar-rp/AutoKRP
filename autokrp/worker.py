@@ -55,6 +55,9 @@ class Worker:
         self._next_sec = time.time() + 120
         self._health_busy = threading.Event()
         self.fgu = FgUpdater(settings, store, settings.vault, self.ssh, emit=self.emit, notify=self.notifier.notify)
+        from . import __version__
+        from .auditlog import Forwarder                   # 1.46: مهر لاگ ممیزی و ارسال به Syslog/SIEM
+        self.audit = Forwarder(store, settings, __version__)
         from .assets import AssetManager
         self.assets = AssetManager(settings, store, settings.vault, self.monitor.snmp.client, self.ssh.hostkeys, emit=self.emit,
                                    notify=self.notifier.notify, demo=demo)
@@ -78,6 +81,7 @@ class Worker:
         self._thread = threading.Thread(target=self._loop, name="worker", daemon=True)
         self._thread.start()
         self.monitor.start()
+        self.audit.start()
         from .pipeline import purge_old_runs     # 1.37: گزارش اجراهای قبلی ← پایگاه داده، پوشه‌ها پاک
         cur = getattr(self.pipeline, "current", None)
         threading.Thread(target=purge_old_runs, args=(self.store, {cur.id} if cur else set()), name="runs-cleanup", daemon=True).start()
@@ -86,6 +90,7 @@ class Worker:
     def stop(self, wait=0.0):
         self._stop.set()
         self.monitor.stop()
+        self.audit.stop()
         self.pipeline.cancel()
         self.ssh.cancel()
         if wait:

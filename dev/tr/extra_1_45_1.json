@@ -1,0 +1,9 @@
+{
+"اگر سایت IEEE از این شبکه باز نمی‌شود: oui.csv (و اختیاری mam.csv و oui36.csv) را با مرورگر از standards-oui.ieee.org بگیرید و اینجا وارد کنید": "If the IEEE site does not open from this network: download oui.csv (and optionally mam.csv and oui36.csv) from standards-oui.ieee.org in a browser and import them here",
+"جدول سازنده‌های MAC از فایل IEEE به‌روز شد ({0} پیشوند، کل {1})": "MAC vendor table updated from an IEEE file ({0} prefixes, {1} total)",
+"سایت IEEE در دسترس نیست ({0}). ممکن است از این شبکه بسته باشد؛ فایل oui.csv را با مرورگر از {1} بگیرید و «ورود فایل IEEE» را بزنید.": "The IEEE site is not reachable ({0}). It may be blocked from this network; download oui.csv from {1} in a browser and use “Import IEEE file”.",
+"فایل تقریباً خالی است؛ ذخیره نشد.": "The file is almost empty; nothing saved.",
+"فایل پیدا نشد یا خیلی بزرگ است.": "File not found or too large.",
+"قالب فایل شناخته نشد (فایل CSV رسمی IEEE با ستون‌های Assignment و Organization Name لازم است).": "File format not recognised (the official IEEE CSV with Assignment and Organization Name columns is needed).",
+"ورود فایل IEEE…": "Import IEEE file…"
+}

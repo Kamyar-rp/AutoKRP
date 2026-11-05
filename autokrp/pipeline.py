@@ -1402,7 +1402,7 @@ class Pipeline:
                 else:
                     _m, note = intel.update_list(lid, cfg, run.cancel, logf=lambda m, lv="info": self._log(run, "بررسی تکمیلی: " + m, lv))
                     self._log(run, f"بررسی تکمیلی: {note}")
-                    hits = intel.list_lookup(lid, targets, max(1, int(cfg.get("ipsum_min") or 3)) if lid == "ipsum" else 1)
+                    hits = intel.list_lookup(lid, targets, max(1, int(cfg.get("ipsum_min") or 3)) if lid == "ipsum" else 1, cfg)
                 for ip, why in hits.items():
                     list_hits.setdefault(ip, []).append(f"{nm} ({why})" if why and why != ip else nm)
                 sources.append(nm)

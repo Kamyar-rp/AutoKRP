@@ -116,35 +116,77 @@ class Oui:
         with self._lock:
             self._db = None
 
-    def update_from_ieee(self, timeout=60):
-        """دانلود فهرست‌های فعلی IEEE (MA-L، MA-M، MA-S) و ذخیره در پوشه‌ی داده. داده‌ی عمومی است."""
+    IEEE_URLS = ("https://standards-oui.ieee.org/oui/oui.csv", "https://standards-oui.ieee.org/oui28/mam.csv",
+                 "https://standards-oui.ieee.org/oui36/oui36.csv")
+
+    @staticmethod
+    def parse_ieee_csv(text):
+        """فایل CSV رسمی IEEE (MA-L، MA-M یا MA-S) ← {پیشوند: سازنده}. قالب ناشناخته ← NetError."""
         import csv
         import io
+        rd = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
+        if not rd.fieldnames or "Assignment" not in rd.fieldnames or "Organization Name" not in rd.fieldnames:
+            raise NetError("قالب فایل شناخته نشد (فایل CSV رسمی IEEE با ستون‌های Assignment و Organization Name لازم است).")
+        out = {}
+        for row in rd:
+            a = re.sub(r"[^0-9A-Fa-f]", "", row.get("Assignment") or "").upper()
+            n = " ".join((row.get("Organization Name") or "").split())[:120]
+            if len(a) in (6, 7, 9) and n:
+                out[a] = n
+        return out
 
-        import requests
-        urls = ("https://standards-oui.ieee.org/oui/oui.csv", "https://standards-oui.ieee.org/oui28/mam.csv",
-                "https://standards-oui.ieee.org/oui36/oui36.csv")
-        data = {}
-        for u in urls:
-            r = requests.get(u, timeout=(15, timeout), headers={"User-Agent": "AutoKRP"})
-            if r.status_code != 200:
-                raise NetError(f"دانلود {u} ناموفق بود (HTTP {r.status_code}).")
-            rd = csv.DictReader(io.StringIO(r.content.decode("utf-8", "replace")))
-            if not rd.fieldnames or "Assignment" not in rd.fieldnames or "Organization Name" not in rd.fieldnames:
-                raise NetError(f"قالب فایل {u} شناخته نشد.")
-            for row in rd:
-                a = re.sub(r"[^0-9A-Fa-f]", "", row.get("Assignment") or "").upper()
-                n = " ".join((row.get("Organization Name") or "").split())[:120]
-                if len(a) in (6, 7, 9) and n:
-                    data[a] = n
-        if len(data) < 10000:
-            raise NetError("فهرست دریافتی ناقص است؛ ذخیره نشد.")
+    def _save(self, data):
         tmp = self.user_path().with_suffix(".tmp")
         with gzip.open(tmp, "wt", encoding="utf-8") as f:
             f.write("".join(f"{k}\t{v}\n" for k, v in sorted(data.items())))
         os.replace(tmp, self.user_path())
         self.reset()
         return self.info()
+
+    def update_from_ieee(self, timeout=60):
+        """دانلود فهرست‌های فعلی IEEE (MA-L الزامی؛ MA-M و MA-S اگر شد) و ذخیره در پوشه‌ی داده. داده‌ی عمومی است.
+        1.45.1: سرور IEEE درخواست‌های بدون شناسه‌ی مرورگر را گاهی قطع می‌کند؛ هدرهای معمول مرورگر فرستاده می‌شود و یک بار دوباره امتحان می‌شود."""
+        import requests
+        hdr = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 AutoKRP",
+               "Accept": "text/csv,text/plain,*/*", "Accept-Language": "en-US,en;q=0.8"}
+        data, notes = {}, []
+        for i, u in enumerate(self.IEEE_URLS):
+            last = None
+            for _try in range(2):
+                try:
+                    r = requests.get(u, timeout=(20, timeout), headers=hdr)
+                    if r.status_code != 200:
+                        raise NetError(f"HTTP {r.status_code}")
+                    data.update(self.parse_ieee_csv(r.content.decode("utf-8", "replace")))
+                    last = None
+                    break
+                except (requests.RequestException, NetError) as e:
+                    last = e
+            if last is not None:
+                if i == 0:
+                    raise NetError(f"سایت IEEE در دسترس نیست ({str(last)[:120]}). ممکن است از این شبکه بسته باشد؛ فایل oui.csv را با مرورگر از "
+                                   f"{self.IEEE_URLS[0]} بگیرید و «ورود فایل IEEE» را بزنید.")
+                notes.append(u.rsplit("/", 1)[-1])
+        if len(data) < 10000:
+            raise NetError("فهرست دریافتی ناقص است؛ ذخیره نشد.")
+        info = self._save(data)
+        if notes:
+            info["partial"] = notes
+        return info
+
+    def import_files(self, texts):
+        """1.45.1: ورود فایل‌های CSV رسمی IEEE که کاربر خودش با مرورگر گرفته (oui.csv، mam.csv، oui36.csv؛ یکی یا چندتا).
+        روی جدول فعلی ادغام می‌شود (پیشوندهای تازه اضافه، تغییرکرده‌ها به‌روز)."""
+        new = {}
+        for t in texts:
+            new.update(self.parse_ieee_csv(t))
+        if len(new) < 100:
+            raise NetError("فایل تقریباً خالی است؛ ذخیره نشد.")
+        data = dict(self._load())
+        data.update(new)
+        info = self._save(data)
+        info["imported"] = len(new)
+        return info
 
 
 OUI = Oui()

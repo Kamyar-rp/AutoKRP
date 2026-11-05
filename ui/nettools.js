@@ -176,7 +176,8 @@ function ntOui() {
     <label class="field"><span>MAC یا متن شامل MAC (مثلاً خروجی show mac address-table یا arp -a)</span>
       <textarea id="ouiT" class="ltr code-edit" style="min-height:120px" placeholder="aa:bb:cc:dd:ee:ff&#10;0011.2233.4455">${esc(NT.last.oui || "")}</textarea></label>
     <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn primary" id="ouiGo">جستجو</button><span class="muted" id="ouiInfo"></span>
-      <button class="btn sm ghost adm-only" id="ouiUpd" style="margin-inline-start:auto" title="دریافت آخرین فهرست از standards-oui.ieee.org">به‌روزرسانی از IEEE</button></div></div><div id="ouiOut"></div>`;
+      <button class="btn sm ghost adm-only" id="ouiUpd" style="margin-inline-start:auto" title="دریافت آخرین فهرست از standards-oui.ieee.org">به‌روزرسانی از IEEE</button>
+      <button class="btn sm ghost adm-only" id="ouiImp" title="اگر سایت IEEE از این شبکه باز نمی‌شود: oui.csv (و اختیاری mam.csv و oui36.csv) را با مرورگر از standards-oui.ieee.org بگیرید و اینجا وارد کنید">ورود فایل IEEE…</button></div></div><div id="ouiOut"></div>`;
   $("#ouiGo").onclick = async () => {
     NT.last.oui = $("#ouiT").value;
     const r = await withSpin($("#ouiGo"), () => api("net_oui", NT.last.oui));
@@ -187,6 +188,13 @@ function ntOui() {
     const r = await withSpin($("#ouiUpd"), () => api("net_oui_update"));
     if (!r.ok) return toast(r.error, "error");
     toast("به‌روز شد", "ok"); if (NT.ouiRes) { NT.ouiRes.info = r; ntOuiRender(); } else ntOuiInfo(r);
+  };
+  $("#ouiImp").onclick = async () => {
+    let r;
+    if (WEB) { const up = await webPickFile(".csv,text/csv"); if (!up.ok) return toast(up.error, "error"); if (!up.path) return; r = await withSpin($("#ouiImp"), () => api("net_oui_import", up.path)); }
+    else r = await withSpin($("#ouiImp"), () => api("net_oui_import"));
+    if (!r.ok) return toast(r.error, "error"); if (r.cancelled) return;
+    toast(`${I18N.t("به‌روز شد")}: ${num(r.imported)}`, "ok"); if (NT.ouiRes) { NT.ouiRes.info = r; ntOuiRender(); } else ntOuiInfo(r);
   };
   if (NT.ouiRes) ntOuiRender();
 }

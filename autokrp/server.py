@@ -767,6 +767,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     u = sess["user"]["username"].lower()
                     CTX.api._term.close_all(u)
                     CTX.api._xfer.close_all(u)
+                    CTX.api._store.add_history("security", "خروج", "ok", f"{sess['user']['username']} از {self._ip()} خارج شد",   # 1.46: ممیزی
+                                               user=sess["user"]["username"], ip=self._ip())
                 CTX.drop_session(sid=sid)
             return self._json({"ok": True}, extra=[("Set-Cookie", f"{COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0")])
         if path == "/upload":
@@ -846,7 +848,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             shown = _log_safe(name)
             log.warning("ورود ناموفق از %s (نام کاربری: %s)", ip, shown)
             if CTX.api:
-                CTX.api._store.add_history("security", "ورود", "error", f"ناموفق از {ip} — نام کاربری: {shown}", user="")
+                CTX.api._store.add_history("security", "ورود", "error", f"ناموفق از {ip} — نام کاربری: {shown}", user="", ip=ip)
             return self._json({"ok": False, "error": str(e)}, 401)
         CTX.end_attempt(ip, name, True)
         try:
@@ -854,7 +856,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception as e:  # noqa — مثلاً MySQL در دسترس نیست
             log.error("bring_up failed: %s", e)
             return self._json({"ok": False, "error": f"راه‌اندازی ناموفق: {e}"}, 503)
-        CTX.api._store.add_history("security", "ورود", "ok", f"{rec['username']} از {ip} وارد شد", user=rec["username"])
+        CTX.api._store.add_history("security", "ورود", "ok", f"{rec['username']} از {ip} وارد شد", user=rec["username"], ip=ip)
         CTX.worker.request_check()
         sid, _ = CTX.new_session({k: rec.get(k) for k in ("username", "role", "tools", "disabled", "shared_devices", "perms_v", "source")}, ip)
         return self._json({"ok": True}, extra=self._cookie(sid))

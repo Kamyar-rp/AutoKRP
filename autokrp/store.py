@@ -303,7 +303,13 @@ def _m20(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_api_log_ts ON api_log(ts)")
 
 
-MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17, _m18, _m19, _m20]
+def _m21(c):
+    """1.46: لاگ ممیزی زنجیره‌ای (هر ردیف تاریخچه و رخداد ورود). mac خالی = هنوز مهر نشده (کلید داده در دسترس نبود)."""
+    c.execute("CREATE TABLE IF NOT EXISTS audit_log(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, cat TEXT, user TEXT,"
+              " ip TEXT DEFAULT '', target TEXT, status TEXT, detail TEXT, mac TEXT DEFAULT '')")
+
+
+MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17, _m18, _m19, _m20, _m21]
 # ستون‌هایی که مهاجرت‌ها اضافه می‌کنند؛ هر بار باز شدن بررسی می‌شود و اگر نباشد اضافه می‌شود
 # (پایگاه داده‌ای که شماره‌ی نسخه‌اش جلوتر از ستون‌هایش است، مثلاً بازگردانی فایل قدیمی، دیگر خطا نمی‌دهد)
 REQUIRED_COLUMNS = {
@@ -317,6 +323,11 @@ REQUIRED_COLUMNS = {
                     "policy_id": "INTEGER", "tpl": "TEXT DEFAULT ''"},
     "mon_events": {"kind": "TEXT DEFAULT 'down'"},
 }
+def hmac_eq(a, b):
+    import hmac
+    return hmac.compare_digest(str(a or ""), str(b or ""))
+
+
 ACTOR = threading.local()   # نام کاربر جاری هر رشته (API یا اجرای ابزار)؛ برای ستون user تاریخچه
 
 
@@ -1066,12 +1077,100 @@ class Store:
         return runs[0] if runs else None
 
     # ------------------------------------------------------------ history
-    def add_history(self, kind, target, status, detail="", run_id="", file="", user=None):
+    def add_history(self, kind, target, status, detail="", run_id="", file="", user=None, ip=None):
         if user is None:
             user = getattr(ACTOR, "name", "") or ""
+        if ip is None:
+            ip = getattr(ACTOR, "ip", "") or ""
+        from .auditlog import category
+        now = time.time()
         with self._lock:
             self.db.execute("INSERT INTO history(ts,run_id,kind,target,status,detail,file,user) VALUES(?,?,?,?,?,?,?,?)",
-                            (time.time(), run_id, kind, target, status, detail, file, user))
+                            (now, run_id, kind, target, status, detail, file, user))
+            # 1.46: همان رخداد در لاگ ممیزی زنجیره‌ای (حذف‌نشدنی از داخل برنامه)
+            self.db.execute("INSERT INTO audit_log(ts,kind,cat,user,ip,target,status,detail,mac) VALUES(?,?,?,?,?,?,?,?,'')",
+                            (now, kind, category(kind, target), user or "", str(ip or "")[:64], str(target or "")[:500], status,
+                             str(detail or "")[:4000]))
+        self.audit_seal()
+
+    # ------------------------------------------------------------ 1.46: لاگ ممیزی
+    def audit_seal(self):
+        """مهر کردن ردیف‌های بدون امضا به ترتیب (زنجیره) و به‌روز کردن سر زنجیره. بدون کلید داده ← بعداً."""
+        from .auditlog import SEAL_BATCH, audit_key, head_mac, mac_of
+        key = audit_key()
+        if key is None:
+            return 0
+        n = 0
+        with self._lock:
+            upto = getattr(self, "_audit_upto", 0)          # تا این شناسه همه مهر شده‌اند (فقط بازه‌ی کلید اصلی خوانده می‌شود)
+            if upto and (self.db.execute("SELECT MAX(id) FROM audit_log").fetchone()[0] or 0) < upto:
+                upto = 0                                     # پایگاه داده‌ی تازه (RESET یا بازگردانی)
+            rows = self.db.execute("SELECT * FROM audit_log WHERE id>? AND (mac='' OR mac IS NULL) ORDER BY id LIMIT ?",
+                                   (upto, SEAL_BATCH)).fetchall()
+            if not rows:
+                mx = self.db.execute("SELECT MAX(id) FROM audit_log").fetchone()[0] or 0
+                self._audit_upto = mx
+                return 0
+            prev = self.db.execute("SELECT mac FROM audit_log WHERE id<? AND mac<>'' ORDER BY id DESC LIMIT 1", (rows[0]["id"],)).fetchone()
+            prev = prev[0] if prev else ""
+            for r in rows:
+                m = mac_of(key, prev, dict(r))
+                self.db.execute("UPDATE audit_log SET mac=? WHERE id=?", (m, r["id"]))
+                prev, n = m, n + 1
+            last = rows[-1]["id"]
+            self.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", ("audit_head", f"{last}:{head_mac(key, last, prev)}"))
+            if len(rows) < SEAL_BATCH:
+                self._audit_upto = last
+        return n
+
+    def audit_since(self, after_id, limit=500):
+        """ردیف‌های مهرشده بعد از شناسه‌ی داده‌شده (برای ارسال)."""
+        with self._lock:
+            return [dict(r) for r in self.db.execute("SELECT * FROM audit_log WHERE id>? AND mac<>'' ORDER BY id LIMIT ?",
+                                                    (int(after_id), int(limit))).fetchall()]
+
+    def audit_stats(self):
+        with self._lock:
+            r = self.db.execute("SELECT COUNT(*), MIN(ts), MAX(id), SUM(CASE WHEN mac='' OR mac IS NULL THEN 1 ELSE 0 END) FROM audit_log").fetchone()
+            return {"rows": r[0] or 0, "first": r[1], "last_id": r[2] or 0, "unsealed": r[3] or 0}
+
+    def audit_verify(self, cancel=None):
+        """بررسی کامل زنجیره: {ok، checked، broken_at، reason، unsealed}."""
+        from .auditlog import audit_key, head_mac, mac_of
+        key = audit_key()
+        if key is None:
+            return {"ok": False, "reason": "کلید داده در دسترس نیست."}
+        prev, checked, last_id, expect_id = "", 0, 0, None
+        after = 0
+        while True:
+            with self._lock:
+                rows = [dict(r) for r in self.db.execute("SELECT * FROM audit_log WHERE id>? ORDER BY id LIMIT 5000", (after,)).fetchall()]
+            if not rows:
+                break
+            for r in rows:
+                if not r["mac"]:
+                    unsealed = self.audit_stats()["unsealed"]
+                    return self._audit_head_check(key, head_mac, prev, last_id, checked, unsealed)
+                if expect_id is not None and r["id"] != expect_id:
+                    return {"ok": False, "checked": checked, "broken_at": r["id"], "reason": f"ردیف‌های {expect_id} تا {r['id'] - 1} حذف شده‌اند."}
+                if mac_of(key, prev, r) != r["mac"]:
+                    return {"ok": False, "checked": checked, "broken_at": r["id"], "reason": f"ردیف {r['id']} تغییر کرده یا جابه‌جا شده است."}
+                prev, last_id, expect_id, checked = r["mac"], r["id"], r["id"] + 1, checked + 1
+            after = rows[-1]["id"]
+            if cancel is not None and cancel.is_set():
+                break
+        return self._audit_head_check(key, head_mac, prev, last_id, checked, 0)
+
+    def _audit_head_check(self, key, head_mac, prev, last_id, checked, unsealed):
+        h = str(self.meta("audit_head", "") or "")
+        if checked and h:
+            hid, _, hm = h.partition(":")
+            if not hid.isdigit() or int(hid) != last_id or not hmac_eq(hm, head_mac(key, last_id, prev)):
+                return {"ok": False, "checked": checked, "broken_at": last_id,
+                        "reason": "انتهای زنجیره با سر امضاشده جور نیست (ردیف‌هایی از آخر حذف شده‌اند)."}
+        elif checked and not h:
+            return {"ok": False, "checked": checked, "broken_at": last_id, "reason": "سر امضاشده‌ی زنجیره پیدا نشد."}
+        return {"ok": True, "checked": checked, "unsealed": unsealed}
 
     def history_get(self, hid):
         with self._lock:

@@ -55,6 +55,7 @@ ENC_COLS = {
     "api_log": {"url", "req_headers", "req_body", "resp_head", "error"},
     "assets": {"notes", "descr"},
     "asset_changes": {"data", "note"},
+    "audit_log": {"target", "detail", "ip"},                           # 1.46: لاگ ممیزی (mac روی متن اصلی است)
 }
 ENC_PREFIX = "enc1:"
 

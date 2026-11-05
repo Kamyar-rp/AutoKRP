@@ -968,11 +968,17 @@ body.nm-full-on #monBanner { display: none; }
 .te-stop { margin: 0; font-size: 12px; }
 
 /* 1.40: منوی کناری در ارتفاع کم (مرورگر، لپ‌تاپ ۷۶۸ پیکسلی) فشرده‌تر */
-@media (max-height: 860px) {
+/* 1.46.1: منوی کناری در ارتفاع‌های معمول (زوم ۱۰۰٪ مرورگر) بدون اسکرول؛ با منوی «داشبوردها» بلندتر شده بود */
+@media (max-height: 990px) {
   .side { padding: 12px 10px; } .brand { padding-bottom: 10px; } .nav button { padding: 6px 12px; }
   .side-foot { gap: 7px; padding-top: 12px; } .badge-test { padding: 5px 9px; font-size: 11.5px; } .conn-list { gap: 3px; }
 }
-@media (max-height: 700px) { .brand-sub { display: none; } .nav button { padding: 5px 12px; } }
+@media (max-height: 850px) {
+  .brand-sub { display: none; } .brand { padding-bottom: 6px; } .nav button { padding: 5px 12px; } .nav { gap: 1px; }
+  .badge-test { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 4px 8px; }
+  .side-foot { gap: 5px; padding-top: 8px; } .conn-row { font-size: 12px; }
+}
+@media (max-height: 760px) { .nav button { padding: 4px 12px; } .conn-list { display: none; } }
 
 /* 1.40: ابزار API */
 .at-wrap { display: grid; grid-template-columns: 270px 1fr; gap: 12px; min-height: 520px; }
@@ -1150,3 +1156,12 @@ body.noc-on .side-edge, .db-wrap:fullscreen ~ .side-edge { display: none; }
 
 /* 1.45: کشف اتصال‌ها */
 .nd-log { max-height: 220px; overflow: auto; font-size: 12px; background: var(--bg); border: 1px solid var(--line2); border-radius: 8px; padding: 8px; margin: 8px 0 0; white-space: pre-wrap; }
+/* 1.46.1: منبع‌های بررسی تکمیلی یک شکل */
+.isrc-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.isrc { border: 1px solid var(--line2); border-radius: 10px; padding: 10px 12px; background: var(--panel2); }
+.isrc-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.isrc-d { font-size: 12.5px; flex: 1; min-width: 200px; }
+.isrc-b { display: flex; gap: 6px; margin-inline-start: auto; }
+.isrc-st { margin: 6px 0 0; }
+.isrc-opt { margin-top: 6px; } .isrc-opt summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+.isrc-opt .form-grid { margin-top: 8px; }

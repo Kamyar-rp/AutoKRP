@@ -137,6 +137,9 @@ DEFAULTS = {
                "bind": "0.0.0.0", "allow_unknown": False, "sources": [], "communities": [], "min_store": 6,  # nosec B104 — گیرنده روی شبکه
                "forti_traffic": False, "alert_level": "crit", "rules": [], "keep_days": 0},
     # سلامت سرور (1.24): هشدار کمبود فضای دیسک پوشه‌ی داده، RAM و CPU خود برنامه
+    # 1.46: ارسال لاگ ممیزی به Syslog/SIEM (فقط ادمین اصلی از audit_cfg_save)
+    "audit": {"enabled": False, "host": "", "port": 514, "proto": "udp", "format": "syslog", "cats": ["auth", "security", "tools", "devices", "monitor"],
+              "verify_tls": True, "facility": 13, "hostname": ""},
     "health": {"enabled": True, "disk_min_gb": 10, "disk_min_pct": 10, "ram_max_mb": 2048, "cpu_max_pct": 90},
     # ابزار «بررسی تکمیلی»: فید آنلاین FFraud و لیست داخلی (IP/CIDR)
     "intel": {"feed_enabled": True, "feed_url": "https://raw.githubusercontent.com/FFraud-com/ip-fraud-database/main/threat-ips/confirmed-abusive.csv",
@@ -144,7 +147,7 @@ DEFAULTS = {
               # لیست داخلی: آپلود در تنظیمات (رمزشده) یا مسیر فایلی که هر اجرا خوانده می‌شود (فقط کلاینت؛ اولویت با مسیر)
               "local_enabled": False, "local_path": "",
               # 1.44: فهرست‌های عمومی دانلودی (FireHOL Level 1، IPsum با حداقل تعداد فهرست)
-              "lists": {"firehol_l1": False, "ipsum": False, "afta": False}, "ipsum_min": 3,
+              "lists": {"firehol_l1": False, "ipsum": False, "afta": False}, "ipsum_min": 3, "list_urls": {},
               # بلاک مخرب‌های این ابزار در FortiGate بدون تأیید (فقط در کار زمان‌بندی‌شده با «بلاک بدون تأیید»)
               "auto_ban": False},
     # انتقال فایل: سقف حجم هر فایل به مگابایت (۰ = بدون محدودیت)

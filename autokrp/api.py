@@ -118,6 +118,7 @@ def _safe(fn):
         if deny:
             return {"ok": False, "error": deny, "denied": True}
         ACTOR.name = user["username"] if user else ""
+        ACTOR.ip = (WEB_IP.get() or "") if srv else ""
         t0 = time.perf_counter()
         try:
             out = fn(self, *a, **k)
@@ -137,6 +138,7 @@ def _safe(fn):
             return {"ok": False, "error": friendly_error(e)}
         finally:
             ACTOR.name = ""
+            ACTOR.ip = ""
             dt = time.perf_counter() - t0
             if dt >= SLOW_API_SECS:        # عیب‌یابی کندی (memdiag هم این‌ها را ثبت می‌کند)
                 SLOW_CALLS.append((time.time(), name, round(dt, 2)))
@@ -1592,7 +1594,7 @@ class Api:
         if isinstance(patch.get("branding"), dict):  # نام فایل لوگو/آیکون فقط از set_logo (جلوگیری از خواندن فایل دلخواه)
             for k in ("logo_file", "icon_file", "logo_data"):
                 patch["branding"].pop(k, None)
-        for k in ("terms", "tools_enabled"):         # 1.41: پذیرش متن و بخش‌های فعال همین نصب عوض نمی‌شود
+        for k in ("terms", "tools_enabled", "audit"):   # 1.41: پذیرش متن و بخش‌های فعال؛ 1.46: مقصد لاگ ممیزی (فقط ادمین اصلی از audit_cfg_save)
             patch.pop(k, None)
         self._validate(patch)                        # همان بررسی‌های «ذخیره‌ی تنظیمات»
         self._check_secret_dest(patch)               # تغییر مقصد اتصال بدون وارد کردن دوباره‌ی راز رد می‌شود
@@ -1743,6 +1745,7 @@ class Api:
         patch.pop("ad", None)         # فقط از server_ad_save (با اعتبارسنجی)
         patch.pop("events", None)     # فقط از mon_events_cfg_save
         patch.pop("access", None)     # 1.32: گروه‌های دسترسی فقط از access_* (ادمین اصلی)
+        patch.pop("audit", None)      # 1.46: ارسال لاگ ممیزی فقط از audit_cfg_save (ادمین اصلی)
         if isinstance(patch.get("branding"), dict):
             for k in ("logo_file", "icon_file", "logo_data"):
                 patch["branding"].pop(k, None)
@@ -1896,6 +1899,13 @@ class Api:
                 raise ConnectorError("در حالت سرور مسیر فایل لیست داخلی پذیرفته نیست؛ فایل را آپلود کنید.")
             if "feed_url" in it and not str(it.get("feed_url") or "").strip().lower().startswith(("https://", "http://")):
                 raise ConnectorError("آدرس فید بررسی تکمیلی باید با https:// شروع شود.")
+            if "list_urls" in it:             # 1.46.1: آدرس فهرست‌های عمومی (خالی = پیش‌فرض)
+                from .intel import LISTS
+                lu = it["list_urls"] if isinstance(it["list_urls"], dict) else {}
+                it["list_urls"] = {k: str(v or "").strip()[:500] for k, v in lu.items() if k in LISTS}    # "" = پیش‌فرض
+                for k, v in it["list_urls"].items():
+                    if v and not v.lower().startswith("https://"):
+                        raise ConnectorError(f"آدرس فهرست {LISTS[k]['name']} باید با https:// شروع شود.")
             try:
                 for k, lo, hi in (("min_score", 0, 100), ("refresh_minutes", 0, 1440), ("max_age_hours", 1, 720), ("timeout", 10, 600)):
                     if k in it and not lo <= float(it[k] or 0) <= hi:
@@ -2373,7 +2383,8 @@ class Api:
     def intel_status(self):
         from . import intel
         return {"feed": intel.feed_meta(), "local": intel.local_meta(), "server": paths.is_server(),
-                "lists": {k: {"name": v["name"], "url": v["url"], **intel.list_meta(k)} for k, v in intel.LISTS.items()}}
+                "lists": {k: {"name": v["name"], **intel.list_meta(k), "url": intel.list_url(k, self._settings.get("intel") or {}),
+                              "default_url": v["url"]} for k, v in intel.LISTS.items()}}
 
     @_safe
     def intel_list_update(self, lid):
@@ -3070,6 +3081,31 @@ class Api:
         except Exception as e:
             raise ConnectorError(f"دریافت از سایت IEEE ناموفق بود: {str(e)[:200]}")
         self._store.add_history("nettools", "OUI", "ok", f"جدول سازنده‌های MAC از IEEE به‌روز شد ({info['entries']} مورد)")
+        return info
+
+    @_safe
+    def net_oui_import(self, path=None):
+        """1.45.1: ورود فایل CSV رسمی IEEE (وقتی سایت IEEE از این شبکه باز نمی‌شود؛ فقط ادمین)."""
+        from .nettools import OUI
+        if paths.is_server():
+            path = server_path(path)
+        elif not path:
+            if not self._window:
+                raise ConnectorError("انتخاب فایل در این محیط در دسترس نیست.")
+            import webview
+            res = self._window.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=True, file_types=("CSV (*.csv)", "All files (*.*)"))
+            if not res:
+                return {"cancelled": True}
+            path = list(res) if isinstance(res, (list, tuple)) else [res]
+        files = path if isinstance(path, list) else [path]
+        texts = []
+        for f in files[:3]:
+            p = Path(str(f))
+            if not p.is_file() or p.stat().st_size > 20 * 1024 * 1024:
+                raise ConnectorError("فایل پیدا نشد یا خیلی بزرگ است.")
+            texts.append(atrest.read_bytes(p).decode("utf-8", "replace"))
+        info = self._net(OUI.import_files, texts)
+        self._store.add_history("nettools", "OUI", "ok", f"جدول سازنده‌های MAC از فایل IEEE به‌روز شد ({info['imported']} پیشوند، کل {info['entries']})")
         return info
 
     @_safe
@@ -4134,6 +4170,56 @@ class Api:
     @_safe
     def mon_map_disc_cancel(self, jid):
         return self._net(self._disc_jobs().cancel, jid, self._uname())
+
+    # ---- 1.46: لاگ ممیزی
+    @_safe
+    def audit_status(self):
+        from .auditlog import CATS, clean_cfg
+        self._need_super()
+        f = self._worker.audit
+        st = self._store.audit_stats()
+        sent = int(self._store.meta("audit_sent", 0) or 0)
+        return {"cfg": clean_cfg(self._settings.get("audit") or {}), "cats": CATS, "stats": st, "status": f.status,
+                "pending": max(0, st["last_id"] - sent) if clean_cfg(self._settings.get("audit") or {})["enabled"] else 0, "sent_id": sent}
+
+    @_safe
+    def audit_cfg_save(self, cfg, from_start=False):
+        """from_start: فرستادن همه‌ی ردیف‌های قبلی هم (وگرنه فقط از همین حالا)."""
+        from .auditlog import clean_cfg
+        self._need_super()
+        c = clean_cfg(cfg)
+        if c["enabled"] and not c["host"]:
+            raise ConnectorError("آدرس سرور Syslog/SIEM را وارد کنید.")
+        old = clean_cfg(self._settings.get("audit") or {})
+        if c["enabled"] and (not old["enabled"] or old["host"] != c["host"] or old["port"] != c["port"]):
+            self._store.set_meta("audit_sent", 0 if from_start else self._store.audit_stats()["last_id"])
+        self._settings.update({"audit": c})
+        self._store.add_history("security", "لاگ ممیزی", "ok",
+                                (f"ارسال به {c['proto'].upper()} {c['host']}:{c['port']} با قالب {c['format'].upper()} روشن شد"
+                                 if c["enabled"] else "ارسال لاگ ممیزی خاموش شد") + f" (دسته‌ها: {'، '.join(c['cats'])})")
+        return {"cfg": c}
+
+    @_safe
+    def audit_test(self, cfg):
+        from .auditlog import clean_cfg
+        self._need_super()
+        c = clean_cfg(cfg)
+        if not c["host"]:
+            raise ConnectorError("آدرس سرور Syslog/SIEM را وارد کنید.")
+        try:
+            self._worker.audit.test(c)
+        except (OSError, ValueError) as e:
+            raise ConnectorError(f"ارسال آزمایشی ناموفق: {e.__class__.__name__}: {str(e)[:200]}")
+        return {"message": f"پیام آزمایشی به {c['host']}:{c['port']} ({c['proto'].upper()}) فرستاده شد" + ("؛ در UDP رسیدن تأیید نمی‌شود" if c["proto"] == "udp" else "")}
+
+    @_safe
+    def audit_verify(self):
+        self._need_super()
+        self._store.audit_seal()
+        r = self._store.audit_verify()
+        self._store.add_history("security", "لاگ ممیزی", "ok" if r.get("ok") else "error",
+                                f"بررسی یکپارچگی: {r.get('checked', 0)} ردیف" + ("، سالم" if r.get("ok") else f"، مشکل: {r.get('reason')}"))
+        return {"result": r}
 
     @_safe
     def mon_capacity(self):

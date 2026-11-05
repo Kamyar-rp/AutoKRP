@@ -34,7 +34,7 @@ FEATURE_API = {
              "xfer_put", "xfer_get", "xfer_local", "local_ls", "xfer_jobs", "xfer_cancel", "xfer_clear", "xfer_clear_one", "tftp_start",
              "tftp_status", "tftp_stop", "tftp_add_local", "tftp_remove", "tftp_received_get"},
 }
-FEATURE_API["nettools"] = {"net_oui", "net_oui_update", "net_rdap", "net_trace_start", "net_locate_targets", "net_locate_start",
+FEATURE_API["nettools"] = {"net_oui", "net_oui_update", "net_oui_import", "net_rdap", "net_trace_start", "net_locate_targets", "net_locate_start",
                            "net_job", "net_job_cancel"}
 API_VIEW = {"api_conn_list", "api_log_list", "api_log_get"}                   # 1.40: ابزار API
 FEATURE_API["apitool"] = API_VIEW | {"api_conn_save", "api_conn_delete", "api_req_save", "api_req_delete", "api_send"}
