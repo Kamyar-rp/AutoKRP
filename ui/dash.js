@@ -423,8 +423,43 @@ async function dbChart(w, el, light, tid, keys, defs, opt) {
   if (!el.isConnected) return;
   if (!r || !r.ok) { el.innerHTML = `<div class="db-hint">${esc((r && r.error) || "")}</div>`; return; }
   el.dataset.k = key; el.dataset.at = String((DB.cache.get(key) || {}).at || 0);
-  const h = Math.max(70, el.clientHeight - 6);
-  snDraw(el, r, defs, { ...opt, height: h });
+  dbFitChart(el, (hh) => snDraw(el, r, defs, { ...opt, height: hh }));
+}
+/** 1.50: نمودار + جدول کمینه/میانگین/بیشینه/آخرین همیشه بدون اسکرول در ویجت:
+ *  ۱) نمودار کوتاه‌تر (≥ ۶۰px)  ۲) جدول فشرده و نمودار ≥ ۴۰px  ۳) جدول کوچک‌نمایی‌شده  ۴) فقط جدول (نمودار برای جا نبود) */
+function dbFitChart(el, draw) {
+  el.classList.remove("db-cmp", "db-nochart");
+  el.removeAttribute("title");
+  const H = Math.max(96, el.clientHeight - 6), MIN = 96;   // کمتر از ~۹۶px محور و برچسب‌ها خوانا نیستند
+  const wide = () => { const t = el.querySelector(".ch-stats"); return !!t && t.scrollWidth > el.clientWidth + 1; };
+  const over = () => el.scrollHeight - el.clientHeight;
+  const svgH = () => { const v = el.querySelector("svg"); return v ? v.getBoundingClientRect().height : 0; };
+  const shrink = (h) => {        // ارتفاع نمودار تا جای خالی؛ کوچک‌نمایی SVG (عرض کمتر از ۳۶۰px) حساب می‌شود
+    const o = over(); if (o <= 0) return h;
+    const k = (svgH() || h) / h || 1, nh = Math.max(MIN, Math.floor(h - o / k) - 2);
+    if (nh < h) draw(nh);
+    return nh;
+  };
+  draw(H);
+  if (over() <= 0 && !wide()) return;
+  let h = shrink(H);
+  if (over() <= 0 && !wide()) return;
+  el.classList.add("db-cmp"); draw(h); h = shrink(h);
+  if (over() <= 0 && !wide()) return;
+  const st = el.querySelector(".ch-stats"); if (!st) return;
+  // کوچک‌نمایی جدول تا هم ارتفاع و هم عرض جا شود (نام پورت‌ها و همه‌ی ستون‌ها دیده شوند)
+  const fitZoom = (min) => {
+    st.style.zoom = "";
+    const ov = over(), wz = st.scrollWidth > el.clientWidth ? (el.clientWidth - 2) / st.scrollWidth : 1;
+    const hz = ov > 0 ? (st.offsetHeight - ov - 1) / st.offsetHeight : 1;
+    const z = Math.min(1, wz, hz);
+    if (z < 1) st.style.zoom = Math.max(min, z).toFixed(3);
+    return over() <= 0 && st.getBoundingClientRect().width <= el.clientWidth + 1;
+  };
+  if (fitZoom(0.8)) return;
+  // جا برای نمودار خوانا نیست: فقط عددها (ویجت را بزرگ‌تر کنید تا نمودار هم دیده شود)
+  el.classList.add("db-nochart"); el.title = I18N.t("برای دیدن نمودار، ویجت را بزرگ‌تر کنید.");
+  fitZoom(0.55);
 }
 function dbGaugeSvg(v, max, wn, cr, unit, label) {
   const f = v === null || v === undefined ? 0 : Math.max(0, Math.min(1, v / max));

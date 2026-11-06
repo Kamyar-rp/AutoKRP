@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Windows scripts must keep CRLF in every checkout and in GitHub's "Download ZIP" (cmd misreads LF-only .bat files)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

@@ -61,7 +61,7 @@ build.bat
 ```
 
 ## امنیت
-همه‌ی داده‌ها روی دیسک رمزشده‌اند. جزئیات: [SECURITY.md](SECURITY.md) و [شرح کامل فارسی](docs/security-design.fa.md).
+همه‌ی داده‌ها روی دیسک رمزشده‌اند. با «رمز اصلی» (کلاینت) یا در حالت سرور، بدون رمز هیچ داده‌ای باز نمی‌شود، حتی با نسخه‌ی تغییر‌یافته از سورس؛ مگر «باز شدن خودکار» روشن باشد. جزئیات: [SECURITY.md](SECURITY.md) و [شرح کامل فارسی](docs/security-design.fa.md).
 
 ## گزارش مشکل و پیشنهاد
 - مشکل: [گزارش باگ](https://github.com/kamyar-rp/AutoKRP/issues/new?template=bug_report.yml)

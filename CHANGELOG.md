@@ -2,6 +2,24 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.50.0] — 2026-11-06
+
+### Security
+- **Desktop (client) mode with a master password now protects all data, not only the secrets.**
+  - Before 1.50 the master password only locked the vault (API tokens and device passwords). The key for everything else — settings, database, IP history, device list, config backups, logs, monitoring data, My tasks and messages — was kept with Windows DPAPI. Any program running as the same Windows user, for example a modified build of AutoKRP made from the source, could read that data without the password.
+  - Now that key is encrypted with the password-derived key (`.data_key.k`). Without the master password, a user's password or the recovery code, nothing can be opened, even by modified code. Until the password is entered the app shows only the lock screen; nothing else is loaded and no automation runs.
+  - Before sign-in only `.client_auth.json` is readable: for each user the name and their key encrypted with their own password, plus the recovery-code record (encrypted with the code). Roles and settings are not in it, and changes to it (for example showing a disabled user as enabled) are rejected after unlocking.
+  - **Upgrade:** existing data is moved automatically the first time you unlock 1.50 with your password; the old DPAPI key file is overwritten and deleted. Nothing to do. Simple mode (no password) works as before.
+  - Changing the password, enabling/disabling users and the recovery code keep working; an interrupted key change can still be opened with the old or the new password.
+- **Clear warnings for "Open automatically" (desktop) and "Auto-unseal" (server).** While either is on, a key is kept with DPAPI, so any program running as that Windows user / on that server — including a malicious or modified build of AutoKRP — can open all data and secrets and use them against FortiGate, Splunk, Redmine and devices. The security settings now show whether data can be opened without a password.
+- A locked settings file is no longer treated as damaged (it was renamed to `settings.bad.dat` and replaced with defaults if something tried to read it without the key).
+
+### Fixed
+- **Dashboards: chart widgets (port traffic, metrics) show the whole min / average / max / last table without scrolling.** The chart shrinks to the free space; in small widgets the table gets more compact and, if needed, smaller. In a very small widget with many ports only the numbers are shown (a tooltip says to enlarge the widget). Short charts use fewer grid lines so the labels do not overlap.
+
+### Changed
+- Repository: `.bat`, `.cmd` and `.ps1` files always use CRLF line endings (also in GitHub's "Download ZIP"); new runtime files are in `.gitignore`.
+
 ## [1.49.0] — 2026-11-05
 
 ### Added

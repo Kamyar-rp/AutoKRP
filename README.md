@@ -95,7 +95,7 @@ Command-line options: `AutoKRP.exe --help` (`--server`, `--client`, `--demo`, `-
 ## Security
 
 - All data is encrypted at rest: AES-256-GCM for settings and secrets, an SQLCipher database, encrypted run files and backups.
-- Client mode protects the key with Windows DPAPI or a master password (with an optional recovery code). Server mode wraps a master key per user; no DPAPI.
+- Client mode protects the key with Windows DPAPI or a master password (with an optional recovery code); with a master password nothing — settings, database, backups or secrets — can be opened without it. Server mode wraps a master key per user; no DPAPI.
 - HTTPS-only web mode with CSRF protection, strict CSP, lockouts and allowed networks.
 - Nothing is blocked, ticketed or pushed to a device without approval unless you explicitly allow it for a scheduled job.
 

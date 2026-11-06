@@ -2712,9 +2712,10 @@ function renderSplunkPreview() {
 
 /* ================================================================ security: lock screen */
 const MODE_INFO = {
-  simple: ["ساده (بدون رمز)", "کلید با Windows DPAPI روی همین کاربر ویندوز محافظت می‌شود. فایل کپی‌شده جای دیگر باز نمی‌شود، ولی هر برنامه‌ای که با همین کاربر اجرا شود می‌تواند آن را باز کند."],
-  password: ["رمز اصلی", "با هر بار باز کردن برنامه رمز را وارد می‌کنید. کلید با scrypt از رمز ساخته می‌شود و ذخیره نمی‌شود. امن‌ترین حالت."],
+  simple: ["ساده (بدون رمز)", "کلید با Windows DPAPI روی همین کاربر ویندوز محافظت می‌شود. فایل کپی‌شده جای دیگر باز نمی‌شود، ولی هر برنامه‌ای که با همین کاربر اجرا شود (حتی نسخه‌ی تغییر‌یافته‌ی AutoKRP) می‌تواند همه‌ی داده‌ها را باز کند."],
+  password: ["رمز اصلی", "با هر بار باز کردن برنامه رمز را وارد می‌کنید. کلید همه‌ی داده‌ها (تنظیمات، پایگاه داده، پشتیبان‌ها، لاگ‌ها و اسرار) فقط با رمز باز می‌شود و ذخیره نمی‌شود؛ بدون رمز، حتی نسخه‌ی تغییر‌یافته‌ی برنامه چیزی نمی‌بیند. تا وارد کردن رمز هیچ کار خودکاری اجرا نمی‌شود. امن‌ترین حالت."],
 };
+const REMEMBER_WARN = "هشدار: با «باز شدن خودکار» کلید با DPAPI روی دیسک همین کاربر ویندوز می‌ماند و حفاظت رمز اصلی عملاً از بین می‌رود: هر برنامه‌ای که با همین کاربر اجرا شود، از جمله نسخه‌ی مخرب یا تغییر‌یافته‌ی AutoKRP، بدون رمز همه‌ی داده‌ها و اسرار را باز می‌کند. فقط وقتی روشن کنید که کار خودکار بعد از ری‌استارت لازم است و به این کامپیوتر و کاربر ویندوز اعتماد دارید.";
 const LS = { mode: "simple", pw: "", pw2: "", remember: false, sig: "", errs: [], generated: "" };
 /** اگر رمز با «ساخت رمز تصادفی» ساخته شده، قبل از پاک شدن از حافظه یک بار نمایش داده می‌شود. */
 /* ---------------------------------------------------------------- کد بازیابی رمز (1.27.8) */
@@ -2824,7 +2825,7 @@ function pwFields(sec, withRemember = true) {
     <div class="row" style="gap:20px;margin-top:10px;flex-wrap:wrap">
       <label class="chk"><input type="checkbox" id="lsStrong" ${sec.strong_policy ? "checked" : ""}>الزامات رمز قوی (حرف، عدد، علامت، ۱۲ نویسه)</label>
       ${withRemember ? `<label class="chk"><input type="checkbox" id="lsRemember" ${LS.remember ? "checked" : ""}>باز شدن خودکار در این کامپیوتر</label>` : ""}</div>
-    ${withRemember ? `<p class="hint">«باز شدن خودکار» برای کار خودکار بعد از ری‌استارت لازم است. کلید با DPAPI روی همین کاربر ویندوز نگه داشته می‌شود؛ امنیتش مثل حالت ساده است ولی رمز اصلی هم دارید.</p>` : ""}`;
+    ${withRemember ? `<p class="hint warn">${REMEMBER_WARN}</p>` : ""}`;
 }
 function wirePwFields(root, sec) {
   const upd = async () => {
@@ -2960,12 +2961,14 @@ function renderSecurityTab(body) {
   body.innerHTML = `<div class="form"><h3>وضعیت</h3>
       <dl class="kv"><dt>حالت فعلی</dt><dd>${cur[0]}</dd><dt>تعداد اسرار ذخیره‌شده</dt><dd>${num(sec.count)}</dd>
       <dt>رمزنگاری</dt><dd class="ltr">AES-256-GCM · scrypt (n=2^15, r=8, p=1) · padded binary file</dd>
-      ${sec.mode === "password" ? `<dt>باز شدن خودکار</dt><dd>${sec.remember ? "روشن" : "خاموش"}</dd>` : ""}</dl>
+      ${sec.mode === "password" ? `<dt>باز شدن خودکار</dt><dd>${sec.remember ? "روشن" : "خاموش"}</dd>` : ""}
+      <dt>داده‌ها بدون رمز</dt><dd>${sec.mode === "password" && sec.sealed && !sec.remember ? `<span class="tag ok">باز نمی‌شوند</span>` : `<span class="tag warn">با همین کاربر ویندوز باز می‌شوند</span>`}</dd></dl>
       <p class="hint">${cur[1]}</p>
       <div class="row" style="gap:20px;margin-top:10px;flex-wrap:wrap">
         <label class="switch"><input type="checkbox" id="secStrong" ${sec.strong_policy ? "checked" : ""}><span class="track"><span class="thumb"></span></span>الزامات رمز قوی</label>
         ${sec.mode === "password" && (sec.user_count || 0) <= 1 ? `<label class="switch"><input type="checkbox" id="secRemember" ${sec.remember ? "checked" : ""}><span class="track"><span class="thumb"></span></span>باز شدن خودکار در این کامپیوتر</label>` : ""}
         ${sec.mode === "password" ? `<button class="btn sm" id="secLockNow"><svg><use href="#i-lock"/></svg>قفل رابط</button><button class="btn sm danger-ghost" id="secLockFull">قفل کامل (توقف کارهای خودکار)</button>` : ""}</div>
+      ${sec.mode === "password" && (sec.user_count || 0) <= 1 ? `<p class="hint warn" style="margin-top:8px">${REMEMBER_WARN}</p>` : ""}
       ${sec.mode === "password" ? `<p class="hint" style="margin-top:8px">«قفل رابط»: بدون رمز نمی‌توان چیزی دید یا تغییر داد، ولی کارهای زمان‌بندی‌شده ادامه دارند (کلید در حافظه می‌ماند). «قفل کامل»: کلید از حافظه پاک می‌شود و هیچ کار خودکاری تا وارد کردن رمز اجرا نمی‌شود.</p>` : ""}</div>
     ${sec.mode === "password" ? `<div class="form"><h3>قفل خودکار</h3><div class="row" style="gap:10px;align-items:end;flex-wrap:wrap">
       <label class="field"><span>قفل رابط بعد از بی‌کاری (دقیقه، ۰ = خاموش)</span><input type="number" min="0" max="1440" id="secAuto" value="${esc(sec.auto_lock_minutes || 0)}"></label>
@@ -3223,6 +3226,7 @@ async function adRender(body) {
     <p class="hint">بدون این گزینه، بعد از روشن شدن دوباره‌ی سرور همه‌ی داده‌ها قفل‌اند تا یک کاربر محلی وارد شود: مانیتورینگ، کارهای زمان‌بندی‌شده و ورود کاربران AD تا آن موقع کار نمی‌کنند.
       با روشن کردن، کلید اصلی با DPAPI ویندوز (حوزه‌ی همین سیستم، لازم برای اجرای خودکار بدون ذخیره‌ی رمز ویندوز) روی دیسک می‌ماند: هر کس کنترل ویندوز سرور (حساب سرویس یا ادمین ویندوز) را داشته باشد می‌تواند داده‌ها را باز کند.
       دیسک و دسترسی ادمین ویندوز را محافظت کنید. «قفل کامل» این گزینه را خاموش نمی‌کند (بعد از ری‌استارت دوباره باز می‌شود)؛ RESET همه‌چیز از جمله آن را پاک می‌کند.</p>
+    <p class="hint warn">هشدار: با روشن بودن این گزینه، هر برنامه‌ای که روی این سرور اجرا شود، از جمله نسخه‌ی مخرب یا تغییر‌یافته‌ی AutoKRP که کسی جای برنامه بگذارد، بدون هیچ رمزی همه‌ی داده‌ها، توکن‌ها و رمزهای دستگاه‌ها را باز می‌کند و می‌تواند با آن‌ها به FortiGate، Splunk، Redmine و دستگاه‌ها وصل شود. اگر خطر خرابکاری از داخل سازمان یا دسترسی دیگران به این سرور هست، روشن نکنید. بدون این گزینه، بدون رمز یک کاربر هیچ داده‌ای باز نمی‌شود.</p>
     ${us.available ? `<div class="row" style="gap:10px;align-items:end;flex-wrap:wrap"><span class="tag ${us.enabled ? "ok" : "mute"}">${us.enabled ? "روشن است" : "خاموش است"}</span>
       <label class="field"><span>رمز فعلی شما (ادمین محلی)</span><input type="password" class="ltr" id="usPw" data-nodirty></label>
       <button class="btn ${us.enabled ? "danger-ghost" : "primary"}" id="usGo">${us.enabled ? "خاموش کن" : "روشن کن"}</button></div>`
@@ -3450,8 +3454,9 @@ function drawChart(el, labels, series, { type = "bar", height = 220, fmt = null,
   const max = yMax || niceMax(Math.max(1, ...totals.filter((x) => Number.isFinite(x))));
   const cw = (W - L - R) / Math.max(1, n), y = (v) => T + (H - T - B) * (1 - v / max);
   let g = "";
-  for (let k = 0; k <= 4; k++) {
-    const v = (max / 4) * k, yy = y(v);
+  const NT = H - T - B < 90 ? 2 : 4;        // 1.50: نمودار کوتاه (ویجت داشبورد) ← خط‌های کمتر تا برچسب‌ها روی هم نیفتند
+  for (let k = 0; k <= NT; k++) {
+    const v = (max / NT) * k, yy = y(v);
     g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="${c.line}"/><text x="${L - 6}" y="${yy + 4}" text-anchor="end" fill="${c.text}">${esc(F(v))}</text>`;
   }
   const maxLen = Math.max(1, ...labels.map((x) => String(x).length));

@@ -1038,7 +1038,7 @@ class Api:
             return st
         st.update(users_enabled=self._vault.users_enabled(), user_count=len(self._vault.users()),
                   auto_lock_minutes=int(self._settings.get("security", "auto_lock_minutes", default=0) or 0),
-                  recovery=self._vault.recovery_status(), data_dir=str(paths.data_dir()))
+                  recovery=self._vault.recovery_status(), data_dir=str(paths.data_dir()), sealed=atrest.sealed())
         return st
 
     # ------------------------------------------------------------ state

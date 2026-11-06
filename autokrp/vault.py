@@ -172,10 +172,13 @@ def write_secure(path, data: bytes):
 
 # ------------------------------------------------------------------ vault
 class Vault:
+    VAULT_FILE = ".cfg_data.bin"
+    KEY_FILE = ".cfg_key.bin"      # فقط «باز شدن خودکار» (کلید vault با DPAPI)
+
     def __init__(self, settings):
         self.settings = settings
-        self.path = paths.data_dir() / ".cfg_data.bin"
-        self.key_path = paths.data_dir() / ".cfg_key.bin"
+        self.path = paths.data_dir() / self.VAULT_FILE
+        self.key_path = paths.data_dir() / self.KEY_FILE
         self._lock = threading.RLock()
         self._key = None
         self._salt = None
@@ -274,6 +277,41 @@ class Vault:
             else:
                 self._drop_key_file()
             self.settings.update({"security": {"mode": mode, "remember": bool(remember and mode == "password")}})
+            if mode == "password":
+                self._seal_commit(key)
+
+    # ---------------------------------------------------------------- 1.50: کلید داده‌ی کلاینت با رمز (atrest.WRAP_FILE)
+    def _seal_begin(self, key):
+        if not paths.is_server():
+            from . import atrest
+            atrest.seal_begin(key)
+
+    def _seal_commit(self, key):
+        if paths.is_server():
+            return
+        from . import atrest, clientgate
+        atrest.seal_commit(key)
+        clientgate.sync(self.settings)
+
+    def _unseal(self):
+        if paths.is_server():
+            return
+        from . import atrest, clientgate
+        if atrest.sealed() or atrest._wrap_path().exists():
+            atrest.unseal()
+        clientgate.sync(self.settings)
+
+    def _ensure_sealed(self):
+        """پس از باز شدن با رمز: داده‌های نسخه‌های پیش از 1.50 (کلید DPAPI) به کلید وابسته به رمز منتقل می‌شوند."""
+        if paths.is_server() or self.mode != "password" or self._key is None:
+            return
+        from . import atrest
+        try:
+            if not atrest.sealed() or atrest.wrap_count() > 1:
+                self._seal_commit(self._key)
+                log.info("کلید داده‌ها به رمز اصلی بسته شد")
+        except Exception:   # noqa — داده‌ها مثل قبل باز می‌مانند؛ بار بعد دوباره تلاش می‌شود
+            log.exception("seal data key")
 
     def auto_unlock(self):
         """بدون دخالت کاربر: simple، یا password با «باز شدن خودکار». True اگر باز شد."""
@@ -399,6 +437,7 @@ class Vault:
         data = decrypt_blob(key, blob)
         self._key, self._salt, self._data = key, split_blob(blob)[0], data
         self.ui_locked = False
+        self._ensure_sealed()
 
     def lock(self, full=False):
         """full=False: فقط رابط قفل می‌شود و کارهای خودکار ادامه دارند. full=True: کلید از حافظه پاک می‌شود."""
@@ -432,6 +471,8 @@ class Vault:
                     raise VaultError("رمز اصلی شرایط لازم را ندارد: " + "، ".join(errs))
             salt = os.urandom(SALT_LEN)
             key = os.urandom(KEY_LEN) if mode == "simple" else self._key_for(mode, password, salt)
+            if mode == "password":
+                self._seal_begin(key)
             self._persist(key, salt)
             self._recovery_rekey(key, drop=mode != "password")
             self._key, self._salt = key, salt
@@ -440,17 +481,23 @@ class Vault:
             else:
                 self._drop_key_file()
             self.settings.update({"security": {"mode": mode, "remember": bool(remember and mode == "password")}})
+            if mode == "password":
+                self._seal_commit(key)
+            else:
+                self._unseal()
 
     def rekey_random(self):
         """کلید تصادفی تازه (حالت کاربران): همه‌ی اسرار دوباره رمز می‌شوند؛ رمز اصلی قبلی دیگر کار نمی‌کند."""
         with self._lock:
             self._require()
             key, salt = os.urandom(KEY_LEN), os.urandom(SALT_LEN)
+            self._seal_begin(key)
             self._persist(key, salt)
             self._recovery_rekey(key)
             self._key, self._salt = key, salt
             if self.settings.get("security", "remember", default=False):
                 self._store_key(key, salt)
+            self._seal_commit(key)
 
     def set_remember(self, on):
         with self._lock:

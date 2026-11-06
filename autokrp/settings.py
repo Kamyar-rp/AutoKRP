@@ -430,6 +430,8 @@ class Settings:
                         fgc.update(ignore_networks=cur, _ignore_v098=True)
                         self.data["fortigate"] = fgc
                         self.save()
+                except atrest.AtRestError:
+                    raise          # 1.50: کلید هنوز نیست (کلاینت قفل) — فایل خراب نیست و نباید کنار گذاشته شود
                 except Exception:
                     log.exception("فایل تنظیمات خراب است؛ از پیش‌فرض استفاده می‌شود")
                     bad = src.with_name(src.stem + ".bad" + src.suffix)
@@ -514,6 +516,12 @@ class Settings:
             else:
                 sec.pop("recovery", None)
             self.save()
+        self._sync_auth()
+
+    def _sync_auth(self):
+        """1.50: کلاینت با رمز اصلی — کاربران و کد بازیابی در فایل پیش از ورود (clientgate.CLIENT_AUTH)."""
+        from . import clientgate
+        clientgate.sync(self)
 
     def set_redmine_meta(self, meta: dict | None):
         with self._lock:
@@ -543,6 +551,7 @@ class Settings:
         with self._lock:
             self.data["users"] = copy.deepcopy(items)
             self.save()
+        self._sync_auth()
 
     def set_terms(self, key: str, rec: dict):
         """1.39: پذیرش متن استفاده (key خالی = همین نصب دسکتاپ؛ در حالت سرور نام کاربر). فقط از terms_accept."""

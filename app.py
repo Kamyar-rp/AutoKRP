@@ -740,61 +740,73 @@ def main():
             message_box(paths.L("برنامه از قبل باز است.", "AutoKRP is already running."))
         return 0
     from autokrp import atrest
-    try:
-        atrest.key()
-    except atrest.AtRestError as e:
-        message_box(str(e))
-        return 1
-    marker = paths.data_dir() / ".atrest_v1"
-    if not marker.exists():
-        atrest.migrate_plain_files()   # داده‌های ساده‌ی نسخه‌های قبل؛ پیش از باز شدن فایل لاگ
-        marker.write_bytes(b"")
-    setup_logging()
+    sealed = atrest.sealed()        # 1.50: کلاینت با رمز اصلی — کلید داده فقط با رمز باز می‌شود
+    if not sealed:
+        try:
+            atrest.key()
+        except atrest.AtRestError as e:
+            message_box(str(e))
+            return 1
+        marker = paths.data_dir() / ".atrest_v1"
+        if not marker.exists():
+            atrest.migrate_plain_files()   # داده‌های ساده‌ی نسخه‌های قبل؛ پیش از باز شدن فایل لاگ
+            marker.write_bytes(b"")
+    setup_logging()                 # پیش از باز شدن: لاگ‌ها در حافظه تا کلید برسد
 
     import webview
-    from autokrp.api import Api
-    from autokrp.settings import Settings
-    from autokrp.store import Store
-    from autokrp.worker import Worker
-
-    from autokrp.vault import Vault
+    from autokrp import clientgate
 
     import time as _t
     from autokrp import memdiag
     boot = memdiag.BOOT
     tb = _t.perf_counter()
-    settings = Settings()
-    vault = Vault(settings)
-    settings.attach_vault(vault)
-    vault.auto_unlock()          # حالت ساده، متغیر محیطی، یا رمز اصلی با «باز شدن خودکار»
-    boot["settings+vault"] = _t.perf_counter() - tb
-    store = open_store(Store)
-    boot["store"] = _t.perf_counter() - tb
-    if store is None:
-        return 1
-    worker = Worker(settings, store, demo=args.demo)
-    api = Api(settings, store, worker, demo=args.demo, vault=vault)
-    worker.start()
-    boot["worker"] = _t.perf_counter() - tb
+    ui = {"window": None}
 
-    name = (settings.get("branding", "app_name") or "AutoKRP") + (" — Demo" if args.demo else "")
+    def on_ready(api):
+        """Api واقعی ساخته شد (همان ابتدا یا پس از وارد کردن رمز): نام/آیکن پنجره و memdiag."""
+        w = ui["window"]
+        if w is None:
+            return
+        try:
+            name = (api._settings.get("branding", "app_name") or "AutoKRP") + (" — Demo" if args.demo else "")
+            w.set_title(name)
+            icon = api._settings.get("branding", "icon_file")
+            if icon and ui.get("shown"):
+                from autokrp.winicon import apply_icon
+                apply_icon(w, str(paths.data_dir() / "branding" / icon))
+        except Exception:
+            pass
+        if args.memdiag or args.memdiag_trace:
+            logging.getLogger("autokrp.app").warning("memdiag on: %s", memdiag.start(w, paths.logs_dir(), api._store, trace=args.memdiag_trace))
+
+    gate = clientgate.start(demo=args.demo, open_store=open_store, on_ready=on_ready)
+    boot["settings+vault+store"] = _t.perf_counter() - tb
+    if gate is None:
+        return 1
+    real = gate._g_real
+    name = ((real._settings.get("branding", "app_name") if real else "") or "AutoKRP") + (" — Demo" if args.demo else "")
     memdiag.patch_pywebview()           # رفع نشت pywebview (یک ورودی برای هر فراخوانی API)
-    window = webview.create_window(name, str(paths.ui_dir() / "index.html"), js_api=api,
+    window = webview.create_window(name, str(paths.ui_dir() / "index.html"), js_api=gate,
                                    width=1360, height=860, min_size=(1080, 680), background_color="#101c2a",
                                    text_select=True)   # انتخاب متن با ماوس و کپی با Ctrl+C
-    api._set_window(window)
-    if args.memdiag or args.memdiag_trace:
-        logging.getLogger("autokrp.app").warning("memdiag on: %s", memdiag.start(window, paths.logs_dir(), store, trace=args.memdiag_trace))
+    ui["window"] = window
+    gate._set_window(window)
+    if real is not None and (args.memdiag or args.memdiag_trace):
+        logging.getLogger("autokrp.app").warning("memdiag on: %s", memdiag.start(window, paths.logs_dir(), real._store, trace=args.memdiag_trace))
     import threading as _th
-    start_control({"headless": False}, _th.Event(), on_show=api._show_window)
+    start_control({"headless": False}, _th.Event(), on_show=lambda: gate._show_window())
     # بستن پنجره وقتی مانیتورینگ فعال است: برنامه در پس‌زمینه می‌ماند (خروج کامل از دکمه‌ی «خروج کامل»)
-    window.events.closing += api._on_closing
-    tray = _start_tray(api, name) if sys.platform == "win32" else None
+    def on_closing():
+        return gate._on_closing()
+    window.events.closing += on_closing
+    tray = _start_tray(gate, name) if sys.platform == "win32" else None
 
     def on_shown():
+        ui["shown"] = True
         boot["window shown"] = _t.perf_counter() - tb
         logging.getLogger("autokrp.app").info("startup: %s", " ".join(f"{k}={v:.1f}s" for k, v in boot.items()))
-        icon = settings.get("branding", "icon_file")
+        api = gate._g_real
+        icon = api._settings.get("branding", "icon_file") if api else None
         if icon:
             from autokrp.winicon import apply_icon
             apply_icon(window, str(paths.data_dir() / "branding" / icon))
@@ -807,8 +819,10 @@ def main():
                 tray.stop()
             except Exception:
                 pass
-        worker.stop()
-        store.close()   # ذخیره‌ی نهایی رمزشده‌ی پایگاه داده
+        api = gate._g_real
+        if api is not None:
+            api._worker.stop()
+            api._store.close()   # ذخیره‌ی نهایی رمزشده‌ی پایگاه داده
     return 0
 
 

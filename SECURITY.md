@@ -23,7 +23,8 @@ A full description in Persian is in [docs/security-design.fa.md](docs/security-d
 - Files are written atomically (unique temp file, fsync, replace). Exported CSV files are protected against formula injection.
 
 ### Key protection
-- **Client mode:** a random key protected by Windows **DPAPI** (bound to the Windows user), or derived from a **master password** with scrypt and never stored. An optional **recovery code** (160-bit, shown once) can reset the master password without losing data.
+- **Client mode:** a random key protected by Windows **DPAPI** (bound to the Windows user), or derived from a **master password** with scrypt and never stored. With a master password (since 1.50) the key of **all** data — settings, database, backups, logs, run files, not only the secrets — is wrapped with the password-derived key, so nothing can be opened without the password, a user's password or the recovery code, even by a modified build of the app running as the same Windows user. An optional **recovery code** (160-bit, shown once) can reset the master password without losing data.
+- **"Open automatically" (client) / "auto-unseal" (server)** keep a key with DPAPI so automation can start after a reboot. While enabled, any program running as that Windows user / on that server — including a malicious or modified build of AutoKRP — can open all data and secrets without a password. Keep them off where insider tampering is a concern.
 - **Server mode:** a random master key is wrapped separately for every user with a key derived from that user's password; without a valid sign-in nothing can be decrypted. DPAPI is not used. The first admin account and a full reset are only possible from the server itself (localhost).
 - Two lock levels: UI lock (key stays in memory for scheduled jobs) and full lock (keys removed from memory, jobs stop). Failed unlock attempts back off exponentially and are logged.
 
@@ -52,7 +53,8 @@ A full description in Persian is in [docs/security-design.fa.md](docs/security-d
 - A full reset (type `RESET`) is only possible from inside the app by an admin with their own password — never from the lock or sign-in screen. Secret files are overwritten before deletion.
 
 ### Known limitations
-- While the app is unlocked, keys are in memory; malware running as the same Windows user can read them or use that user's DPAPI. Encryption protects against **copied files**, not against malicious code on the same account.
+- While the app is unlocked, keys are in memory; malware running as the same Windows user can read them. In simple mode or with "open automatically" it can also use that user's DPAPI.
+- A password cannot protect against a modified build that the user unlocks: it receives the password when it is typed. Run only the released exe (check its SHA-256) and keep the program folder writable only by administrators.
 - Python cannot guarantee that every copy of a key is wiped from RAM after a full lock.
 - If both the master password and the recovery code are lost, the data cannot be recovered.
 - The released exe is not code-signed yet; verify its SHA-256 against the value published with the release.

@@ -7,7 +7,6 @@ window.pywebview.api با یک shim به POST /api/<method> وصل می‌شود
 import json
 import os
 import sys
-import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -17,21 +16,10 @@ os.environ.setdefault("LOCALAPPDATA", str(ROOT / "dev" / "_data"))
 
 from autokrp import paths  # noqa: E402
 paths.set_demo(True)
-from autokrp.api import Api  # noqa: E402
-from autokrp.settings import Settings  # noqa: E402
-from autokrp.store import Store  # noqa: E402
-from autokrp.worker import Worker  # noqa: E402
+from autokrp import clientgate  # noqa: E402
 
-from autokrp.vault import Vault  # noqa: E402
-
-settings = Settings()
-vault = Vault(settings)
-settings.attach_vault(vault)
-vault.auto_unlock()
-store = Store()
-worker = Worker(settings, store, demo=True)
-api = Api(settings, store, worker, demo=True, vault=vault)
-worker.start()
+# مثل app.py (1.50): Gate — با رمز اصلی تا وارد کردن رمز هیچ داده‌ای باز نمی‌شود
+api = clientgate.start(demo=True)
 
 SHIM = """<script>
 window.pywebview = { api: new Proxy({}, { get: (_, name) => (...args) =>

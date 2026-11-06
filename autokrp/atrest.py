@@ -54,15 +54,132 @@ def set_key(k):
 
 def has_key() -> bool:
     with _lock:
-        return _override is not None if _server else True
+        if _server:
+            return _override is not None
+        return _override is not None or not sealed()
 
 
 def _key_path() -> Path:
     return paths.data_dir() / KEY_FILE
 
 
+# ------------------------------------------------------------ 1.50: کلاینت با رمز اصلی («مهر شده»)
+# کلید داده (D) دیگر با DPAPI نگه داشته نمی‌شود؛ با کلید vault (K، مشتق از رمز اصلی یا باز‌شده با رمز یک کاربر)
+# رمز می‌شود و در WRAP_FILE می‌ماند. بدون رمز، هیچ برنامه‌ای (حتی نسخه‌ی تغییر‌یافته از همین سورس) D را ندارد.
+# قالب: WRAP_MAGIC + تعداد (۱ بایت) + هر ورودی [nonce ۱۲ بایت][D رمزشده + tag] (AAD = WRAP_MAGIC).
+# چند ورودی فقط در لحظه‌ی عوض شدن K (کلید قبلی و تازه) تا قطع شدن برق وسط کار داده را قفل نکند.
+WRAP_FILE = ".data_key.k"
+WRAP_MAGIC = b"AKRPK1"
+_WRAP_ENTRY = NONCE_LEN + 32 + 16
+
+
+def _wrap_path() -> Path:
+    return paths.data_dir() / WRAP_FILE
+
+
+def sealed() -> bool:
+    """کلاینت با رمز اصلی: کلید داده فقط با رمز باز می‌شود. وجود هم‌زمان فایل DPAPI = تغییر حالت نیمه‌کاره (هنوز ساده)."""
+    if _server:
+        return False
+    d = paths.data_dir()
+    return (d / WRAP_FILE).exists() and not (d / KEY_FILE).exists()
+
+
+def _read_wraps(p=None):
+    raw = (p or _wrap_path()).read_bytes()
+    if raw[:len(WRAP_MAGIC)] != WRAP_MAGIC or len(raw) < len(WRAP_MAGIC) + 1:
+        raise AtRestError("فایل کلید داده‌ها خراب است.")
+    n = raw[len(WRAP_MAGIC)]
+    body = raw[len(WRAP_MAGIC) + 1:]
+    if n < 1 or len(body) != n * _WRAP_ENTRY:
+        raise AtRestError("فایل کلید داده‌ها خراب است.")
+    return [body[i * _WRAP_ENTRY:(i + 1) * _WRAP_ENTRY] for i in range(n)]
+
+
+def _wrap_one(k, d):
+    nonce = os.urandom(NONCE_LEN)
+    return nonce + AESGCM(k).encrypt(nonce, d, WRAP_MAGIC)
+
+
+def _write_wraps(entries):
+    from .vault import write_secure
+    write_secure(_wrap_path(), WRAP_MAGIC + bytes([len(entries)]) + b"".join(entries))
+
+
+def wrap_count() -> int:
+    try:
+        return len(_read_wraps())
+    except (OSError, AtRestError):
+        return 0
+
+
+def open_sealed(k: bytes) -> bool:
+    """کلید داده با کلید vault. True اگر باز شد (کلید فقط در حافظه)."""
+    global _override, _key_dir, _key
+    if not k or len(k) != 32:
+        return False
+    with _lock:
+        for e in _read_wraps():
+            try:
+                d = AESGCM(bytes(k)).decrypt(e[:NONCE_LEN], e[NONCE_LEN:], WRAP_MAGIC)
+            except InvalidTag:
+                continue
+            if len(d) == 32:
+                _override, _key_dir, _key = d, paths.data_dir(), None
+                return True
+        return False
+
+
+def seal_begin(k: bytes):
+    """پیش از عوض شدن K: ورودی تازه کنار ورودی‌های قبلی (اگر کار نیمه‌کاره بماند، هر دو رمز کار می‌کنند)."""
+    with _lock:
+        d = key()
+        old = _read_wraps() if _wrap_path().exists() else []
+        _write_wraps([_wrap_one(bytes(k), d)] + old[:3])
+
+
+def seal_commit(k: bytes):
+    """فقط K؛ فایل DPAPI کلید داده حذف می‌شود. از این به بعد بدون رمز داده‌ای باز نمی‌شود."""
+    global _override, _key_dir, _key
+    with _lock:
+        d = key()
+        _write_wraps([_wrap_one(bytes(k), d)])
+        _override, _key_dir, _key = d, paths.data_dir(), None
+        p = _key_path()
+        if p.exists():
+            shred(p)
+
+
+def unseal():
+    """برگشت به حالت ساده (بدون رمز): کلید داده دوباره با DPAPI."""
+    global _override, _key_dir, _key
+    from .vault import write_secure
+    with _lock:
+        d = key()
+        write_secure(_key_path(), dpapi.protect(d))
+        _key, _key_dir, _override = d, paths.data_dir(), None
+        if _wrap_path().exists():
+            shred(_wrap_path())
+
+
+def shred(p):
+    """بازنویسی با داده‌ی تصادفی و حذف (بهترین تلاش؛ روی SSD تضمینی نیست)."""
+    try:
+        n = p.stat().st_size
+        with open(p, "r+b") as f:
+            f.write(os.urandom(n))
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError:
+        pass
+    try:
+        p.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def key() -> bytes:
-    """کلید داده. حالت کلاینت: DPAPI. حالت سرور: کلید در حافظه پس از ورود."""
+    """کلید داده. حالت کلاینت: DPAPI، یا با رمز اصلی (sealed). حالت سرور: کلید در حافظه پس از ورود."""
     global _key, _key_dir
     with _lock:
         if _server:
@@ -70,8 +187,12 @@ def key() -> bytes:
                 raise AtRestError("برای دسترسی به داده‌ها باید وارد شوید.")
             return _override
         d = paths.data_dir()
+        if _override is not None and _key_dir == d:
+            return _override
         if _key is not None and _key_dir == d:
             return _key
+        if sealed():
+            raise AtRestError("برنامه قفل است؛ داده‌ها فقط با رمز اصلی باز می‌شوند.")
         p = d / KEY_FILE
         if p.exists():
             try:
