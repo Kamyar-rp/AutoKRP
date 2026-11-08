@@ -115,6 +115,13 @@ const I18N = (() => {
     if (wrap && (wrap[1] || wrap[3]) && wrap[2]) {
       cands.push(wrap[1].replace("«", "“") + core(wrap[2], depth + 1) + wrap[3].replace("»", "”").replace("؟", "?"));
     }
+    // 1.51: نقطه‌ی پایانی بعد از پرانتز («… بررسی کنید).»)
+    if (/\)\.$/.test(k)) { const b = k.slice(0, -1), tb = core(b, depth + 1); if (tb !== b) cands.push(tb + "."); }
+    // 1.51: متن + عدد («سیاست‌های پایش 3») یا عدد + متن («4.4٪ یک هسته»)
+    const tn = k.match(/^([\s\S]*[^\s\d.,٫%٪])\s+([-+]?[\d.,٫]+\s?[%٪]?)$/);
+    if (tn && FA.test(tn[1])) { const h = core(tn[1], depth + 1); if (h !== tn[1]) cands.push(`${h} ${tn[2].replace("٪", "%")}`); }
+    const ln = k.match(/^([-+]?[\d.,٫]+\s?[%٪]?)\s+(\S[\s\S]*)$/);
+    if (ln && FA.test(ln[2])) { const tl = core(ln[2], depth + 1); if (tl !== ln[2]) cands.push(`${ln[1].replace("٪", "%")} ${tl}`); }
     // کلمه‌به‌کلمه، فقط اگر همه‌ی کلمه‌های فارسی ترجمه‌ی دقیق دارند (مثل «آبان 1404»)
     const toks = k.split(" ");
     if (toks.length > 1 && toks.every((x) => !FA.test(x) || exact.has(x))) cands.push(toks.map((x) => (FA.test(x) ? exact.get(x) : x)).join(" "));

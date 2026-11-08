@@ -480,6 +480,30 @@ window.monCloseAsk = async function () {
   if (!x.ok) toast(x.error, "error");
 };
 
+/** 1.51: بستن پنجره وقتی رابط قفل است و مانیتورینگ کار می‌کند: پس‌زمینه بدون رمز، بستن کامل فقط با رمز ادمین */
+window.monCloseAskLocked = async function () {
+  if (modalClose) modalClose(null);
+  const users = !!(S.state && S.state.security && S.state.security.users_enabled);
+  const r = await openModal({ title: "بستن برنامه", overLock: true,
+    body: `<p>برنامه قفل است ولی مانیتورینگ کار می‌کند. با بستن کامل، بررسی‌ها و هشدار قطعی متوقف می‌شوند.</p>
+      <p class="hint">${users ? "«ادامه در پس‌زمینه» رمز نمی‌خواهد. «بستن کامل» در حالت قفل فقط با نام و رمز یک ادمین انجام می‌شود." : "«ادامه در پس‌زمینه» رمز نمی‌خواهد. «بستن کامل» در حالت قفل فقط با رمز اصلی انجام می‌شود."}</p>
+      ${users ? `<div class="field"><label>نام کاربری</label><input class="input ltr" id="mcU" autocomplete="off"></div>` : ""}
+      <div class="field"><label>رمز (فقط برای بستن کامل)</label><input class="input ltr" id="mcP" type="password" autocomplete="off"></div>
+      <p class="test-res err" id="mcErr"></p>`,
+    foot: `<button class="btn ghost" data-r="cancel">انصراف</button><button class="btn danger-ghost" data-r="quit">بستن کامل</button><button class="btn primary" data-r="background">ادامه در پس‌زمینه</button>`,
+    onOpen: (m, close) => $$("[data-r]", m).forEach((b) => (b.onclick = async () => {
+      const a = b.dataset.r;
+      if (a === "cancel") return close(null);
+      if (a === "background") { const x = await api("app_hide_locked"); if (!x.ok) toast(x.error, "error"); return close(null); }
+      b.disabled = true;
+      const x = await api("app_quit_locked", $("#mcP", m).value, users ? $("#mcU", m).value.trim() : "");
+      b.disabled = false;
+      if (x.ok) return close(null);
+      $("#mcErr", m).textContent = I18N.t(x.error || ""); $("#mcP", m).value = ""; $("#mcP", m).focus();
+    })) });
+  return r;
+};
+
 /* ---------------------------------------------------------------- 1.24: وابستگی و پنجره‌ی نگهداری */
 function monParentOpts(t) {
   // هدف مشترک فقط به هدف مشترک؛ هدف شخصی به مشترک یا شخصی همان کاربر؛ نه خودش و نه فرزندانش

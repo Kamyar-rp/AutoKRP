@@ -1,0 +1,22 @@
+{
+ "بدون رمز و توکن": "without passwords and tokens",
+ "یک هسته": "of one core",
+ "{0}٪ کل": "{0}% total",
+ "رشد {0}/روز": "growth {0}/day",
+ "در v3 رمز یا الگوریتم priv اشتباه هم همین نتیجه را می‌دهد (برای AES-192/256 نوع «Cisco» و «استاندارد» را امتحان کنید)": "In v3 a wrong priv password or algorithm gives the same result (for AES-192/256 try both the “Cisco” and “standard” types)",
+ "دستگاه به SNMP پاسخ نداد (آدرس، پورت UDP، community/کاربر، ACL یا فایروال را بررسی کنید). در v3 رمز یا الگوریتم priv اشتباه هم همین نتیجه را می‌دهد (برای AES-192/256 نوع «Cisco» و «استاندارد» را امتحان کنید)": "The device did not answer SNMP (check the address, UDP port, community/user, ACL or firewall). In v3 a wrong priv password or algorithm gives the same result (for AES-192/256 try both the “Cisco” and “standard” types)",
+ "«قفل رابط»: بدون رمز نمی‌توان چیزی دید یا تغییر داد، ولی کارهای زمان‌بندی‌شده ادامه دارند (کلید در حافظه می‌ماند). «قفل کامل»: کلید اسرار از حافظه پاک می‌شود و هیچ کار خودکاری تا وارد کردن رمز اجرا نمی‌شود؛ داده‌هایی که برنامه باز کرده تا بستن برنامه در حافظه‌ی همین برنامه می‌مانند (برای پاک شدن کامل، برنامه را ببندید).": "“Lock UI”: nothing can be seen or changed without the password, but scheduled tasks keep running (the key stays in memory). “Full lock”: the secrets key is cleared from memory and no automation runs until the password is entered; data the app has already opened stays in this app's memory until it is closed (close the app to clear it completely).",
+ "«کانون» فقط دستگاه انتخاب‌شده و دستگاه‌های وصل به آن (عمق ۲: یک لایه‌ی دیگر) را بزرگ و خوانا نشان می‌دهد؛ لینک قطع قرمز ضخیم است.": "“Focus” shows only the selected device and the devices linked to it (depth 2: one more layer), large and readable; a down link is thick and red.",
+ "برنامه قفل است ولی مانیتورینگ کار می‌کند. با بستن کامل، بررسی‌ها و هشدار قطعی متوقف می‌شوند.": "The app is locked but monitoring is running. Quitting completely stops the checks and outage alerts.",
+ "بستن کامل از صفحه‌ی قفل؛ مانیتورینگ متوقف شد": "Quit completely from the lock screen; monitoring stopped",
+ "دستگاه مرکزی": "Central device",
+ "رمز (فقط برای بستن کامل)": "Password (only to quit completely)",
+ "رمز اشتباه است (بستن کامل در حالت قفل فقط با رمز ادمین).": "Wrong password (while locked, quitting completely needs an admin password).",
+ "رمز اشتباه برای بستن کامل از صفحه‌ی قفل": "Wrong password to quit completely from the lock screen",
+ "عمق": "Depth",
+ "لینک قطع": "link down",
+ "کانون: یک دستگاه و همسایه‌ها": "Focus: one device and its neighbours",
+ "گره انتخاب‌شده در این نقشه نیست؛ با ⚙ دوباره انتخاب کنید.": "The selected node is not in this map; choose again with ⚙.",
+ "«ادامه در پس‌زمینه» رمز نمی‌خواهد. «بستن کامل» در حالت قفل فقط با نام و رمز یک ادمین انجام می‌شود.": "“Keep running in background” needs no password. While locked, “Close completely” needs an admin's user name and password.",
+ "«ادامه در پس‌زمینه» رمز نمی‌خواهد. «بستن کامل» در حالت قفل فقط با رمز اصلی انجام می‌شود.": "“Keep running in background” needs no password. While locked, “Close completely” needs the master password."
+}

@@ -89,7 +89,7 @@ def hidden_modes():
 PUBLIC = {"get_state", "security_status", "security_unlock", "security_check_password", "security_recover",
           "js_error", "ui_perf", "save_ui", "ui_touch", "get_settings", "terms_status", "terms_accept"}
 # همه‌ی نقش‌ها (دیدن)
-READ = {"app_close_choice", "mon_list", "mon_state", "mon_report", "mon_snmp_live", "mon_snmp_series", "mon_icons", "mon_sound_get", "mon_check_now",
+READ = {"app_close_choice", "app_hide_locked", "app_quit_locked", "mon_list", "mon_state", "mon_report", "mon_snmp_live", "mon_snmp_series", "mon_icons", "mon_sound_get", "mon_check_now",
         "get_run", "list_ips", "repeat_ips", "ip_detail", "get_stats", "list_history", "history_view", "jobs_list", "get_about", "security_lock",
         "security_change_own", "whoami", "asset_list", "asset_get", "asset_changes", "asset_history",
         "mon_maint_list", "mon_noc", "mon_events_query", "mon_topo", "mon_pol_list", "mon_rows", "mon_tpl_list", "mon_noc_list", "mon_snmp_ifheat",

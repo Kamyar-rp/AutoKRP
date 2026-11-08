@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 log = logging.getLogger(__name__)
-SENSITIVE_SUFFIXES = (".bin", ".dat", ".db", ".db-wal", ".db-shm", ".sdb", ".sdb-wal", ".sdb-shm", ".pre122", ".json", ".csv", ".log", ".txt")
+SENSITIVE_SUFFIXES = (".bin", ".dat", ".db", ".db-wal", ".db-shm", ".sdb", ".sdb-wal", ".sdb-shm", ".pre122", ".json", ".csv", ".log", ".txt", ".k")
 
 
 def _unhide(p):

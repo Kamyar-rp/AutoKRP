@@ -305,11 +305,13 @@ class Vault:
         """پس از باز شدن با رمز: داده‌های نسخه‌های پیش از 1.50 (کلید DPAPI) به کلید وابسته به رمز منتقل می‌شوند."""
         if paths.is_server() or self.mode != "password" or self._key is None:
             return
-        from . import atrest
+        from . import atrest, clientgate
         try:
             if not atrest.sealed() or atrest.wrap_count() > 1:
                 self._seal_commit(self._key)
                 log.info("کلید داده‌ها به رمز اصلی بسته شد")
+            else:
+                clientgate.sync(self.settings)     # 1.51: اگر نوشتن قبلی فایل پیش از ورود ناموفق بوده، با هر باز شدن درست می‌شود
         except Exception:   # noqa — داده‌ها مثل قبل باز می‌مانند؛ بار بعد دوباره تلاش می‌شود
             log.exception("seal data key")
 

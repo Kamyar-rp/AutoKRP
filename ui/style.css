@@ -369,7 +369,7 @@ html, body { overflow: hidden; }
 [dir="ltr"] .switch input:checked + .track .thumb { transform: translateX(16px); }
 [dir="ltr"] .bigswitch input:checked + .track .thumb { transform: translateX(26px); }
 html[lang="en"] body, html[lang="en"] button, html[lang="en"] input, html[lang="en"] select, html[lang="en"] textarea,
-html[lang="en"] .chart svg text { font-family: "Vazir", "Segoe UI", Tahoma, sans-serif; }
+html[lang="en"] svg text { font-family: "Vazir", "Segoe UI", Tahoma, sans-serif; }   /* 1.51: همه‌ی نمودارها (ویجت داشبورد هم) با ارقام لاتین */
 .lang-btn { display: inline-flex; align-items: center; gap: 6px; }
 .lang-btn svg { width: 15px; height: 15px; }
 .chip.tech { font-family: "Vazir", sans-serif; }
@@ -1084,6 +1084,7 @@ html[dir=rtl] .db-rs { cursor: nesw-resize; }
 .db-wb.db-cmp .ch-stats { font-size: 10.5px; margin-top: 1px; } .db-wb.db-cmp .ch-stats th, .db-wb.db-cmp .ch-stats td { padding: 0 4px; line-height: 1.2; }
 .db-wb.db-cmp .ch-stats td i { width: 8px; height: 8px; margin-inline-end: 4px; }
 .db-wb.db-nochart > svg { display: none; }
+.db-wb .db-mapbad { position: absolute; inset-inline-start: 8px; top: 6px; background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); border-radius: 10px; padding: 0 9px; font-size: 12px; font-weight: 600; pointer-events: none; }
 .db-wb .ch-stats th, .db-wb .ch-stats td { white-space: nowrap; }
 .db-wb .ch-stats { width: auto; min-width: 100%; }
 .db-wb .ch-stats th:not(:first-child), .db-wb .ch-stats td:not(:first-child) { width: auto; }

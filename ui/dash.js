@@ -391,7 +391,12 @@ const DB_RENDER = {
     if (!g || !g.ok) { el.innerHTML = `<div class="db-hint">${esc((g && g.error) || "")}</div>`; return; }
     const st = await dbFetch(`ms|${mid}`, 14000, () => api("mon_map_status", mid));
     if (!el.isConnected) return;
-    el.innerHTML = dbMapSvg(g, st && st.ok ? st : null);
+    // 1.51: «کانون» = یک گره و همسایه‌هایش با چیدمان خودکار؛ «همه» = کل نقشه. هر دو با حالت فشرده در ویجت کوچک
+    const sub = c.view === "focus" && c.focus ? dbMapFocus(g.data, c.focus, Number(c.depth) === 2 ? 2 : 1, Math.max(1, Math.min(3.2, el.clientWidth / Math.max(60, el.clientHeight) / 1.25))) : null;
+    const gg = sub ? { ...g, data: sub } : g, stt = st && st.ok ? st : null;
+    const down = (gg.data.links || []).filter((l) => stt && stt.links[l.id] && ["down", "dev"].includes(stt.links[l.id].st)).length;
+    el.innerHTML = (c.view === "focus" && c.focus && !sub ? `<div class="db-hint">${esc(I18N.t("گره انتخاب‌شده در این نقشه نیست؛ با ⚙ دوباره انتخاب کنید."))}</div>` : dbMapSvg(gg, stt, { w: el.clientWidth, h: el.clientHeight }))
+      + (down ? `<span class="db-mapbad" title="${esc(I18N.t("لینک قطع"))}">${num(down)} ${esc(I18N.t("لینک قطع"))}</span>` : "");
   },
   clock(w, el, c) {
     const now = new Date();
@@ -478,13 +483,52 @@ function dbSpark(vals) {
   const line = pts.map(([i, v]) => `${((i / n) * W).toFixed(1)},${(H - 2 - ((v - mn) / sp) * (H - 6)).toFixed(1)}`).join(" ");
   return `<svg class="db-spk" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${line}"/></svg>`;
 }
-/** نمای سبک یک نقشه (بدون ویرایش): لینک‌ها با رنگ وضعیت/بار، گره‌ها با رنگ وضعیت */
-function dbMapSvg(g, st) {
+/** 1.51 «کانون»: گره مرکزی + همسایه‌ها تا عمق ۱ یا ۲، چیدمان دایره‌ای خودکار (جهت هر همسایه مثل نقشه‌ی اصلی).
+ *  همان شناسه‌های گره و لینک (وضعیت از mon_map_status). null اگر گره نیست. */
+function dbMapFocus(D, fid, depth, sx = 1.5) {
+  const nn = new Map((D.nodes || []).map((n) => [n.id, n])), C = nn.get(fid);
+  if (!C || C.t === "area" || C.t === "text") return null;
+  const adj = new Map();
+  for (const l of D.links || []) { for (const [a, b] of [[l.a, l.b], [l.b, l.a]]) { if (!adj.has(a)) adj.set(a, new Set()); adj.get(a).add(b); } }
+  const ang = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
+  const out = [{ ...C, x: 0, y: 0, size: "l", label: C.label }], lv1 = [...(adj.get(fid) || [])].map((id) => nn.get(id)).filter(Boolean);
+  lv1.sort((a, b) => ang(C, a) - ang(C, b));
+  const n1 = lv1.length, R1 = Math.max(120, n1 * 30), seen = new Set([fid]);
+  lv1.forEach((n, i) => { const a = n1 === 1 ? ang(C, n) : -Math.PI / 2 + (i * 2 * Math.PI) / n1; out.push({ ...n, x: R1 * Math.cos(a) * sx, y: R1 * Math.sin(a), size: "m", _a: a }); seen.add(n.id); });
+  if (depth === 2) {
+    for (const p of out.slice(1)) {
+      const kids = [...(adj.get(p.id) || [])].filter((id) => !seen.has(id)).map((id) => nn.get(id)).filter(Boolean);
+      kids.sort((a, b) => ang(nn.get(p.id), a) - ang(nn.get(p.id), b));
+      const spread = Math.min(Math.PI / 1.6, (2 * Math.PI) / Math.max(n1, 1) * 0.85), R2 = Math.max(R1 + 130, (110 * Math.max(0, kids.length - 1)) / spread);
+      kids.forEach((k, j) => {
+        const a = p._a + (kids.length === 1 ? 0 : -spread / 2 + (j * spread) / (kids.length - 1));
+        out.push({ ...k, x: R2 * Math.cos(a) * sx, y: R2 * Math.sin(a), size: "s" }); seen.add(k.id);
+      });
+    }
+  }
+  const links = (D.links || []).filter((l) => seen.has(l.a) && seen.has(l.b));
+  return { ...D, nodes: out, links };
+}
+/** نمای سبک یک نقشه (بدون ویرایش): لینک‌ها با رنگ وضعیت/بار، گره‌ها با رنگ وضعیت.
+ *  sc = مقیاس نمایش (پیکسل صفحه به ازای واحد نقشه). 1.51 حالت فشرده: اگر کوچک است، گره/لینک/نوشته بزرگ‌تر می‌شوند
+ *  تا روی صفحه از یک حد کوچک‌تر نشوند و نام فقط برای گره‌های مشکل‌دار می‌آید. */
+function dbMapSvg(g, st, box) {
+  const vb0 = nmFitBox(g.data);
+  // k: بزرگ‌نمایی گره/لینک/نوشته تا گره‌ی معمولی روی صفحه حدود ۳۴px شود (مقیاس با حاشیه‌ی اضافه دوباره حساب می‌شود)
+  const scale = (k) => { const p = (k - 1) * 46; return box && box.w && box.h ? Math.min(box.w / (vb0.w + 2 * p), box.h / (vb0.h + 2 * p)) : 1; };
+  // سقف k: گره‌های بزرگ‌شده روی هم نیفتند (کمترین فاصله‌ی دو گره در خود نقشه)
+  const P = (g.data.nodes || []).filter((n) => n.t !== "area" && n.t !== "text").slice(0, 300);
+  let dmin = Infinity;
+  for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) dmin = Math.min(dmin, Math.hypot(P[i].x - P[j].x, P[i].y - P[j].y));
+  const kMax = Math.max(1, Math.min(4, isFinite(dmin) ? (0.8 * dmin) / 44 : 4));
+  let k = 1;
+  for (let i = 0; i < 8; i++) k = Math.max(1, Math.min(kMax, 34 / (44 * scale(k))));
+  const names = 13 * k * scale(k) >= 9;
   const D = g.data, devs = new Map((g.devices || []).map((d) => [d.id, d])), maps = new Map((g.maps || []).map((m) => [m.id, m]));
   const NS = (n) => (st && st.nodes[n.id]) || { st: n.t === "dev" || n.t === "map" ? "unknown" : "x" };
   const name = (n) => n.label || (n.t === "dev" ? ((devs.get(n.tid) || {}).name || NS(n).name || "?") : n.t === "map" ? ((maps.get(n.map) || {}).name || "?") : n.t === "cloud" ? I18N.t("اینترنت") : "");
   const icon = (n) => n.t === "cloud" ? n.icon || "internet" : n.icon || (n.t === "dev" && (devs.get(n.tid) || {}).icon) || "other";
-  const vb = nmFitBox(D);
+  const pad = (k - 1) * 46, vb = { x: vb0.x - pad, y: vb0.y - pad, w: vb0.w + 2 * pad, h: vb0.h + 2 * pad };
   let s = "";
   for (const n of D.nodes.filter((x) => x.t === "area")) {
     const c = NM_AREA_C[n.color] || NM_AREA_C.blue;
@@ -499,17 +543,20 @@ function dbMapSvg(g, st) {
     else if (ls.st === "off") { cls += " mute"; dash = "2 5"; }
     else if (ls.util != null) col = NM_UC(ls.util);
     else cls += " nodata";
-    s += `<line x1="${L.x1}" y1="${L.y1}" x2="${L.x2}" y2="${L.y2}" class="${cls}" stroke-width="4" ${dash ? `stroke-dasharray="${dash}"` : ""} ${col ? `style="stroke:${col}"` : ""}><title>${esc((L.l.pa || "") + " ⇄ " + (L.l.pb || ""))}</title></line>`;
+    const bad = ls.st === "down" || ls.st === "dev";
+    if (bad && dash) dash = dash.split(" ").map((v) => +v * k).join(" ");
+    s += `<line x1="${L.x1}" y1="${L.y1}" x2="${L.x2}" y2="${L.y2}" class="${cls}" stroke-width="${(bad ? 6 : 4) * k}" ${dash ? `stroke-dasharray="${dash}"` : ""} ${col ? `style="stroke:${col}"` : ""}><title>${esc((L.l.pa || "") + " ⇄ " + (L.l.pb || ""))}</title></line>`;
   }
   for (const n of D.nodes.filter((x) => x.t !== "area")) {
     if (n.t === "text") { s += `<text x="${n.x}" y="${n.y}" class="nm-text" style="font-size:${NM_TSZ[n.size] || 17}px" text-anchor="middle" dominant-baseline="middle">${esc(n.label)}</text>`; continue; }
-    const ns = NS(n), z = NM_SZ[n.size] || 44, h = z / 2, cls = n.t === "dev" || n.t === "map" ? NM_NCLS[ns.st] || "mute" : "ext";
+    const ns = NS(n), z = (NM_SZ[n.size] || 44) * k, h = z / 2, cls = n.t === "dev" || n.t === "map" ? NM_NCLS[ns.st] || "mute" : "ext";
+    const prob = ["down", "warn", "unreachable"].includes(ns.st);
     const ic = n.t === "map" ? NM_MAPIC : icon(n) === "core" ? NM_CORE : MON_ICON_SVG[icon(n)] || MON_ICON_SVG.other;
     const nm = name(n);
-    s += `<g class="nm-node ${cls}"><title>${esc(nm)}</title>${ns.st === "down" ? `<circle cx="${n.x}" cy="${n.y}" r="${h + 13}" class="nm-halo"/>` : ""}
+    s += `<g class="nm-node ${cls}"><title>${esc(nm)}</title>${ns.st === "down" ? `<circle cx="${n.x}" cy="${n.y}" r="${h + 13 * k}" class="nm-halo"/>` : ""}
       <rect x="${n.x - h}" y="${n.y - h}" width="${z}" height="${z}" rx="${n.t === "cloud" ? h : 9}" class="nm-nb"/>
       <svg x="${n.x - h * 0.72}" y="${n.y - h * 0.72}" width="${z * 0.72}" height="${z * 0.72}" viewBox="0 0 24 24" class="nm-ic" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ic}</svg>
-      <text x="${n.x}" y="${n.y + h + 16}" class="nm-name${/^[\x20-\x7e]+$/.test(nm) ? " ltr" : ""}" text-anchor="middle">${esc(nm)}</text></g>`;
+      ${names || prob ? `<text x="${n.x}" y="${n.y + h + 16 * k}" class="nm-name${/^[\x20-\x7e]+$/.test(nm) ? " ltr" : ""}" text-anchor="middle" style="font-size:${(13 * k).toFixed(1)}px;stroke-width:${(4 * k).toFixed(1)}px">${esc(nm)}</text>` : ""}</g>`;
   }
   return `<svg class="db-map" viewBox="${vb.x} ${vb.y} ${vb.w} ${vb.h}" preserveAspectRatio="xMidYMid meet" data-no-i18n>${s}</svg>`;
 }
@@ -745,7 +792,11 @@ async function dbCfg(wid) {
   if (T === "problems") extra += `<label class="chk"><input type="checkbox" id="dcM" ${c.maint ? "checked" : ""}>هدف‌های در حال نگهداری هم نمایش داده شوند</label>`;
   if (T === "events") extra += `<div class="field"><label>نوع</label>${dbChips("dcEk", [["trap", "Trap"], ["syslog", "Syslog"]], c.kinds || [], true)}</div>
     <div class="field"><label>سطح (هیچ = همه)</label>${dbChips("dcEs", [["crit", "بحرانی"], ["warn", "هشدار"], ["info", "اطلاع"], ["ok", "برطرف"]], c.sev || [], true)}</div>${nF(20, 100)}`;
-  if (T === "map") extra += `<div class="field"><label>نقشه</label><select class="input" id="dcMp"><option value="">…</option></select></div>`;
+  if (T === "map") extra += `<div class="field"><label>نقشه</label><select class="input" id="dcMp"><option value="">…</option></select></div>
+    <div class="field"><label>نما</label>${dbChips("dcMv", [["all", "کل نقشه"], ["focus", "کانون: یک دستگاه و همسایه‌ها"]], c.view === "focus" ? "focus" : "all", false)}</div>
+    <div class="row" style="gap:12px" id="dcMfw"><div class="field" style="flex:2"><label>دستگاه مرکزی</label><select class="input" id="dcMf"><option value="">…</option></select></div>
+      <div class="field"><label>عمق</label>${dbChips("dcMd", [["1", "1"], ["2", "2"]], String(Number(c.depth) === 2 ? 2 : 1), false)}</div></div>
+    <p class="hint">«کانون» فقط دستگاه انتخاب‌شده و دستگاه‌های وصل به آن (عمق ۲: یک لایه‌ی دیگر) را بزرگ و خوانا نشان می‌دهد؛ لینک قطع قرمز ضخیم است.</p>`;
   if (T === "clock") extra += `<label class="chk"><input type="checkbox" id="dcS" ${c.sec ? "checked" : ""}>نمایش ثانیه</label>`;
   if (T === "text") extra += `<div class="field"><label>متن</label><textarea class="input" id="dcX" rows="4" maxlength="300">${esc(c.text || "")}</textarea></div>
     <div class="row" style="gap:12px"><div class="field"><label>اندازه</label>${dbChips("dcZ", [["s", "کوچک"], ["m", "متوسط"], ["l", "بزرگ"]], c.size || "m", false)}</div>
@@ -772,12 +823,29 @@ async function dbCfg(wid) {
       };
       if ($("#dcT", m)) $("#dcT", m).onchange = loadPorts;
       loadPorts();
+      // 1.51: گره‌های نقشه‌ی انتخاب‌شده برای «کانون»
+      const loadFocus = async () => {
+        const F = $("#dcMf", m); if (!F) return;
+        const mid = Number($("#dcMp", m).value);
+        $("#dcMfw", m).style.display = dbChipVal(m, "dcMv") === "focus" ? "" : "none";
+        if (!mid) { F.innerHTML = `<option value="">—</option>`; return; }
+        const g = await api("mon_map_get", mid);
+        if (!F.isConnected) return;
+        const devs = new Map(((g.ok && g.devices) || []).map((d) => [d.id, d])), maps = new Map(((g.ok && g.maps) || []).map((x) => [x.id, x]));
+        const nm = (n) => n.label || (n.t === "dev" ? (devs.get(n.tid) || {}).name : n.t === "map" ? (maps.get(n.map) || {}).name : n.t === "cloud" ? I18N.t("اینترنت") : "") || "?";
+        const deg = new Map(); for (const l of (g.ok && g.data.links) || []) for (const x of [l.a, l.b]) deg.set(x, (deg.get(x) || 0) + 1);
+        const N = g.ok ? g.data.nodes.filter((n) => !["area", "text"].includes(n.t)).sort((a, b) => (deg.get(b.id) || 0) - (deg.get(a.id) || 0) || nm(a).localeCompare(nm(b))) : [];
+        F.innerHTML = N.length ? N.map((n) => `<option value="${esc(n.id)}" ${n.id === c.focus && mid === Number(c.map) ? "selected" : ""} data-no-i18n>${esc(nm(n))} (${num(deg.get(n.id) || 0)} ${esc(I18N.t("لینک"))})</option>`).join("")
+          : `<option value="">—</option>`;
+      };
       if ($("#dcMp", m)) api("mon_map_list").then((r) => {
         const s = $("#dcMp", m); if (!s) return;
         const L = r.ok ? r.maps || [] : [];
         s.innerHTML = L.length ? `<option value="">—</option>` + L.map((x) => `<option value="${x.id}" ${x.id === Number(c.map) ? "selected" : ""} data-no-i18n>${esc(x.name)}</option>`).join("")
           : `<option value="">${esc(I18N.t(r.ok ? "هنوز نقشه‌ای ساخته نشده است." : r.error || ""))}</option>`;
+        s.onchange = loadFocus; loadFocus();
       });
+      if ($("#dcMv", m)) $("#dcMv", m).addEventListener("click", () => setTimeout(loadFocus));
       $$("[data-r]", m).forEach((b) => (b.onclick = () => {
         if (b.dataset.r !== "1") { close(null); return; }
         const o = {}, g = (id) => $("#" + id, m);
@@ -789,7 +857,7 @@ async function dbCfg(wid) {
         if (g("dcN")) o.n = Math.max(1, Math.min(100, Number(g("dcN").value) || 0)) || undefined;
         if (g("dcM")) o.maint = g("dcM").checked;
         if (g("dcEk")) { o.kinds = dbChipVal(m, "dcEk"); o.sev = dbChipVal(m, "dcEs"); }
-        if (g("dcMp")) o.map = Number(g("dcMp").value) || 0;
+        if (g("dcMp")) { o.map = Number(g("dcMp").value) || 0; o.view = dbChipVal(m, "dcMv"); o.focus = g("dcMf").value || ""; o.depth = Number(dbChipVal(m, "dcMd")) || 1; }
         if (g("dcS")) o.sec = g("dcS").checked;
         if (g("dcX")) { o.text = g("dcX").value; o.size = dbChipVal(m, "dcZ"); o.align = dbChipVal(m, "dcA"); }
         if (g("dcG")) { o.grp = g("dcG").value; o.tids = [...g("dcTs").selectedOptions].map((x) => Number(x.value)); }

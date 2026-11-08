@@ -2,6 +2,22 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.51.0] — 2026-11-08
+
+### Added
+- **Dashboards — map widget "Focus" view.** Pick a central device (for example the core router) and depth 1 or 2: the widget shows only that device and the devices linked to it, laid out automatically around it and large enough to read. A down link is thick, red and dashed, and the number of down links is shown on the widget.
+- **Map widgets stay readable when small.** Nodes, links and labels no longer shrink below a readable size (without overlapping); when space is tight, names are shown only for devices with a problem (hover for the rest).
+
+### Changed
+- **Closing the window while the interface is locked** no longer quits silently and stops monitoring. The usual "Close the app" dialog appears on top of the lock screen: "Keep running in background" needs no password; "Close completely" needs the master password (or an admin's user name and password) and is recorded in History. A full lock still closes directly, because monitoring is already stopped.
+- The "Full lock" description now says that data the app has already opened stays in its memory until it is closed.
+
+### Fixed
+- English UI: several texts stayed in Persian — the "Export configuration package" history entry, the App CPU / data size figures on the health card, the SNMP "no answer" outage reason with the v3 hint, and numbers followed or preceded by Persian words in general.
+- English UI: chart axes in dashboard widgets showed Persian digits.
+- Desktop with a master password: when the terms of use change, they are now asked again after unlocking (before, the check ran while the app was still locked and was skipped).
+- The sign-in file of a password-protected desktop (`.client_auth.json`) is re-created on every unlock if an earlier write failed; RESET also overwrites `.data_key.k` before deleting it.
+
 ## [1.50.0] — 2026-11-06
 
 ### Security

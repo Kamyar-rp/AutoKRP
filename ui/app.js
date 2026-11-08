@@ -151,13 +151,13 @@ new MutationObserver((muts) => {
 
 /* ---------------------------------------------------------------- modal */
 let modalClose = null;
-function openModal({ title, body, foot = "", wide = false, onOpen }) {
+function openModal({ title, body, foot = "", wide = false, onOpen, overLock = false }) {
   const back = $("#modalBack"), m = $("#modal");
   m.className = "modal" + (wide ? " wide" : "");
   m.innerHTML = `<div class="m-head"><h2>${esc(title)}</h2><button class="m-close" aria-label="بستن"><svg><use href="#i-x"/></svg></button></div>
     <div class="m-body">${body}</div>${foot ? `<div class="m-foot">${foot}</div>` : ""}`;
   back.hidden = false;
-  back.classList.toggle("over-noc", !!document.getElementById("noc"));   // 1.37: پنجره روی NOC هم دیده شود (مثلاً «بستن برنامه»)
+  back.classList.toggle("over-noc", !!document.getElementById("noc") || overLock);   // 1.37: روی NOC؛ 1.51: روی صفحه‌ی قفل («بستن برنامه»)
   clearTips();
   return new Promise((resolve) => {
     modalClose = (v) => { clearTips(); back.hidden = true; m.innerHTML = ""; m._dirty = false; modalClose = null; back.classList.remove("over-noc"); resolve(v); };
@@ -2492,6 +2492,7 @@ function termsHtml(r, lang, gate) {
     <div class="terms-bye" id="trmBye" hidden>${u.bye}</div>` : ""}</div>`;
 }
 async function termsGate() {
+  if (document.getElementById("terms")) return;
   let r;
   try { r = await api("terms_status"); } catch (_) { return; }
   if (!r || !r.ok || !r.need) return;
@@ -2791,7 +2792,7 @@ function wireRecover(root) {
     const r = await api("security_recover", $("#rvCode", root).value, pw, u ? u.value.trim() : "");
     if (!r.ok) { er.textContent = r.error; return; }
     await recoveryShow(r, "رمز عوض شد و برنامه باز شد. کد بازیابی قبلی دیگر کار نمی‌کند؛ این کد تازه را ذخیره کنید.");
-    roleSig = ""; LS.sig = ""; await refreshState(); loadSettings();
+    roleSig = ""; LS.sig = ""; await refreshState(); loadSettings(); termsGate();
   });
 }
 function recoveryNag() {   // 1.27.8: یادآوری غیرمزاحم (نه پنجره): ادمینِ حالت رمز بدون کد بازیابی
@@ -2902,6 +2903,7 @@ function renderLock(sec) {
       const r = await api("security_unlock", $("#lsUnlock", card).value, u ? u.value.trim() : "");
       if (!r.ok) { $("#lsErr", card).textContent = r.error; $("#lsUnlock", card).select(); return; }
       $("#lsUnlock", card).value = ""; roleSig = ""; LS.sig = ""; await refreshState(); loadSettings();
+      termsGate();     // 1.51: کلاینت با رمز اصلی پیش از باز شدن، پذیرش شرایط را نمی‌داند ← بعد از باز شدن دوباره بررسی
     });
     $("#lsOpen", card).onclick = go;
     $("#lsUnlock", card).onkeydown = (e) => { if (e.key === "Enter") go(); };
@@ -2969,7 +2971,7 @@ function renderSecurityTab(body) {
         ${sec.mode === "password" && (sec.user_count || 0) <= 1 ? `<label class="switch"><input type="checkbox" id="secRemember" ${sec.remember ? "checked" : ""}><span class="track"><span class="thumb"></span></span>باز شدن خودکار در این کامپیوتر</label>` : ""}
         ${sec.mode === "password" ? `<button class="btn sm" id="secLockNow"><svg><use href="#i-lock"/></svg>قفل رابط</button><button class="btn sm danger-ghost" id="secLockFull">قفل کامل (توقف کارهای خودکار)</button>` : ""}</div>
       ${sec.mode === "password" && (sec.user_count || 0) <= 1 ? `<p class="hint warn" style="margin-top:8px">${REMEMBER_WARN}</p>` : ""}
-      ${sec.mode === "password" ? `<p class="hint" style="margin-top:8px">«قفل رابط»: بدون رمز نمی‌توان چیزی دید یا تغییر داد، ولی کارهای زمان‌بندی‌شده ادامه دارند (کلید در حافظه می‌ماند). «قفل کامل»: کلید از حافظه پاک می‌شود و هیچ کار خودکاری تا وارد کردن رمز اجرا نمی‌شود.</p>` : ""}</div>
+      ${sec.mode === "password" ? `<p class="hint" style="margin-top:8px">«قفل رابط»: بدون رمز نمی‌توان چیزی دید یا تغییر داد، ولی کارهای زمان‌بندی‌شده ادامه دارند (کلید در حافظه می‌ماند). «قفل کامل»: کلید اسرار از حافظه پاک می‌شود و هیچ کار خودکاری تا وارد کردن رمز اجرا نمی‌شود؛ داده‌هایی که برنامه باز کرده تا بستن برنامه در حافظه‌ی همین برنامه می‌مانند (برای پاک شدن کامل، برنامه را ببندید).</p>` : ""}</div>
     ${sec.mode === "password" ? `<div class="form"><h3>قفل خودکار</h3><div class="row" style="gap:10px;align-items:end;flex-wrap:wrap">
       <label class="field"><span>قفل رابط بعد از بی‌کاری (دقیقه، ۰ = خاموش)</span><input type="number" min="0" max="1440" id="secAuto" value="${esc(sec.auto_lock_minutes || 0)}"></label>
       <button class="btn" id="secAutoSave">ذخیره</button></div><p class="hint">کارهای زمان‌بندی‌شده بعد از قفل ادامه دارند.</p></div>` : ""}
@@ -3504,7 +3506,7 @@ function drawChart(el, labels, series, { type = "bar", height = 220, fmt = null,
     }).join("")}</tbody></table>`;
   }
   el.innerHTML = `${stats && line ? "" : `<div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}</div>`}
-    <svg viewBox="0 0 ${W} ${H}" direction="ltr" xmlns="http://www.w3.org/2000/svg" font-family="VazirUI, Tahoma, sans-serif" font-size="11" class="${zoom ? "zoomable" : ""}">${g}${marks}${xh}${hits}</svg>${st}`;
+    <svg viewBox="0 0 ${W} ${H}" direction="ltr" xmlns="http://www.w3.org/2000/svg" font-family="${I18N.lang === "en" ? "Vazir, Segoe UI, Tahoma, sans-serif" : "VazirUI, Tahoma, sans-serif"}" font-size="11" class="${zoom ? "zoomable" : ""}">${g}${marks}${xh}${hits}</svg>${st}`;
   const svg = el.querySelector("svg"), xhl = svg.querySelector(".xh"), zr = svg.querySelector(".zsel");
   el._xh = (i) => { if (!xhl) return; if (i === null || i < 0 || i >= n) { xhl.setAttribute("visibility", "hidden"); return; } const x = L + cw * i + cw / 2; xhl.setAttribute("x1", x); xhl.setAttribute("x2", x); xhl.setAttribute("visibility", "visible"); };
   el._times = times;

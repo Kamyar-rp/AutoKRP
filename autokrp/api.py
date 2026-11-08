@@ -42,7 +42,7 @@ IPC_TTL = 10              # ثانیه: کمترین فاصله‌ی شمارش 
 UNLOCK_FREE_TRIES = 5     # بعد از این تعداد رمز اشتباه، مکث تصاعدی: 30، 60، 120 … ثانیه
 UNLOCK_MAX_WAIT = 900
 UI_LOCK_ALLOW = {"get_state", "get_settings", "security_status", "security_unlock", "security_check_password", "terms_status", "terms_accept",
-                 "security_recover", "save_ui", "js_error", "ui_perf", "ui_touch"}   # 1.27.8: RESET از صفحه‌ی قفل نه
+                 "security_recover", "save_ui", "js_error", "ui_perf", "ui_touch", "app_hide_locked", "app_quit_locked"}   # 1.27.8: RESET از صفحه‌ی قفل نه
 
 
 # متدهای مخصوص حالت کلاینت؛ در حالت سرور کلید/کاربران از serverauth مدیریت می‌شوند و پنجره‌ی دسکتاپ نیست
@@ -5203,18 +5203,22 @@ class Api:
             active = "monitor" in perms.enabled_features(self._settings) and any(t.get("enabled") for t in self._store.mon_targets())
         except Exception:
             active = False
-        if not active or action == "quit":
+        if not active:
             return True
-        locked = self._vault is not None and (self._vault.ui_locked or not self._vault.unlocked())
+        if self._vault is not None and not self._vault.unlocked():
+            return True             # قفل کامل: مانیتورینگ از قبل متوقف است
+        ui_locked = self._vault is not None and self._vault.ui_locked
         if action == "background":
             self._go_background()
             return False
-        if locked:                  # رابط قفل است و پرسیدن ممکن نیست: مثل قبل بسته می‌شود
+        if action == "quit" and not ui_locked:
             return True
-        # پرسیدن در خود پنجره (پس از برگشتن از رویداد closing؛ صدا زدن پنجره داخل همین رویداد قفل می‌کند)
+        # پرسیدن در خود پنجره (پس از برگشتن از رویداد closing؛ صدا زدن پنجره داخل همین رویداد قفل می‌کند).
+        # 1.51: رابط قفل (مانیتورینگ ادامه دارد): پنجره روی صفحه‌ی قفل؛ «بستن کامل» فقط با رمز (کسی که پشت سیستم قفل است
+        # نتواند مانیتورینگ را متوقف کند)، حتی اگر «بستن = خروج» انتخاب شده باشد
+        js = "window.monCloseAskLocked && window.monCloseAskLocked()" if ui_locked else "window.monCloseAsk && window.monCloseAsk()"
         w = self._window
-        threading.Thread(target=lambda: (time.sleep(0.15), w and w.evaluate_js("window.monCloseAsk && window.monCloseAsk()")),
-                         daemon=True).start()
+        threading.Thread(target=lambda: (time.sleep(0.15), w and w.evaluate_js(js)), daemon=True).start()
         return False
 
     def _go_background(self):
@@ -5244,6 +5248,41 @@ class Api:
             self._hidden = False
             self._window.show()
             self._window.restore()
+
+    @_safe
+    def app_hide_locked(self):
+        """1.51: رابط قفل ← «ادامه در پس‌زمینه» (بدون رمز؛ مانیتورینگ ادامه دارد)."""
+        if paths.is_server():
+            raise ConnectorError("این بخش در حالت سرور در دسترس نیست.")
+        self._go_background()
+        return {}
+
+    @_safe
+    def app_quit_locked(self, password="", username=""):
+        """1.51: رابط قفل ← «بستن کامل» فقط با رمز اصلی یا رمز یک ادمین (مانیتورینگ متوقف می‌شود)."""
+        if paths.is_server():
+            raise ConnectorError("این بخش در حالت سرور در دسترس نیست.")
+        v = self._vault
+        t0 = time.time()
+        if v is None or not v.unlocked():
+            ok, who = True, ""
+        elif v.users_enabled():
+            rec = v.find_user(username or "")
+            ok = bool(rec and not rec.get("disabled") and rec.get("role") == "admin" and v.verify_user(rec["username"], password or ""))
+            who = rec["username"] if rec else ""
+            if not ok and rec is None:
+                derive_key(password or "x", b"0" * 16)
+        else:
+            ok, who = v.verify_master(password or ""), ""
+        if not ok:
+            time.sleep(max(0.0, 1.0 - (time.time() - t0)))
+            self._store.add_history("security", "بستن کامل", "failed", "رمز اشتباه برای بستن کامل از صفحه‌ی قفل")
+            raise ConnectorError("رمز اشتباه است (بستن کامل در حالت قفل فقط با رمز ادمین).")
+        self._store.add_history("security", "بستن کامل", "ok", "بستن کامل از صفحه‌ی قفل؛ مانیتورینگ متوقف شد", user=who)
+        self._quitting = True
+        w = self._window
+        threading.Thread(target=lambda: (time.sleep(0.3), w and w.destroy()), daemon=True).start()
+        return {}
 
     @_safe
     def app_quit(self):
