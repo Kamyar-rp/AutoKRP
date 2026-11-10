@@ -87,6 +87,39 @@ def installed() -> bool:
         return False
 
 
+def task_program():
+    """1.52: فایل اجرایی تسک اجرای خودکار (برای تشخیص تسکی که هنوز به exe قابل‌حمل قبلی اشاره می‌کند)."""
+    if not supported():
+        return None
+    try:
+        r = _run([_sys32("schtasks.exe"), "/query", "/tn", TASK, "/xml"], timeout=20)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    raw = r.stdout or b""
+    for enc in (("utf-16",) if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else ()) + ("utf-8", "mbcs", "latin-1"):
+        try:
+            txt = raw.decode(enc)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    else:
+        return None
+    import re
+    from xml.sax.saxutils import unescape
+    m = re.search(r"<Command>(.*?)</Command>", txt, re.S)
+    return unescape(m.group(1).strip()) if m else None
+
+
+def same_program(path) -> bool:
+    exe = program()[0]
+    try:
+        return os.path.normcase(str(Path(path).resolve())) == os.path.normcase(str(Path(exe).resolve()))
+    except OSError:
+        return os.path.normcase(str(path)) == os.path.normcase(exe)
+
+
 def task_xml(user, data_root):
     exe, base, wd = program()
     args = _cmdline(base + ["--server", "--headless", "--data-root", str(data_root)])

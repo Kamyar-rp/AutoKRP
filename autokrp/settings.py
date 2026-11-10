@@ -70,8 +70,8 @@ Review the addresses left for manual review."""
 # رنج‌های مستثنا، سقف بسط CIDR و سناریوها (fg_scenarios) مشترک‌اند و فقط در «fortigate» نگه داشته می‌شوند.
 FG_EXTRA = tuple(f"fortigate{i}" for i in range(2, 9))
 FG_DEV_FIELDS = ("name", "address", "port", "auth_type", "header_name", "username", "vdom", "verify_ssl", "pin_cert",
-                 "ban_expiry", "address_count", "convert_auto_bans", "timeout", "check_json_status")
-FG_SHARED = ("ignore_networks", "max_cidr_expand")
+                 "ban_expiry", "ban_days", "address_count", "convert_auto_bans", "timeout", "check_json_status")
+FG_SHARED = ("ignore_networks", "max_cidr_expand", "ban_rules")
 PIN_CONNS = ("splunk", "abuseipdb", "fortigate", "redmine") + FG_EXTRA
 # رنج‌های غیرعمومی که بلاک کردنشان معنا ندارد. پیش‌فرض‌اند و کاربر می‌تواند از فیلد حذفشان کند.
 NONPUBLIC_NETWORKS = [
@@ -179,6 +179,8 @@ DEFAULTS = {
         "name": "",
         "address": "", "port": "", "auth_type": "bearer", "username": "",
         "vdom": "root", "verify_ssl": False, "pin_cert": True, "ban_expiry": 0, "address_count": 10000,
+        # 1.54: مدت بلاک به روز (۰ = دائم). ban_expiry (ثانیه) دیگر در رابط نیست و در conn_config از ban_days ساخته می‌شود.
+        "ban_days": 0, "ban_rules": [],
         # IPی که در Banned هست ولی بلاک خودکار (IPS، Application Control، ...) یا با انقضاست ← Administrative دائمی (با تأیید)
         "convert_auto_bans": True,
         "timeout": 10, "max_cidr_expand": 256, "check_json_status": True,
@@ -421,6 +423,18 @@ class Settings:
                         self.data["fg_scenarios"] = [fgtask.from_steps(t) if isinstance(t, dict) and "code" not in t else t
                                                      for t in self.data["fg_scenarios"]]
                         self.save()
+                    if isinstance(raw, dict) and not raw.get("_ban_days_v154"):
+                        # 1.54: expiry بلاک از ثانیه به روز (رو به بالا)؛ یک بار
+                        for conn in ("fortigate",) + FG_EXTRA:
+                            rc = raw.get(conn)
+                            if isinstance(rc, dict) and "ban_days" not in rc:
+                                try:
+                                    secs = int(float(rc.get("ban_expiry") or 0))
+                                except (TypeError, ValueError):
+                                    secs = 0
+                                self.data.setdefault(conn, {})["ban_days"] = min(3650, -(-max(0, secs) // 86400))
+                        self.data["_ban_days_v154"] = True
+                        self.save()
                     fgc = self.data.get("fortigate") or {}
                     # مهاجرت تنظیمات نصب‌های قدیمی: افزودن رنج‌های غیرعمومی (یک بار؛ بعد از آن انتخاب کاربر حفظ می‌شود)
                     if not fgc.get("_ignore_v098"):
@@ -640,6 +654,11 @@ class Settings:
             cfg.update({k: main.get(k) for k in FG_SHARED})
         if conn == "fortigate" or conn in FG_EXTRA:
             cfg["_conn"] = conn
+            try:
+                cfg["ban_days"] = max(0, int(cfg.get("ban_days") or 0))
+            except (TypeError, ValueError):
+                cfg["ban_days"] = 0
+            cfg["ban_expiry"] = cfg["ban_days"] * 86400       # FortiGate ثانیه می‌خواهد
         for k in SECRET_KEYS.get(conn, []):
             cfg[k] = clean_secret(k, self.secret(conn, k))
         if override:

@@ -24,7 +24,9 @@ _IP_FIELDS_V2 = [   # ستون‌های جدول ips در مهاجرت _m2 (ثا
 ]
 # ابزار «بررسی تکمیلی» (1.11): نتیجه‌ی فید/لیست داخلی جدا از AbuseIPDB
 INTEL_FIELDS = ["intel_status", "intel_source", "intel_detail", "intel_at"]
-IP_FIELDS = _IP_FIELDS_V2 + INTEL_FIELDS
+# 1.54 بلاک موقت: fw_until = زمان پایان بلاکی که خود برنامه زده ("YYYY-MM-DD HH:MM:SS"؛ خالی = دائم/نامعلوم)، fw_days = مدت به روز
+FW_FIELDS = ["fw_until", "fw_days"]
+IP_FIELDS = _IP_FIELDS_V2 + INTEL_FIELDS + FW_FIELDS
 
 
 def _m1(c):
@@ -338,7 +340,15 @@ def _m24(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_todo_msgs_rcpt ON todo_msgs(recipient, read_at)")
 
 
-MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17, _m18, _m19, _m20, _m21, _m22, _m23, _m24]
+def _m25(c):
+    """1.54: بلاک موقت FortiGate — زمان پایان و مدت (روز) بلاکی که خود برنامه زده."""
+    have = {r[1] for r in c.execute("PRAGMA table_info(ips)")}
+    for col in FW_FIELDS:
+        if col not in have:
+            c.execute(f"ALTER TABLE ips ADD COLUMN {col} TEXT")   # nosec B608 — نام‌های ثابت
+
+
+MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17, _m18, _m19, _m20, _m21, _m22, _m23, _m24, _m25]
 # ستون‌هایی که مهاجرت‌ها اضافه می‌کنند؛ هر بار باز شدن بررسی می‌شود و اگر نباشد اضافه می‌شود
 # (پایگاه داده‌ای که شماره‌ی نسخه‌اش جلوتر از ستون‌هایش است، مثلاً بازگردانی فایل قدیمی، دیگر خطا نمی‌دهد)
 REQUIRED_COLUMNS = {
@@ -347,7 +357,7 @@ REQUIRED_COLUMNS = {
                     "protocol": "TEXT DEFAULT 'ssh'"},
     "history": {"user": "TEXT"},
     "runs": {"log": "TEXT"},
-    "ips": {c: "TEXT" for c in INTEL_FIELDS},
+    "ips": {c: "TEXT" for c in INTEL_FIELDS + FW_FIELDS},
     "mon_targets": {"snmp": "TEXT", "cred_id": "INTEGER", "parent_id": "INTEGER", "cert_days": "INTEGER DEFAULT 0",
                     "policy_id": "INTEGER", "tpl": "TEXT DEFAULT ''"},
     "mon_events": {"kind": "TEXT DEFAULT 'down'"},
@@ -454,7 +464,7 @@ class Store:
         legacy = False
         conf = dbmysql.load_conf() if use_conf else None
         if conf:
-            self.backend = dbmysql.MySQLBackend(conf)
+            self.backend = dbmysql.backend_for(conf)
             self.backend.open()
             try:
                 ver = self._load_backend(self.db, self.backend)
@@ -650,9 +660,10 @@ class Store:
         """انتقال به MySQL در حال اجرا. پایگاه داده‌ی خالی ← داده‌ی فعلی منتقل می‌شود؛ دارای داده ← فقط با use_existing
         (داده‌ی فعلی کنار گذاشته و داده‌ی MySQL بارگذاری می‌شود)."""
         cur = self.backend
-        if cur and (cur.conf["host"], int(cur.conf["port"]), cur.conf["database"]) == (conf["host"], int(conf["port"]), conf["database"]):
+        key = lambda c: (c.get("backend") or "mysql", c["host"], int(c["port"]), c["database"])   # noqa: E731
+        if cur and key(cur.conf) == key(conf):
             return self._reconnect(conf)
-        be = dbmysql.MySQLBackend(conf)
+        be = dbmysql.backend_for(conf)
         meta = be.open()
         try:
             has = bool(meta.get("saved"))
@@ -719,7 +730,7 @@ class Store:
         with self._lock:
             self.flush()
             cur.close()                       # قفل آزاد شود تا اتصال تازه بگیردش
-            be = dbmysql.MySQLBackend(conf)
+            be = dbmysql.backend_for(conf)
             try:
                 be.open()
             except Exception:
@@ -1010,13 +1021,16 @@ class Store:
         now = time.strftime("%Y-%m-%d %H:%M:%S")
         gone, found = [], []
         with self._lock:
-            rows = self.db.execute("SELECT ip, fw_status FROM ips").fetchall()
+            rows = self.db.execute("SELECT ip, fw_status, fw_until, fw_days FROM ips").fetchall()
             self.db.execute("BEGIN")
             try:
-                for ip, st in rows:
+                for ip, st, until, days in rows:
                     if st in ("banned", "already") and ip not in cur:
-                        self.db.execute("UPDATE ips SET fw_status='unbanned', fw_detail=?, fw_at=? WHERE ip=?",
-                                        ("دیگر در لیست Banned فورتی‌گیت نیست (برداشته یا منقضی شد)", now, ip))
+                        # 1.54: بلاک موقتِ خود برنامه که زمانش رسیده (با یک ساعت تلورانس ساعت دستگاه) ← «مدت تمام شد»
+                        ended = bool(until) and str(until) <= time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + 3600))
+                        self.db.execute("UPDATE ips SET fw_status='unbanned', fw_detail=?, fw_at=?, fw_until='', fw_days='' WHERE ip=?",
+                                        (f"مدت بلاک موقت ({days or '?'} روز) تمام شد و FortiGate آن را برداشت" if ended
+                                         else "دیگر در لیست Banned فورتی‌گیت نیست (برداشته یا منقضی شد)", now, ip))
                         gone.append(ip)
                     elif ip in cur and st not in ("banned", "already"):
                         b = cur[ip]
@@ -1060,6 +1074,32 @@ class Store:
         """ستون‌های لازم برای شمارش‌های داشبورد (تاپل، بدون dict)."""
         with self._lock:
             return self.db.execute("SELECT abuse_status, score, is_whitelisted, fw_status, checked_at, review FROM ips").fetchall()
+
+    def fw_timed(self):
+        """{ip: روز} برای بلاک‌های موقتی که خود برنامه زده و هنوز تمام نشده‌اند (1.54)."""
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        out = {}
+        with self._lock:
+            rows = self.db.execute("SELECT ip, fw_days FROM ips WHERE COALESCE(fw_until, '') > ? "
+                                   "AND fw_status IN ('banned', 'already')", (now,)).fetchall()
+        for ip, d in rows:
+            try:
+                out[ip] = int(d or 0)
+            except (TypeError, ValueError):
+                out[ip] = 0
+        return out
+
+    def ips_info(self, ips, fields="ip, country_code, score, isp, usage_type, is_tor"):
+        """ردیف آدرس‌ها برای قاعده‌های مدت بلاک (فقط ستون‌های لازم)."""
+        out = {}
+        ips = list(ips)
+        with self._lock:
+            for i in range(0, len(ips), 500):
+                part = ips[i:i + 500]
+                q = f"SELECT {fields} FROM ips WHERE ip IN ({','.join('?' * len(part))})"   # nosec B608 — ستون‌ها ثابت، مقادیر پارامتری
+                for r in self.db.execute(q, part).fetchall():
+                    out[r["ip"]] = dict(r)
+        return out
 
     def list_ips_raw(self, limit=10_000_000):
         """(ستون‌ها، ردیف‌ها به‌صورت تاپل) — برای فهرست بزرگ بدون ساختن dict برای هر ردیف."""

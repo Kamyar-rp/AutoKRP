@@ -1,10 +1,29 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 cd /d "%~dp0"
 rem Official build: isolated venv (.venv-build), stop on any error, dependency audit,
-rem record exact versions and SHA-256 of the exe next to it in dist\.
+rem record exact versions and SHA-256 next to the outputs in dist\.
+rem   build.bat            portable exe (dist\AutoKRP.exe) + installer (dist\AutoKRP-Setup-X.Y.Z.exe)
+rem   build.bat portable   portable exe only (used by the release script; only the portable exe is published)
+rem Build tools (1.52): put the files listed in vendor\README.md into vendor\. Nothing is installed system-wide:
+rem Python goes to .pybuild\ and Inno Setup to .innosetup\ (current user only) when they are not already present.
+set "WHAT=%~1"
+if "%WHAT%"=="" set "WHAT=all"
+if /i not "%WHAT%"=="all" if /i not "%WHAT%"=="portable" (
+  echo Usage: build.bat [portable]
+  goto :err
+)
+call :pick_python || goto :err
+set "VENVVER="
+if exist ".venv-build\Scripts\python.exe" (
+  for /f "delims=" %%V in ('call ".venv-build\Scripts\python.exe" -c "import sys;print(sys.version_info[0],sys.version_info[1],sep='.')"') do set "VENVVER=%%V"
+)
+if exist ".venv-build\Scripts\python.exe" if not "%VENVVER%"=="%BASEMM%" (
+  echo .venv-build uses Python %VENVVER%; recreating it with %BASEMM% ...
+  rmdir /s /q ".venv-build" || goto :err
+)
 if not exist ".venv-build\Scripts\python.exe" (
-  python -m venv .venv-build || goto :err
+  "%BASEPY%" -m venv .venv-build || goto :err
 )
 set PY=.venv-build\Scripts\python.exe
 "%PY%" -m pip install --upgrade pip || goto :err
@@ -55,17 +74,84 @@ REM 1.40.1: exe version info (Properties - Details): product, version, author, c
 "%PY%" dev\version_info.py build\version_info.txt || goto :err
 set ICON=assets\app.ico
 if exist "%ICON%" (set ICONARG=--icon "%ICON%") else (set ICONARG=)
-"%PY%" -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoKRP %ICONARG% --version-file build\version_info.txt --add-data "ui;ui" --add-data "assets\app.png;assets" --add-data "assets\mibs;assets\mibs" --add-data "autokrp\trapdb.json;autokrp" --add-data "autokrp\oui.dat;autokrp" --add-data "autokrp\build_deps.txt;autokrp" --collect-submodules serial --hidden-import pystray._win32 --hidden-import pymysql --hidden-import autokrp.fgtask_child --hidden-import autokrp.snmpworker --hidden-import autokrp.snmppool --hidden-import autokrp.tsdb --hidden-import autokrp.icmp --hidden-import autokrp.monviews --hidden-import autokrp.netmap --hidden-import autokrp.terms --hidden-import autokrp.apitool --hidden-import autokrp.cfgpack --hidden-import autokrp.dashboards --hidden-import autokrp.mapdisc --hidden-import autokrp.auditlog --hidden-import autokrp.todo --hidden-import autokrp.clientgate --collect-submodules netmiko --collect-submodules dns --collect-submodules pysnmp --collect-submodules ldap3 --collect-all pysmi --collect-data lark --hidden-import sqlcipher3 --collect-binaries sqlcipher3 app.py || goto :err
+set "PYI=--windowed --name AutoKRP %ICONARG% --version-file build\version_info.txt --add-data "ui;ui" --add-data "assets\app.png;assets" --add-data "assets\mibs;assets\mibs" --add-data "autokrp\trapdb.json;autokrp" --add-data "autokrp\oui.dat;autokrp" --add-data "autokrp\build_deps.txt;autokrp" --collect-submodules serial --hidden-import pystray._win32 --hidden-import pymysql --hidden-import pg8000 --hidden-import autokrp.dbpg --hidden-import autokrp.fgtask_child --hidden-import autokrp.snmpworker --hidden-import autokrp.snmppool --hidden-import autokrp.tsdb --hidden-import autokrp.icmp --hidden-import autokrp.monviews --hidden-import autokrp.netmap --hidden-import autokrp.terms --hidden-import autokrp.apitool --hidden-import autokrp.cfgpack --hidden-import autokrp.dashboards --hidden-import autokrp.mapdisc --hidden-import autokrp.auditlog --hidden-import autokrp.todo --hidden-import autokrp.clientgate --collect-submodules netmiko --collect-submodules dns --collect-submodules pysnmp --collect-submodules ldap3 --collect-all pysmi --collect-data lark --hidden-import sqlcipher3 --collect-binaries sqlcipher3"
+"%PY%" -m PyInstaller --noconfirm --clean --onefile --workpath build\onefile %PYI% app.py || goto :err
 if not exist dist\AutoKRP.exe goto :err
 "%PY%" -m pip freeze > dist\AutoKRP-build-requirements.txt
 "%PY%" --version > dist\AutoKRP-build-python.txt
 certutil -hashfile dist\AutoKRP.exe SHA256 > dist\AutoKRP.exe.sha256.txt
+set "SETUPNOTE=(skipped: build.bat portable)"
+if /i "%WHAT%"=="portable" goto :done
+rem ---- 1.52: installer (PyInstaller folder build + Inno Setup) ----
+set "SETUPNOTE="
+for /f "delims=" %%V in ('call "%PY%" -c "import autokrp;print(autokrp.__version__)"') do set "VER=%%V"
+"%PY%" -m PyInstaller --noconfirm --clean --onedir --distpath dist\installer --workpath build\onedir %PYI% app.py || goto :err
+if not exist dist\installer\AutoKRP\AutoKRP.exe goto :err
+call :pick_iscc
+if not defined ISCC (
+  set "SETUPNOTE=(NOT built: Inno Setup not found - see vendor\README.md)"
+  goto :done
+)
+if exist "dist\AutoKRP-Setup-%VER%.exe" del "dist\AutoKRP-Setup-%VER%.exe"
+"%ISCC%" /Q "/DAppVer=%VER%" "/DSrcDir=%CD%\dist\installer\AutoKRP" "/O%CD%\dist" installer\AutoKRP.iss
+if errorlevel 1 (
+  set "SETUPNOTE=(FAILED: Inno Setup reported an error above)"
+  goto :done
+)
+certutil -hashfile "dist\AutoKRP-Setup-%VER%.exe" SHA256 > "dist\AutoKRP-Setup-%VER%.exe.sha256.txt"
+set "SETUPNOTE=dist\AutoKRP-Setup-%VER%.exe (+ .sha256.txt)"
+:done
 echo.
-echo Output: dist\AutoKRP.exe
+echo Output: dist\AutoKRP.exe  (portable; published with the release)
 echo         dist\AutoKRP.exe.sha256.txt  (publish with the release)
 echo         dist\AutoKRP-build-requirements.txt  (exact versions; copy to requirements-lock.txt to pin future builds)
+echo Installer: %SETUPNOTE%
 pause
 exit /b 0
+
+:pick_python
+rem Build Python: .pybuild\ ^> Python 3.14 from the py launcher ^> vendor\python-3.14*-amd64.exe (installed into .pybuild\) ^> python on PATH
+set "BASEPY="
+if exist ".pybuild\python.exe" set "BASEPY=%CD%\.pybuild\python.exe"
+if defined BASEPY goto :py_ok
+where py >nul 2>&1
+if not errorlevel 1 (
+  for /f "delims=" %%P in ('py -3.14 -c "import sys;print(sys.executable)" 2^>nul') do set "BASEPY=%%P"
+)
+if defined BASEPY goto :py_ok
+set "PYINST="
+for %%F in (vendor\python-3.14*-amd64.exe) do set "PYINST=%%F"
+if defined PYINST (
+  echo Installing build Python from %PYINST% into .pybuild\ ^(current user, no PATH change^) ...
+  start "" /wait "%PYINST%" /quiet InstallAllUsers=0 "TargetDir=%CD%\.pybuild" Include_launcher=0 InstallLauncherAllUsers=0 Include_test=0 Include_doc=0 Include_tcltk=0 Include_pip=1 PrependPath=0 Shortcuts=0 AssociateFiles=0 CompileAll=0
+  if exist ".pybuild\python.exe" set "BASEPY=%CD%\.pybuild\python.exe"
+  if not exist ".pybuild\python.exe" echo [WARNING] The Python setup did not install into .pybuild\ ^(already installed for this user?^). Trying python on PATH.
+)
+if defined BASEPY goto :py_ok
+for /f "delims=" %%P in ('python -c "import sys;print(sys.executable)" 2^>nul') do set "BASEPY=%%P"
+if defined BASEPY goto :py_ok
+echo [ERROR] No Python found. Put python-3.14.x-amd64.exe into vendor\ ^(see vendor\README.md^) or install Python 3.14.
+exit /b 1
+:py_ok
+for /f "delims=" %%V in ('call "%BASEPY%" -c "import sys;print(sys.version_info[0],sys.version_info[1],sep='.')"') do set "BASEMM=%%V"
+echo Build Python: %BASEPY% ^(%BASEMM%^)
+exit /b 0
+
+:pick_iscc
+rem Inno Setup compiler: .innosetup\ ^> installed Inno Setup 7/6 ^> vendor\innosetup-*.exe (installed into .innosetup\, current user)
+set "ISCC="
+for %%D in ("%CD%\.innosetup" "%LOCALAPPDATA%\Programs\Inno Setup 7" "%ProgramFiles%\Inno Setup 7" "%ProgramFiles(x86)%\Inno Setup 7" "%LOCALAPPDATA%\Programs\Inno Setup 6" "%ProgramFiles%\Inno Setup 6" "%ProgramFiles(x86)%\Inno Setup 6") do (
+  if not defined ISCC if exist "%%~D\ISCC.exe" set "ISCC=%%~D\ISCC.exe"
+)
+if defined ISCC exit /b 0
+set "INNOINST="
+for %%F in (vendor\innosetup-*.exe) do set "INNOINST=%%F"
+if not defined INNOINST exit /b 1
+echo Installing Inno Setup from %INNOINST% into .innosetup\ ^(current user^) ...
+start "" /wait "%INNOINST%" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CURRENTUSER /NOICONS "/DIR=%CD%\.innosetup"
+if exist ".innosetup\ISCC.exe" set "ISCC=%CD%\.innosetup\ISCC.exe"
+if defined ISCC exit /b 0
+exit /b 1
 
 :audit_neterr
 rem errorlevel 0 = the audit failed because of the network, not because of a finding

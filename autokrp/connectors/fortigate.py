@@ -179,20 +179,31 @@ def _expiry_val(v):
         return None
 
 
-def needs_convert(item, want_expiry=0) -> str:
+def needs_convert(item, want_expiry=0, timed=False) -> str:
     """دلیل تبدیل بلاک موجود به بلاک Administrative (یا "" اگر لازم نیست).
-    فقط وقتی خواسته‌ی ما بدون انقضاست، انقضای یک بلاک Administrative هم دلیل تبدیل است."""
+    فقط وقتی خواسته‌ی ما بدون انقضاست، انقضای یک بلاک Administrative هم دلیل تبدیل است؛
+    مگر بلاک موقتی که خود برنامه زده (timed): آن عمداً انقضا دارد و دائمی نمی‌شود (1.54)."""
     src = str(item.get("source") or "").strip()
     if src and not is_admin_source(src):
         return f"بلاک خودکار {src}"
     exp = _expiry_val(item.get("expires"))
-    if int(want_expiry or 0) == 0 and exp:
+    if int(want_expiry or 0) == 0 and exp and not timed:
         return "بلاک با انقضا"
     return ""
 
 
-def classify(targets, addresses, banned, ignore_nets, want_expiry=0, convert=True):
+def days_txt(days):
+    return "دائم" if not int(days or 0) else f"{int(days)} روز"
+
+
+def classify(targets, addresses, banned, ignore_nets, want_expiry=0, convert=True, days_of=None, timed=None, retime=False):
     """
+    1.54 — مدت بلاک:
+      days_of(ip) ← مدت خواسته‌شده برای این IP به روز (۰ = دائم). نبود ← want_expiry برای همه.
+      timed       ← {ip: روزِ بلاک موقتی که خود برنامه زده و هنوز تمام نشده}؛ این‌ها به‌خاطر «انقضا» دائمی نمی‌شوند.
+      retime      ← کاربر مدت را صریح انتخاب کرده: IPی که از قبل در Banned است هم با همین مدت دوباره بلاک می‌شود
+                    (convert)؛ مگر خواسته «دائم» باشد و بلاک فعلی هم دائم باشد.
+
     تصمیم برای هر IP، دقیقاً به ترتیب اسکریپت:
       ignored  ← در رنج‌های exclude
       address  ← با یک یا چند Address Object تطابق دارد (بلاک نمی‌شود)
@@ -222,12 +233,21 @@ def classify(targets, addresses, banned, ignore_nets, want_expiry=0, convert=Tru
             continue
         matches = index.match(ip)
         in_banned = ip in banned_set
-        why = needs_convert(banned_item.get(ip) or {}, want_expiry) if in_banned and convert and not matches else ""
-        if why:
-            plan.append({"ip": str(ip), "decision": "convert", "in_banned": True,
-                         "detail": f"در Banned هست ولی {why}؛ پاک و دوباره به‌صورت Administrative بلاک می‌شود",
-                         "source": (banned_item.get(ip) or {}).get("source", ""),
-                         "expires": (banned_item.get(ip) or {}).get("expires", "")})
+        days = int(days_of(str(ip)) if days_of else int(want_expiry or 0) // 86400)
+        cur_days = (timed or {}).get(str(ip))          # None = بلاک موقتِ خود برنامه نیست
+        item = banned_item.get(ip) or {}
+        why = needs_convert(item, days * 86400, cur_days is not None) if in_banned and convert and not matches else ""
+        change = ""
+        if in_banned and not matches and retime and not why:
+            exp = _expiry_val(item.get("expires"))
+            if days or cur_days is not None or exp:        # دائم ← دائم تغییری نیست
+                was = days_txt(cur_days) if cur_days is not None else ("با انقضا" if exp else "دائم")
+                change = f"تغییر مدت بلاک: {was} ← {days_txt(days)}" + (" (از امروز)" if days else "")
+        if why or change:
+            plan.append({"ip": str(ip), "decision": "convert", "in_banned": True, "days": days, "retime": bool(change),
+                         "detail": change + "؛ پاک و دوباره بلاک می‌شود" if change else
+                         f"در Banned هست ولی {why}؛ پاک و دوباره به‌صورت Administrative بلاک می‌شود",
+                         "source": item.get("source", ""), "expires": item.get("expires", "")})
             continue
         if matches or in_banned:
             parts = []
@@ -238,7 +258,7 @@ def classify(targets, addresses, banned, ignore_nets, want_expiry=0, convert=Tru
             plan.append({"ip": str(ip), "decision": "address" if matches else "banned", "detail": " | ".join(parts),
                          "in_banned": in_banned, "addresses": [m["name"] for m in matches]})
             continue
-        plan.append({"ip": str(ip), "decision": "ban", "detail": "در Address و Banned نیست"})
+        plan.append({"ip": str(ip), "decision": "ban", "detail": "در Address و Banned نیست", "days": days})
     return plan
 
 
@@ -328,21 +348,23 @@ class FortiClient(BaseConnector):
         """حذف از لیست Banned/Quarantine (clear_users)."""
         return self._post("clear_users", {"ip_addresses": [ip]})
 
-    def convert_ip(self, ip):
-        """بلاک خودکار (IPS/...) یا موقت ← بلاک Administrative با expiry تنظیم‌شده: پاک و دوباره اضافه.
+    def convert_ip(self, ip, days=None):
+        """بلاک خودکار (IPS/...) یا با مدت دیگر ← بلاک Administrative با مدت خواسته‌شده: پاک و دوباره اضافه.
         اگر افزودن دوباره ناموفق بود یک بار دیگر تلاش می‌شود تا IP بی‌بلاک نماند."""
         ok, detail = self.unban_ip(ip)
         if not ok:
             return False, "پاک کردن بلاک قبلی ناموفق: " + detail
-        ok, detail = self.ban_ip(ip)
+        ok, detail = self.ban_ip(ip, days)
         if not ok:
             time.sleep(1)
-            ok, detail2 = self.ban_ip(ip)
+            ok, detail2 = self.ban_ip(ip, days)
             if not ok:
                 return False, f"بلاک قبلی پاک شد ولی بلاک دوباره ناموفق بود (IP الان بلاک نیست!): {detail2}"
             detail = detail2
         return True, detail
 
-    def ban_ip(self, ip):
-        """True/False و متن پاسخ. معادل ban_ip اسکریپت + بررسی status در JSON (اختیاری)."""
-        return self._post("add_users", {"ip_addresses": [ip], "expiry": int(self.cfg.get("ban_expiry") or 0)})
+    def ban_ip(self, ip, days=None):
+        """True/False و متن پاسخ. معادل ban_ip اسکریپت + بررسی status در JSON (اختیاری).
+        days: مدت بلاک به روز (۰ = دائم)؛ None = پیش‌فرض دستگاه. FortiGate مقدار expiry را به ثانیه می‌گیرد."""
+        secs = int(self.cfg.get("ban_expiry") or 0) if days is None else max(0, int(days)) * 86400
+        return self._post("add_users", {"ip_addresses": [ip], "expiry": secs})

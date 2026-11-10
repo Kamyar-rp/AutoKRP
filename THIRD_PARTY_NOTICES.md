@@ -6,7 +6,7 @@ AutoKRP itself is licensed under the [MIT License](LICENSE). It bundles or depen
 | Component | Location | License |
 |---|---|---|
 | Vazirmatn font | `ui/fonts/` | SIL Open Font License 1.1 (`ui/fonts/OFL.txt`) |
-| xterm.js and addon-fit | `ui/vendor/` | MIT (`ui/vendor/xterm-LICENSE.txt`) |
+| xterm.js, addon-fit and addon-search (0.16.0) | `ui/vendor/` | MIT (`ui/vendor/xterm-LICENSE.txt`) |
 | IANA port registry data via npm `port-numbers` | `ui/ports_iana.js` | BSD-2-Clause (notice kept in the file) |
 | IEEE MAC vendor registry (MA-L and IAB), from the `netaddr` package data | `autokrp/oui.dat` | Public IEEE Registration Authority data; netaddr is BSD-3-Clause |
 | MIB files | `assets/mibs/src/` | Copyright of their respective vendors/authors; redistributed for SNMP interoperability |
@@ -22,6 +22,8 @@ AutoKRP itself is licensed under the [MIT License](LICENSE). It bundles or depen
 | paramiko | LGPL-2.1 |
 | dnspython | ISC |
 | PyMySQL | MIT |
+| pg8000 (PostgreSQL driver) | BSD-3-Clause |
+| scramp, asn1crypto, python-dateutil, six (pg8000 dependencies) | MIT-0, MIT, Apache-2.0 / BSD-3-Clause, MIT |
 | pysnmp, pysmi | BSD-2-Clause |
 | ldap3 | LGPL-3.0 |
 | sqlcipher3 (SQLCipher) | zlib / BSD-style |

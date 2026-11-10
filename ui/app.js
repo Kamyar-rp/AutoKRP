@@ -459,7 +459,7 @@ function renderSide(r) {
   $("#sideConn").innerHTML = Object.entries(r.conn).filter(([k]) => connShown(k)).map(([k, v]) =>
     `<div class="conn-row" title="${esc(v.message)}"><span class="dot ${esc(v.state)}"></span><span>${esc(connTitle(k))}</span><span style="margin-inline-start:auto;font-size:11.5px">${
       { ok: "متصل", error: "خطا", unset: "تنظیم نشده", idle: "—", unknown: "…" }[v.state] || ""}</span></div>`).join("");
-  if (r.db && r.db.backend === "mysql") $("#sideConn").insertAdjacentHTML("beforeend", `<div class="conn-row" title="${esc(r.db.error || "")}"><span class="dot ${r.db.ok === false ? "error" : "ok"}"></span>MySQL<span style="margin-inline-start:auto;font-size:11.5px">${r.db.ok === false ? "خطا" : "متصل"}</span></div>`);
+  if (r.db && (r.db.backend === "mysql" || r.db.backend === "postgres")) $("#sideConn").insertAdjacentHTML("beforeend", `<div class="conn-row" title="${esc(r.db.error || "")}"><span class="dot ${r.db.ok === false ? "error" : "ok"}"></span>${r.db.backend === "postgres" ? "PostgreSQL" : "MySQL"}<span style="margin-inline-start:auto;font-size:11.5px">${r.db.ok === false ? "خطا" : "متصل"}</span></div>`);
   $("#testBadge").hidden = !r.test_mode;
   $("#sideVer").textContent = `نسخه ${r.version}${r.demo ? " — Demo" : ""}`;
   $("#btnLock").hidden = !(r.security && r.security.unlocked && (r.security.mode === "password" || WEB));
@@ -1017,9 +1017,9 @@ function renderApproval(run) {
     const c = pv.counts;
     const isAct = (p) => p.decision === "ban" || p.decision === "convert";
     box.innerHTML = `<div class="approval"><h2>تأیید بلاک در FortiGate${pv.multi ? ` — <span>${esc(pv.device)}</span>` : ""}</h2>
-      <p class="hint">${num(c.to_ban)}‏ IP در هیچ رنج داخلی، Address Object یا لیست Banned نیستند و بلاک می‌شوند.${c.to_convert ? ` ${num(c.to_convert)}‏ IP در Banned هست ولی بلاک خودکار (IPS، Application Control، ...) یا با انقضاست؛ از Banned پاک و بلافاصله به‌صورت Administrative دوباره بلاک می‌شود.` : ""} تیک هر IP را که نمی‌خواهید بردارید.
+      <p class="hint">${num(c.to_ban)}‏ IP در هیچ رنج داخلی، Address Object یا لیست Banned نیستند و بلاک می‌شوند.${c.to_convert ? ` ${num(c.to_convert)}‏ IP در Banned هست ولی بلاک خودکار (IPS، Application Control، ...) یا با مدت دیگری است؛ از Banned پاک و بلافاصله به‌صورت Administrative با مدت ستون «مدت بلاک» دوباره بلاک می‌شود.` : ""} تیک هر IP را که نمی‌خواهید بردارید.
       ${pv.test_mode ? "<br><b class='hint warn'>حالت تست روشن است: هیچ درخواست بلاکی ارسال نمی‌شود و فقط فایل JSON نوشته می‌شود.</b>" : ""}</p>
-      <div class="sum-grid">${[["warn", c.to_ban, "برای بلاک"], ...(c.to_convert ? [["warn", c.to_convert, "تبدیل به Administrative"]] : []), ["", c.already, "از قبل Banned"], ["", c.address, "تطابق Address"], ["", c.ignored, "داخلی / مستثنا"]]
+      <div class="sum-grid">${[["warn", c.to_ban, "برای بلاک"], ...(c.to_convert ? [["warn", c.to_convert, "تبدیل / تغییر مدت"]] : []), ["", c.already, "از قبل Banned"], ["", c.address, "تطابق Address"], ["", c.ignored, "داخلی / مستثنا"]]
         .map(([k, v, t]) => `<div class="sum ${k}"><b>${num(v)}</b><span>${t}</span></div>`).join("")}</div>
       <div class="row" style="gap:10px;margin:8px 0;flex-wrap:wrap;align-items:center"><input type="text" class="ltr" id="apQ" placeholder="جستجوی IP یا جزئیات" style="max-width:280px">
         <label class="chk"><input type="checkbox" id="apOthers">نمایش ردیف‌های غیرقابل بلاک هم</label><span class="muted" id="apInfo"></span></div>
@@ -1033,9 +1033,9 @@ function renderApproval(run) {
       const rows = pv.plan.filter((p) => (oth || isAct(p)) && (!q || p.ip.includes(q) || String(p.detail || "").toLowerCase().includes(q)));
       const shown = rows.slice(0, AP_SHOW), fa = rows.filter((p) => sel.has(p.ip) || isAct(p));
       const allOn = fa.length && fa.filter(isAct).every((p) => sel.has(p.ip));
-      $("#apTbl").innerHTML = `<table class="grid"><thead><tr><th class="chk nosort"><input type="checkbox" id="apAll" ${allOn ? "checked" : ""} title="همه‌ی ردیف‌های فیلترشده"></th><th class="nosort">IP</th><th class="nosort">منشأ</th><th class="nosort">تصمیم</th><th class="nosort">جزئیات</th></tr></thead><tbody>
+      $("#apTbl").innerHTML = `<table class="grid"><thead><tr><th class="chk nosort"><input type="checkbox" id="apAll" ${allOn ? "checked" : ""} title="همه‌ی ردیف‌های فیلترشده"></th><th class="nosort">IP</th><th class="nosort">منشأ</th><th class="nosort">تصمیم</th><th class="nosort">مدت بلاک</th><th class="nosort">جزئیات</th></tr></thead><tbody>
         ${shown.map((p) => `<tr><td class="chk">${isAct(p) ? `<input type="checkbox" class="apIp" value="${esc(p.ip)}" ${sel.has(p.ip) ? "checked" : ""}>` : ""}</td>
-          <td class="ltr">${esc(p.ip)}</td><td>${originTag(p.origin)}</td><td><span class="tag ${DEC[p.decision][0]}">${DEC[p.decision][1]}</span></td><td class="wrap">${esc(p.detail)}</td></tr>`).join("")}</tbody></table>`;
+          <td class="ltr">${esc(p.ip)}</td><td>${originTag(p.origin)}</td><td><span class="tag ${p.retime ? "info" : DEC[p.decision][0]}">${p.retime ? "تغییر مدت" : DEC[p.decision][1]}</span></td><td class="nowrap">${isAct(p) ? `<span class="tag ${p.days ? "warn" : "mute"}">${esc(banDaysTxt(p.days))}</span>` : ""}</td><td class="wrap">${esc(p.detail)}</td></tr>`).join("")}</tbody></table>`;
       $("#apInfo").textContent = [rows.length > AP_SHOW ? I18N.t(`${num(AP_SHOW)} ردیف اول از ${num(rows.length)}؛ برای دیدن بقیه جستجو کنید`) : "",
         oth && pv.others_total > pv.plan.length - act.length ? I18N.t(`از ${num(pv.others_total)} ردیف غیرقابل بلاک فقط ${num(pv.plan.length - act.length)} نمونه آمده است`) : ""].filter(Boolean).join(" · ");
       $("#apN").textContent = num(sel.size);
@@ -1052,7 +1052,7 @@ function renderApproval(run) {
       if (!ips.length) return toast("هیچ IPای انتخاب نشده است. برای ادامه «بلاک نکن» را بزنید.", "warn");
       const ok = await confirm2({
         title: "تأیید نهایی بلاک", danger: !pv.test_mode, confirm: pv.test_mode ? "ثبت در فایل تست" : `بلاک ${ips.length} آدرس`,
-        body: `<p>${pv.test_mode ? "در حالت تست فقط فایل نوشته می‌شود." : `این ${ips.length}‏ IP با expiry تنظیم‌شده به لیست Banned فورتی‌گیت اضافه می‌شوند.`}</p>
+        body: `<p>${pv.test_mode ? "در حالت تست فقط فایل نوشته می‌شود." : `این ${ips.length}‏ IP با مدت ستون «مدت بلاک» به لیست Banned فورتی‌گیت اضافه می‌شوند.`}</p>
           <div class="path ltr" style="max-height:160px;overflow:auto">${ips.slice(0, 300).map(esc).join("<br>")}${ips.length > 300 ? `<br>… ${I18N.t(`و ${num(ips.length - 300)} آدرس دیگر`)}` : ""}</div>`,
         ack: pv.test_mode ? null : "لیست را بررسی کردم و بلاک این آدرس‌ها را تأیید می‌کنم",
       });
@@ -1442,12 +1442,55 @@ async function loadIps() {
   if (!r.ok) return toast(r.error, "error");
   S.ips = ipRows(r); S.repeatDays = r.repeat_days || 0; renderIps();
 }
+/* 1.54 مدت بلاک: «rules» = طبق قاعده‌های تنظیمات؛ عدد = روز (۰ = دائم). خروجی null = انصراف */
+const BAN_PRESETS = [["rules", "طبق قاعده‌ها"], [0, "دائم"], [1, "۱ روز"], [7, "۷ روز"], [30, "۳۰ روز"], [90, "۹۰ روز"], ["custom", "دلخواه"]];
+function banDaysTxt(d) { return !Number(d) ? I18N.t("دائم") : `${num(d)} ${I18N.t("روز")}`; }
+function fwUntilTxt(r) {
+  if (!r.fw_until || !["banned", "already"].includes(r.fw_status)) return "";
+  const end = new Date(String(r.fw_until).replace(" ", "T")).getTime();
+  if (!end) return "";
+  return end <= Date.now() ? I18N.t("مدت تمام شده") : `${I18N.t("تا")} ${String(r.fw_until).slice(0, 10)}`;
+}
+function banDaysDlg(ips, listHtml) {
+  const known = ips.map((ip) => (S.ips || []).find((x) => x.ip === ip)).filter(Boolean);
+  const already = known.filter((x) => ["banned", "already"].includes(x.fw_status)).length;
+  let cur = "rules";
+  return openModal({
+    title: "بلاک در FortiGate",
+    body: `<p>برای ${num(ips.length)}‏ IP پیش‌نمایش ساخته می‌شود: رنج داخلی، Address و Banned بررسی می‌شوند و در صفحه‌ی «ابزارها» لیست نهایی را تأیید می‌کنید.</p>
+      <div class="field wide" style="margin:10px 0"><span>مدت بلاک</span><div class="seg" id="bdSeg" style="flex-wrap:wrap">${BAN_PRESETS.map(([v, t]) => `<button type="button" data-v="${v}" class="${v === cur ? "on" : ""}">${t}</button>`).join("")}</div>
+        <div class="row" id="bdCustom" hidden style="gap:8px;margin-top:8px;align-items:center"><input type="number" id="bdDays" min="1" max="3650" step="1" style="max-width:120px" placeholder="30"><span>روز</span></div>
+        <small class="hint" id="bdHint"></small></div>
+      ${already ? `<p class="hint warn">${num(already)}‏ IP از این فهرست الان بلاک است. با انتخاب یک مدت مشخص، بلاک فعلی آن‌ها از FortiGate پاک و بلافاصله با مدت تازه (از امروز) دوباره زده می‌شود. با «طبق قاعده‌ها» بلاک‌های موجود دست نمی‌خورند.</p>` : ""}
+      ${listHtml}`,
+    foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn warn" data-r="1">ساخت پیش‌نمایش</button>`,
+    onOpen: (m, close) => {
+      const hint = () => {
+        $("#bdCustom", m).hidden = cur !== "custom";
+        $("#bdHint", m).textContent = I18N.t(cur === "rules" ? "مدت هر IP از قاعده‌های «تنظیمات ← FortiGate ← مدت بلاک» می‌آید؛ اگر قاعده‌ای جور نبود، پیش‌فرض همان دستگاه."
+          : cur === 0 ? "بلاک بدون انقضا." : "بعد از این مدت FortiGate خودش بلاک را برمی‌دارد. اگر همان IP دوباره دیده شود، از نو بررسی و بلاک می‌شود.");
+      };
+      $$("#bdSeg button", m).forEach((b) => (b.onclick = () => {
+        cur = b.dataset.v === "rules" || b.dataset.v === "custom" ? b.dataset.v : Number(b.dataset.v);
+        $$("#bdSeg button", m).forEach((x) => x.classList.toggle("on", x === b)); hint(); if (cur === "custom") $("#bdDays", m).focus();
+      }));
+      hint();
+      $$("[data-r]", m).forEach((b) => (b.onclick = () => {
+        if (b.dataset.r !== "1") return close(null);
+        if (cur !== "custom") return close(cur);
+        const n = Number($("#bdDays", m).value);
+        if (!Number.isInteger(n) || n < 1 || n > 3650) return toast("تعداد روز باید عدد صحیح بین ۱ و ۳۶۵۰ باشد.", "warn");
+        close(n);
+      }));
+    },
+  }).then((v) => (v === undefined ? null : v));
+}
 function cell(k, r) {
   const v = r[k];
   if (k === "ip") return `<td class="ltr"><span class="link ip" data-ipd="${esc(v)}">${esc(v)}</span></td>`;
   if (k === "abuse_status") return `<td>${statusTag(v)}</td>`;
   if (k === "score") return `<td>${scoreHtml(v)}</td>`;
-  if (k === "fw_status") return `<td>${v ? `<span class="tag ${(FW[v] || ["mute"])[0]}" title="${esc(r.fw_detail || "")}">${esc((FW[v] || [0, v])[1])}</span>` : "—"}</td>`;
+  if (k === "fw_status") { const u = fwUntilTxt(r); return `<td>${v ? `<span class="tag ${(FW[v] || ["mute"])[0]}" title="${esc(r.fw_detail || "")}">${esc((FW[v] || [0, v])[1])}</span>${u ? ` <small class="muted nowrap" title="${esc(I18N.t("بلاک موقت"))}: ${esc(r.fw_days || "")} ${esc(I18N.t("روز"))}">${esc(u)}</small>` : ""}` : "—"}</td>`; }
   if (k === "seen_days") return `<td class="num">${v ? (isRepeat(r) ? `<span class="tag warn" title="IP غیرمخربی که بارها تکرار شده؛ بررسی مجدد">${num(v)}</span>` : num(v)) : "—"}</td>`;
   if (k === "intel_status") return `<td>${intelTag(r)}</td>`;
   if (["reports", "attack_count"].includes(k)) return `<td class="num">${num(v)}</td>`;
@@ -1585,6 +1628,14 @@ $("#selBar").addEventListener("click", async (e) => {
   if (act === "clear") { S.ipSel.clear(); renderIps(); return; }
   if (act === "copy") { copyText(ips.join("\n"), `${num(ips.length)} IP`); return; }
   const list = `<div class="path ltr" style="max-height:180px;overflow:auto">${ips.map(esc).join("<br>")}</div>`;
+  if (act === "ban") {          // 1.54: انتخاب مدت بلاک (روز)؛ برای IPهای از قبل بلاک‌شده = تغییر مدت
+    const days = await banDaysDlg(ips, list); if (days === null) return;
+    const r = await api("ips_action", "ban", ips, { days });
+    if (!r.ok) return toast(r.error, "error");
+    toast(r.message || "انجام شد", "ok"); S.ipSel.clear();
+    if (r.run_id) { S.resultTab = "fw"; go("run"); }
+    return;
+  }
   const cfg = {
     recheck: { title: "چک مجدد در AbuseIPDB", body: `<p>${ips.length}‏ IP دوباره بررسی می‌شوند (سهمیه مصرف می‌شود).</p>${list}`, confirm: "بررسی" },
     ban: { title: "بلاک در FortiGate", body: `<p>برای ${ips.length}‏ IP پیش‌نمایش ساخته می‌شود: رنج داخلی، Address و Banned بررسی می‌شوند و در صفحه‌ی «ابزارها» لیست نهایی را تأیید می‌کنید.</p>${list}`, confirm: "ساخت پیش‌نمایش" },
@@ -1711,6 +1762,7 @@ async function showIp(ip) {
     ["کشور", `${d.country || "—"} (${d.country_code || "—"})`], ["شهر", d.city], ["ISP", d.isp], ["نوع کاربری", d.usage_type], ["دامنه", d.domain], ["ASN", d.asn],
     ["Tor", d.is_tor], ["Whitelisted", d.is_whitelisted], ["دسته‌ها", d.categories], ["خطا", d.error],
     ["FortiGate", d.fw_status ? `${esc((FW[d.fw_status] || [0, d.fw_status])[1])} — ${esc(d.fw_detail || "")}` : "—", 1],
+    ...(["banned", "already"].includes(d.fw_status) && d.fw_until ? [["مدت بلاک", `${banDaysTxt(d.fw_days)} — ${fwUntilTxt(d)}`]] : []),
     ["تعداد حمله (Splunk)", num(d.attack_count)], ["Signatureها", d.signatures], ["پورت‌های مقصد", d.dest_ports],
     ["زمان بررسی", d.checked_at], ["اولین / آخرین مشاهده", `${d.first_seen || "—"} / ${d.last_seen || "—"}`], ["آخرین اجرا", d.last_run],
     ["روزهای بررسی در AbuseIPDB", d.seen_days ? `${num(d.seen_days)} روز مختلف` : "—"],
@@ -2079,6 +2131,49 @@ function fgActionsTable(acts, sel, res) {
       <td class="wrap fnote" data-no-i18n>${esc(a.note || "")}</td><td class="ltr wrap tech">${esc(Object.entries(a.row || {}).slice(0, 4).map(([k, v]) => `${k}=${v}`).join(" · "))}</td>
       ${res ? `<td>${a.result ? `<span class="tag ${(RES[a.result] || ["mute"])[0]}">${(RES[a.result] || ["", a.result])[1]}</span>${a.detail && a.result !== "done" ? `<div class="muted wrap" style="font-size:12px">${esc(a.detail)}</div>` : ""}` : "—"}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
 }
+/* 1.54 قاعده‌های مدت بلاک (fortigate.ban_rules): [{field, op, value, days}] */
+const BR_FIELDS = { country: ["کشور", [["in", "یکی از"], ["not_in", "هیچ‌کدام از"]]], score: ["امتیاز AbuseIPDB", [["lt", "کمتر از"], ["gte", "بیشتر یا مساوی"]]],
+  isp: ["ISP", [["contains", "شامل"], ["not_contains", "بدون"]]], usage: ["نوع کاربری", [["contains", "شامل"], ["not_contains", "بدون"]]],
+  tor: ["Tor", [["is", "هست"]]], source: ["منبع", [["is", "هست"]]] };
+const BR_SRC = [["abuse", "مخرب AbuseIPDB"], ["intel", "بررسی تکمیلی"], ["manual", "ورودی دستی"]];
+function brDefault(f) { return { country: [], score: 50, isp: "", usage: "", tor: true, source: "abuse" }[f]; }
+function brValue(r, i) {
+  if (r.field === "country") return `<input type="text" class="ltr" data-br="${i}" data-k="value" value="${esc((r.value || []).join(", "))}" placeholder="IR, TR" style="max-width:180px" title="کد دوحرفی کشور؛ چند کشور را با ویرگول جدا کنید">`;
+  if (r.field === "score") return `<input type="number" min="0" max="100" data-br="${i}" data-k="value" value="${esc(r.value)}" style="max-width:90px">`;
+  if (r.field === "tor") return `<select data-br="${i}" data-k="value"><option value="1" ${r.value ? "selected" : ""}>بله</option><option value="0" ${r.value ? "" : "selected"}>نه</option></select>`;
+  if (r.field === "source") return `<select data-br="${i}" data-k="value">${BR_SRC.map(([v, t]) => `<option value="${v}" ${r.value === v ? "selected" : ""}>${t}</option>`).join("")}</select>`;
+  return `<input type="text" data-br="${i}" data-k="value" value="${esc(r.value || "")}" placeholder="Data Center" style="max-width:200px">`;
+}
+function brRows(rules) {
+  if (!rules.length) return `<div class="empty">قاعده‌ای نیست؛ همه با مدت پیش‌فرض دستگاه بلاک می‌شوند.</div>`;
+  return rules.map((r, i) => `<div class="br-row"><span class="tag mute">${num(i + 1)}</span><span>اگر</span>
+    <select data-br="${i}" data-k="field">${Object.entries(BR_FIELDS).map(([k, v]) => `<option value="${k}" ${r.field === k ? "selected" : ""}>${v[0]}</option>`).join("")}</select>
+    <select data-br="${i}" data-k="op">${BR_FIELDS[r.field][1].map(([k, t]) => `<option value="${k}" ${r.op === k ? "selected" : ""}>${t}</option>`).join("")}</select>
+    ${brValue(r, i)}<span>←</span>
+    <input type="number" min="0" max="3650" step="1" data-br="${i}" data-k="days" value="${esc(r.days ?? 30)}" style="max-width:90px" title="۰ = دائم"><span>روز</span><span class="muted" data-brl="${i}">${Number(r.days) ? "" : "(دائم)"}</span>
+    <span class="br-tools"><button class="btn sm ghost" data-brm="${i}" data-d="-1" title="بالا" ${i ? "" : "disabled"}>↑</button><button class="btn sm ghost" data-brm="${i}" data-d="1" title="پایین" ${i < rules.length - 1 ? "" : "disabled"}>↓</button><button class="btn sm danger-ghost" data-brx="${i}" title="حذف قاعده">✕</button></span></div>`).join("");
+}
+function brBind(body, D) {
+  const rules = () => (D.fortigate.ban_rules = D.fortigate.ban_rules || []);
+  const redraw = () => { $("#brList", body).innerHTML = brRows(rules()); wire(); };
+  const wire = () => {
+    $$("[data-br]", body).forEach((el) => (el.onchange = () => {
+      const r = rules()[Number(el.dataset.br)], k = el.dataset.k; if (!r) return;
+      if (k === "field") { r.field = el.value; r.op = BR_FIELDS[r.field][1][0][0]; r.value = brDefault(r.field); return redraw(); }
+      if (k === "op") r.op = el.value;
+      else if (k === "days") { r.days = Math.max(0, Math.min(3650, Math.round(Number(el.value) || 0))); el.value = r.days; const l = $(`[data-brl="${el.dataset.br}"]`, body); if (l) l.textContent = r.days ? "" : I18N.t("(دائم)"); }
+      else if (r.field === "country") { r.value = el.value.toUpperCase().split(/[\s,\u060c]+/).filter(Boolean); el.value = r.value.join(", "); }
+      else if (r.field === "score") r.value = Math.max(0, Math.min(100, Math.round(Number(el.value) || 0)));
+      else if (r.field === "tor") r.value = el.value === "1";
+      else r.value = el.value.trim();
+    }));
+    $$("[data-brm]", body).forEach((b) => (b.onclick = () => { const i = Number(b.dataset.brm), j = i + Number(b.dataset.d), a = rules(); if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; redraw(); }));
+    $$("[data-brx]", body).forEach((b) => (b.onclick = () => { rules().splice(Number(b.dataset.brx), 1); redraw(); }));
+  };
+  const add = $("#brAdd", body);
+  if (add) add.onclick = () => { if (rules().length >= 50) return toast("حداکثر ۵۰ قاعده.", "warn"); rules().push({ field: "country", op: "in", value: [], days: 30 }); redraw(); };
+  wire();
+}
 function renderFgSettings(body, D) {
   const conns = fgDraftConns();
   if (!conns.includes(S.fgDev)) S.fgDev = "fortigate";
@@ -2090,8 +2185,8 @@ function renderFgSettings(body, D) {
       <p class="hint">هر دستگاه اتصال، توکن و پین گواهی جدا دارد. در ابزار FortiGate برای هر گام، دستگاه و تسک انتخاب می‌شود. وضعیت بلاک فهرست «آدرس‌ها» فقط با دستگاه اول (تسک پیش‌فرض) هماهنگ است؛ بقیه در گزارش اجرا و تاریخچه ثبت می‌شوند.</p></div>
     ${connSection(c)}
     <div class="form"><h3>بلاک (تسک پیش‌فرض) — <span>${esc(fgDraftName(c))}</span></h3><div class="form-grid">
-      ${inp(`${c}.vdom`, "VDOM", { ltr: true })}${inp(`${c}.ban_expiry`, "expiry بلاک (۰ = بدون انقضا)", { type: "num" })}
-      <div class="field wide">${sw(`${c}.convert_auto_bans`, d.convert_auto_bans !== false, "تبدیل بلاک‌های خودکار به Administrative")}<small class="hint">IPی که باید بلاک شود ولی در Banned با منبعی جز Administrative (IPS، Application Control، DoS، ...) یا با انقضا هست، با تأیید شما از Banned پاک و بلافاصله با همین expiry دوباره به‌صورت Administrative بلاک می‌شود؛ بعد نتیجه دوباره از FortiGate خوانده و بررسی می‌شود.</small></div>
+      ${inp(`${c}.vdom`, "VDOM", { ltr: true })}${inp(`${c}.ban_days`, "مدت بلاک پیش‌فرض (روز؛ ۰ = دائم)", { type: "num" })}
+      <div class="field wide">${sw(`${c}.convert_auto_bans`, d.convert_auto_bans !== false, "تبدیل بلاک‌های خودکار به Administrative")}<small class="hint">IPی که باید بلاک شود ولی در Banned با منبعی جز Administrative (IPS، Application Control، DoS، ...) یا با انقضا هست، با تأیید شما از Banned پاک و بلافاصله با مدت تعیین‌شده دوباره به‌صورت Administrative بلاک می‌شود؛ بعد نتیجه دوباره از FortiGate خوانده و بررسی می‌شود.</small></div>
       ${inp(`${c}.address_count`, "تعداد Address در هر صفحه", { type: "num" })}
       ${inp(`${c}.timeout`, "Timeout (ثانیه)", { type: "num" })}
       <div class="field"><span>&nbsp;</span>${sw(`${c}.check_json_status`, d.check_json_status, "موفقیت فقط وقتی status=success باشد")}</div></div>
@@ -2100,6 +2195,10 @@ function renderFgSettings(body, D) {
       ${inp("fortigate.max_cidr_expand", "سقف بسط CIDR در ورودی دستی", { type: "num" })}
       <label class="field wide"><span>رنج‌های مستثنا (هرگز بلاک نمی‌شوند) — هر مورد در یک خط؛ متن بعد از # توضیح است</span><textarea class="ltr" data-type="lines" data-path="fortigate.ignore_networks" style="min-height:200px">${esc((D.fortigate.ignore_networks || []).join("\n"))}</textarea>
       <small class="hint">IPهای داخل این رنج‌ها نه در AbuseIPDB بررسی می‌شوند نه بلاک. خطوط شروع‌شده با # نادیده گرفته می‌شوند.</small></label></div></div>
+    <div class="form" id="brForm"><h3>مدت بلاک (قاعده‌ها)</h3>
+      <p class="hint">قاعده‌ها از بالا بررسی می‌شوند؛ اولین قاعده‌ای که با IP جور باشد مدت بلاک را تعیین می‌کند. اگر هیچ‌کدام جور نبود، «مدت بلاک پیش‌فرض» همان دستگاه به کار می‌رود. قاعده‌ها برای اجرای دستی و خودکار یکسان‌اند و برای همه‌ی دستگاه‌ها مشترک. اطلاعات هر IP (کشور، امتیاز، ISP) از فهرست «آدرس‌ها» می‌آید؛ اگر برای IP ثبت نشده باشد، قاعده‌ی آن شرط جور نمی‌شود. بعد از تمام شدن مدت، FortiGate خودش بلاک را برمی‌دارد و اگر IP دوباره دیده شود از نو بررسی و بلاک می‌شود.</p>
+      <div id="brList">${brRows(D.fortigate.ban_rules || [])}</div>
+      <div class="form-foot"><button class="btn" id="brAdd">افزودن قاعده</button><span class="hint">مثال: کشور یکی از IR ← ۳۰ روز. مدت به روز است؛ ۰ یعنی دائم.</span></div></div>
     <div class="form"><h3>تسک‌ها</h3>
       <p class="hint">تسک = کد پایتون با تابع plan(fg, rows, ctx). کد فقط می‌خواند و «کار» پیشنهاد می‌کند؛ برنامه فهرست کارها را نشان می‌دهد و فقط کارهای تأییدشده را به همان دستگاه می‌فرستد (حالت تست: هیچ). در کارهای خودکار، با تیک «FortiGate بدون تأیید» بدون پنجره‌ی تأیید اجرا می‌شود.</p>
       <p class="hint warn">${WEB ? "کد پایتون روی همین سرور اجرا می‌شود و قابل محصورسازی کامل نیست؛ فقط ادمین تسک می‌سازد و هر تغییر کد با diff در تاریخچه ثبت می‌شود. کدی را که نمی‌شناسید اجرا نکنید."
@@ -2109,6 +2208,7 @@ function renderFgSettings(body, D) {
       ${D.fg_scenarios.map(fgTaskCard).join("")}
       <div class="form-foot"><button class="btn" id="scNew">افزودن تسک…</button><span class="hint">تغییرها با «ذخیره‌ی تنظیمات» ذخیره می‌شوند.</span></div></div>`;
   $$("[data-fgdev]", body).forEach((b) => (b.onclick = () => { S.fgDev = b.dataset.fgdev; renderSettings(); }));
+  brBind(body, D);
   const add = $("#fgAdd", body);
   if (add) add.onclick = async () => {
     const r = await api("fg_device_add", ""); if (!r.ok) return toast(r.error, "error");
@@ -2277,8 +2377,8 @@ function renderSettings() {
         <small class="hint">فقط وقتی هدف SNMP فعالی هست اجرا می‌شوند. هر کارگر حدود ۵۰ مگابایت RAM می‌گیرد؛ با بسته شدن برنامه بسته می‌شوند.</small></label>
       <label class="field"><span>محل ذخیره‌ی داده‌ی نمودارها و Trap/Syslog</span><select data-path="monitor.ts_backend">
         <option value="file" ${(M.ts_backend || "file") === "file" ? "selected" : ""}>فایل‌های رمزشده در پوشه‌ی داده (پیش‌فرض)</option>
-        <option value="mysql" ${M.ts_backend === "mysql" ? "selected" : ""}>MySQL / MariaDB (همان پایگاه داده‌ی برنامه)</option></select>
-        <small class="hint">فقط وقتی پایگاه داده‌ی برنامه MySQL است. داده‌ی قبلی خودکار و در پس‌زمینه به MySQL منتقل می‌شود؛ اگر MySQL در دسترس نباشد داده موقتاً در فایل نوشته و بعداً منتقل می‌شود. قالب مثل حالت پایگاه داده: «خوانا» = JSON خوانا، «رمز ستون‌ها» و «رمز کامل» = فشرده و رمزشده.</small></label></div>
+        <option value="mysql" ${M.ts_backend === "mysql" ? "selected" : ""}>همان پایگاه داده‌ی برنامه (MySQL / PostgreSQL)</option></select>
+        <small class="hint">فقط وقتی پایگاه داده‌ی برنامه MySQL یا PostgreSQL است. داده‌ی قبلی خودکار و در پس‌زمینه به همان پایگاه داده منتقل می‌شود؛ اگر در دسترس نباشد داده موقتاً در فایل نوشته و بعداً منتقل می‌شود. قالب مثل حالت پایگاه داده: «خوانا» = JSON خوانا، «رمز ستون‌ها» و «رمز کامل» = فشرده و رمزشده.</small></label></div>
       <div id="monCap" class="sum" style="margin-top:8px"><span class="muted">در حال خواندن…</span></div></div>` : ""}
     <div class="form" id="evSetBox"></div>
     <div class="form" id="mibSetBox"></div>

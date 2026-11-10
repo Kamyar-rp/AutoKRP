@@ -29,6 +29,37 @@ MAX_TOTAL = 64
 ABANDON_SECS = 120                  # بدون poll (پنجره بسته شد) ← بسته می‌شود
 
 
+LOG_MAX = 20 * 1024 * 1024         # 1.54: لاگ کل نشست برای «ذخیره‌ی لاگ» — فقط در حافظه، با بستن ترمینال پاک می‌شود
+LOG_WARN_PCT = 80                  # از این درصد به بعد رابط هشدار می‌دهد که اگر لازم است ذخیره شود
+
+_ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[PX^_][^\x1b]*(?:\x1b\\)?|[()*+][0-9A-Za-z]|[@-Z\\-_=>78])")
+_CTRL_RE = re.compile(r"[\x00-\x07\x0b-\x1f\x7f]")
+
+
+def clean_log(raw):
+    """خروجی خام ترمینال ← متن خالص: بدون کدهای رنگ/مکان‌نما؛ «\\r» بازنویسی خط و «\\b» پاک کردن حرف قبل."""
+    text = _ANSI_RE.sub("", bytes(raw).decode("utf-8", "replace")).replace("\r\n", "\n")
+    out = []
+    for line in text.split("\n"):
+        line = line.rstrip("\r")
+        if "\r" in line:
+            parts = line.split("\r")
+            line = parts[0]
+            for seg in parts[1:]:
+                line = seg + line[len(seg):]
+        if "\b" in line:
+            acc = []
+            for ch in line:
+                if ch == "\b":
+                    if acc:
+                        acc.pop()
+                else:
+                    acc.append(ch)
+            line = "".join(acc)
+        out.append(_CTRL_RE.sub("", line).rstrip())
+    return "\n".join(out)
+
+
 class TermError(Exception):
     pass
 
@@ -210,6 +241,8 @@ class Session:
         self.t = None                  # SshT / TelnetT / SerialT
         self.buf = bytearray()
         self.base = 0                  # آفست بایت اول buf در کل خروجی
+        self.log = bytearray()         # کل خروجی نشست برای «ذخیره‌ی لاگ» (حافظه؛ تا LOG_MAX)
+        self.log_cut = 0               # بایت‌هایی که از ابتدای لاگ به‌خاطر سقف حذف شده
         self.cond = threading.Condition()
         self.closed = False
         self.reason = ""
@@ -445,6 +478,13 @@ class TermManager:
                         cut = len(s.buf) - BUF_MAX
                         del s.buf[:cut]
                         s.base += cut
+                    s.log += data
+                    if len(s.log) > LOG_MAX:           # هر بار یک‌دهم سقف آزاد می‌شود (نه با هر بسته)
+                        cut = len(s.log) - LOG_MAX + LOG_MAX // 10
+                        nl = s.log.find(b"\n", cut, cut + 4096)
+                        cut = nl + 1 if nl >= 0 else cut
+                        del s.log[:cut]
+                        s.log_cut += cut
                     s.cond.notify_all()
                 if s.rec_path:
                     self._rec(s, data.decode("utf-8", "replace"))
@@ -502,8 +542,21 @@ class TermManager:
             start = max(since, s.base)
             data = bytes(s.buf[start - s.base:])
             end = s.end
+            logp = len(s.log) * 100 // LOG_MAX
         return {"data": base64.b64encode(data).decode("ascii"), "next": end, "closed": s.closed, "reason": s.reason,
-                "lost": since < s.base and since > 0}
+                "lost": since < s.base and since > 0, "logp": logp, "logcut": s.log_cut > 0}
+
+    def session_log(self, sid, owner):
+        """(نشست، متن خالص کل خروجی نشست از اول تا الان)."""
+        s = self._get(sid, owner)
+        s.last_poll = time.time()
+        with s.cond:
+            raw, cut = bytes(s.log), s.log_cut
+        head = f"# AutoKRP — {s.title} ({s.host}{':' + str(s.port) if s.proto != 'serial' else ''}) — {s.proto.upper()} — " \
+               f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(s.created))} → {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        if cut:
+            head += f"# هشدار: ابتدای نشست ({cut // 1024} کیلوبایت) به‌خاطر سقف حافظه‌ی لاگ ({LOG_MAX // 1024 // 1024} مگابایت) حذف شده است.\n"
+        return s, head + "\n" + clean_log(raw) + "\n"
 
     def write(self, sid, owner, data):
         s = self._get(sid, owner)

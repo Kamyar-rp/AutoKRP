@@ -2,6 +2,52 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.54.0] — 2026-11-10
+
+### Added
+- **Temporary blocks on FortiGate (in days).**
+  - Addresses → select IPs → "Block on FortiGate": choose the duration (by rules, permanent, 1 / 7 / 30 / 90 days or a custom number of days). It also works for IPs that are **already blocked**: after approval their block is removed and added again with the new duration (for example permanent → 30 days).
+  - Settings → FortiGate → **Block duration (rules)**: conditions checked from the top, the first match sets the duration — country, AbuseIPDB score, ISP, usage type, Tor or source; for example "country is one of IR → 30 days", everything else the device default. The rules apply to manual and scheduled runs.
+  - The approval page shows the duration of every IP; the Addresses list shows "until <date>" next to a temporary block. When the time is over FortiGate removes the block itself; the app notices it ("the temporary block ended") and, if the IP is seen again, checks and blocks it again from scratch.
+  - Temporary blocks made by the app are no longer turned into permanent ones by "Convert automatic blocks to Administrative".
+- **Terminal: search and session log.** Ctrl+Shift+F (or the Search button) opens a search bar for the active terminal: match count, next/previous (Enter / Shift+Enter), match case, all matches highlighted, Esc closes. "Save log" saves the text of the **whole session** from its start as a `.txt` file (plain text without colour codes). The log is kept in memory only (up to 20 MB per session) and is cleared when the terminal is closed; near the limit the app warns so you can save it, after that the oldest part is dropped.
+
+### Changed
+- FortiGate "ban expiry" is now set in **days** ("Default block duration"; 0 = permanent). An existing value in seconds is converted to days, rounded up.
+- Search in the terminal uses the official xterm.js search add-on (MIT), shipped in `ui/vendor`.
+
+### Fixed
+- **File transfer: transfers that hung forever and could not be cancelled.** An SFTP transfer had no timeout, so on a dropped or silent connection it waited forever without an error; the files queued behind it stayed "transferring", and Cancel only set a flag that a stuck transfer never saw. Now:
+  - files waiting for their turn are shown as **Queued** and can be cancelled at once;
+  - SFTP reads and writes time out after 60 seconds with a clear message, and a transfer without any progress for 2 minutes is stopped; the queue then continues with the next file;
+  - Cancel closes the data stream, so a stuck transfer stops immediately;
+  - closing a connection (or an idle timeout) ends its transfers with an error instead of leaving them behind.
+
+## [1.53.0] — 2026-11-10
+
+### Added
+- **PostgreSQL 16+ as the app database** (Settings → Database, and the first-run choice), in both client and server mode, on a separate server. Same options as MySQL/MariaDB: storage mode (encrypt sensitive columns / readable / fully encrypted), TLS (default, required, verify CA, verify CA and server name) and a connection test that shows the server version, TLS and whether the database exists.
+  - The current data (local file or MySQL) is moved to PostgreSQL automatically; the database and tables are created and updated automatically (the user needs `CREATEDB`, or create the database yourself with `ENCODING 'UTF8'`, plus `CREATE` on its `public` schema).
+  - Chart data and Traps/Syslog can also be stored in PostgreSQL (daily/monthly partitions; old data is removed by dropping partitions).
+  - Only one AutoKRP uses a database at a time (advisory lock). RESET also removes the AutoKRP tables in PostgreSQL.
+  - Driver: `pg8000` (pure Python, BSD-3).
+
+### Changed
+- Database texts in the UI are no longer MySQL-specific; the side bar and the database status show which engine is in use.
+
+## [1.52.0] — 2026-11-10
+
+### Added
+- **Windows installer (build from source).** `build.bat` now builds the portable `dist\AutoKRP.exe` **and** an installer `dist\AutoKRP-Setup-X.Y.Z.exe` (Inno Setup, installs to `C:\Program Files\AutoKRP`, Start menu, uninstall entry). `build.bat portable` builds only the portable exe. **Releases still contain only the portable exe**; see "Installer (build it yourself)" in the README and `vendor/README.md`.
+  - The installed app **continues with the existing data**: it uses the same data folder as the portable exe for the same Windows user (nothing is moved or copied). Uninstalling never deletes data.
+  - A running AutoKRP (also the portable exe in the tray, or the background server) is closed before installing; after setup the app starts as the user who ran it, not as Administrator.
+  - Build tools go into `vendor\` (not committed): the Python 3.14 Windows installer (used only if no Python 3.14 is found; installed into `.pybuild\`, no PATH change) and the Inno Setup installer (used only if Inno Setup is not installed; installed into `.innosetup\` for the current user). The build venv is re-created when the build Python version changes.
+- `--quit-running`: closes a running AutoKRP of the same Windows user (desktop, server window, background server, Demo). Used by the installer.
+- Server window: if auto-start still points to another copy of the program (for example the portable exe after installing), it says so and offers **Update to this copy**.
+
+### Changed
+- Desktop mode: the instance-control "STOP" command now closes the app completely (before, it was ignored by the desktop window).
+
 ## [1.51.0] — 2026-11-08
 
 ### Added

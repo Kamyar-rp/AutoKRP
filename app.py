@@ -103,6 +103,30 @@ def control(cmd, demo=False, timeout=5):
         return None
 
 
+def _quit_running(wait=25):
+    """1.52: بستن نمونه‌ی در حال اجرا (کلاینت، سرور پنجره‌دار یا پس‌زمینه، Demo) پیش از به‌روزرسانی با فایل نصبی.
+    فقط با توکن همین کاربر ویندوز (CTL_FILE)؛ پوشه‌ی داده‌ای نمی‌سازد. خروجی ۰ = چیزی در حال اجرا نماند."""
+    import time as _t
+    left = 0
+    for demo in (False, True):
+        d = paths.root() / APP_ID / ("demo" if demo else "")
+        if not (d / CTL_FILE).is_file():
+            continue
+        paths.set_demo(demo)
+        if control("STOP", demo) is None:
+            continue
+        t0 = _t.time()
+        while _t.time() - t0 < wait:
+            try:
+                socket.create_connection(("127.0.0.1", LOCK_PORTS[demo]), timeout=1).close()
+            except OSError:
+                break
+            _t.sleep(0.5)
+        else:
+            left += 1
+    return 1 if left else 0
+
+
 def message_box(text, title=APP_ID):
     if sys.platform == "win32":
         import ctypes
@@ -392,6 +416,7 @@ function draw(s){const e=document.getElementById("svc");if(!e||!s)return;
  if(!s.supported){e.innerHTML="";return;}
  const T=(f,e)=>FA?f:e;
  e.innerHTML='<div class="st">'+T('اجرای خودکار با روشن شدن ویندوز (بدون لاگین): ','Auto-start with Windows (no login): ')+(s.installed?'<b class="ok">'+T('فعال','On')+'</b>':'<b class="no">'+T('غیرفعال','Off')+'</b>')+'</div>'+
+  (s.stale?'<p class="h err">'+T('اجرای خودکار هنوز نسخه‌ی قبلی را اجرا می‌کند: ','Auto-start still runs the previous copy: ')+'<span dir=ltr>'+s.task_exe.replace(/[<>&"]/g,'')+'</span></p><button onclick="call(\'svc_install\')">'+T('به‌روزرسانی به همین نسخه','Update to this copy')+'</button>':'')+
   (s.installed?'<button class="g" onclick="call(\'svc_remove\')">'+T('حذف اجرای خودکار','Remove auto-start')+'</button>'+(s.background?'':'<button onclick="call(\'svc_background\')">'+T('انتقال به پس‌زمینه و بستن پنجره','Move to background and close')+'</button>')
    :'<button onclick="call(\'svc_install\')">'+T('فعال کردن','Enable')+'</button>')+
   '<p class="h">'+T('نیاز به دسترسی Administrator (پنجره‌ی UAC). سرور با همین کاربر ویندوز اجرا می‌شود و داده‌ها تا اولین ورود در وب قفل می‌مانند.','Requires Administrator access (UAC prompt). The server runs as this Windows user and data stays locked until the first web sign-in.')+'</p>';}
@@ -425,8 +450,11 @@ class _SvcApi:
 
     def svc_status(self):
         from autokrp import winsvc
-        return {"supported": winsvc.supported() and not self.demo, "installed": winsvc.installed(),
-                "background": self.background}
+        inst = winsvc.installed()
+        task_exe = winsvc.task_program() if inst else None
+        return {"supported": winsvc.supported() and not self.demo, "installed": inst,
+                "background": self.background, "stale": bool(task_exe and not winsvc.same_program(task_exe)),
+                "task_exe": task_exe or ""}
 
     def _r(self, ok, msg):
         return {"ok": ok, "msg": msg, "svc": self.svc_status()}
@@ -672,6 +700,7 @@ def main():
     ap.add_argument("--remove-service", action="store_true", help="remove server auto-start")
     ap.add_argument("--svc-user", help=argparse.SUPPRESS)
     ap.add_argument("--quiet", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--quit-running", action="store_true", help="close a running AutoKRP (used by the installer before updating)")
     ap.add_argument("--local-db", action="store_true", help="ignore the MySQL settings and use the local database")
     ap.add_argument("--memdiag", action="store_true", help="log memory use every minute to logs\\memdiag.txt (diagnostics)")
     ap.add_argument("--memdiag-trace", action="store_true", help="with --memdiag: trace Python allocations (tracemalloc); slows the app")
@@ -692,6 +721,8 @@ def main():
                                     f"{paths.location_file()}"))
                 return 1
             paths.set_root(loc)
+    if args.quit_running:
+        return _quit_running()
     if args.install_service or args.remove_service:
         return _svc_cli(args)
     if args.headless and paths.saved_mode() != "server":
@@ -794,7 +825,17 @@ def main():
     if real is not None and (args.memdiag or args.memdiag_trace):
         logging.getLogger("autokrp.app").warning("memdiag on: %s", memdiag.start(window, paths.logs_dir(), real._store, trace=args.memdiag_trace))
     import threading as _th
-    start_control({"headless": False}, _th.Event(), on_show=lambda: gate._show_window())
+    ctl_stop = _th.Event()
+    start_control({"headless": False}, ctl_stop, on_show=lambda: gate._show_window())
+
+    def ctl_quit():                     # 1.52: STOP (فایل نصبی هنگام به‌روزرسانی) ← خروج کامل حتی با مانیتورینگ فعال
+        ctl_stop.wait()
+        try:
+            gate._quitting = True
+            window.destroy()
+        except Exception:
+            pass
+    _th.Thread(target=ctl_quit, name="ctl-quit", daemon=True).start()
     # بستن پنجره وقتی مانیتورینگ فعال است: برنامه در پس‌زمینه می‌ماند (خروج کامل از دکمه‌ی «خروج کامل»)
     def on_closing():
         return gate._on_closing()

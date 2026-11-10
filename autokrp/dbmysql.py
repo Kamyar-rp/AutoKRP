@@ -25,6 +25,16 @@ from . import atrest, paths
 log = logging.getLogger(__name__)
 
 MODES = ("plain", "cols", "blob")
+BACKENDS = ("mysql", "postgres")          # 1.53: PostgreSQL 16+ (dbpg.PgBackend)
+ENGINE_NAME = {"mysql": "MySQL", "postgres": "PostgreSQL"}
+
+
+def backend_for(conf):
+    """کلاس اتصال مناسب تنظیمات (MySQL یا PostgreSQL)."""
+    if (conf or {}).get("backend") == "postgres":
+        from .dbpg import PgBackend
+        return PgBackend(conf)
+    return MySQLBackend(conf)
 SSL_MODES = ("off", "required", "verify_ca", "verify_identity")   # مثل ssl-mode در MySQL
 CHG = "_akrp_chg"                 # جدول تغییرات (فقط در SQLite)
 META = "_akrp_meta"               # اطلاعات خود AutoKRP در MySQL (حالت، بررسی کلید، نسخه)
@@ -81,7 +91,7 @@ def load_conf():
         c = json.loads(atrest.read_bytes(p).decode("utf-8"))
     except Exception as e:
         raise DbError(f"فایل تنظیمات پایگاه داده (db.dat) خوانده نشد: {e}")
-    return c if c.get("backend") == "mysql" else None
+    return c if c.get("backend") in BACKENDS else None
 
 
 def save_conf(conf):
@@ -97,22 +107,26 @@ def remove_conf():
 
 
 def clean_conf(c, old=None):
-    """اعتبارسنجی ورودی رابط؛ رمز خالی = همان رمز قبلی (فقط اگر میزبان/یوزر عوض نشده باشد)."""
+    """اعتبارسنجی ورودی رابط؛ رمز خالی = همان رمز قبلی (فقط اگر نوع، میزبان و یوزر عوض نشده باشد)."""
     c = dict(c or {})
+    be = c.get("backend") or "mysql"
+    if be not in BACKENDS:
+        raise DbError("نوع پایگاه داده نامعتبر است.")
+    eng = ENGINE_NAME[be]
     host = str(c.get("host") or "").strip()
     if not host or len(host) > 255 or any(ch in host for ch in " /\\@;'\"`"):
-        raise DbError("آدرس سرور MySQL معتبر نیست.")
+        raise DbError(f"آدرس سرور {eng} معتبر نیست.")
     try:
-        port = int(c.get("port") or 3306)
+        port = int(c.get("port") or (5432 if be == "postgres" else 3306))
         if not 0 < port < 65536:
             raise ValueError
     except (TypeError, ValueError):
         raise DbError("پورت معتبر نیست.")
     user = str(c.get("user") or "").strip()
     if not user or len(user) > 80:
-        raise DbError("نام کاربری MySQL را وارد کنید.")
+        raise DbError(f"نام کاربری {eng} را وارد کنید.")
     db = str(c.get("database") or "autokrp").strip()
-    if not _NAME.match(db):
+    if not _NAME.match(db) or (be == "postgres" and len(db) > 63):
         raise DbError("نام پایگاه داده فقط حروف انگلیسی، عدد و _ (حداکثر ۶۴).")
     sslm = c.get("ssl") or "off"
     if sslm not in SSL_MODES:
@@ -125,11 +139,11 @@ def clean_conf(c, old=None):
         raise DbError("حالت ذخیره نامعتبر است.")
     pw = c.get("password")
     if not pw:
-        if old and old.get("host") == host and old.get("user") == user and int(old.get("port") or 0) == port:
+        if old and (old.get("backend") or "mysql") == be and old.get("host") == host and old.get("user") == user and int(old.get("port") or 0) == port:
             pw = old.get("password", "")
         else:
-            raise DbError("رمز MySQL را وارد کنید.")
-    return {"backend": "mysql", "host": host, "port": port, "user": user, "password": str(pw), "database": db,
+            raise DbError(f"رمز {eng} را وارد کنید.")
+    return {"backend": be, "host": host, "port": port, "user": user, "password": str(pw), "database": db,
             "ssl": sslm, "ca_pem": ca if sslm.startswith("verify") else "", "mode": mode}
 
 

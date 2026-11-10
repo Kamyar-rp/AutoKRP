@@ -15,7 +15,7 @@ function loadXterm() {
   }
   const add = (tag, attrs) => new Promise((res, rej) => { const e = document.createElement(tag); Object.assign(e, attrs); e.onload = res; e.onerror = () => rej(new Error("load " + (attrs.src || attrs.href))); document.head.appendChild(e); });
   _xtermReady = Promise.all([add("link", { rel: "stylesheet", href: "vendor/xterm.css" }), add("script", { src: "vendor/xterm.js" })])
-    .then(() => add("script", { src: "vendor/addon-fit.js" }));
+    .then(() => Promise.all([add("script", { src: "vendor/addon-fit.js" }), add("script", { src: "vendor/addon-search.js" }).catch(() => null)]));
   _xtermReady.catch(() => { _xtermReady = null; });
   return _xtermReady;
 }
@@ -93,6 +93,8 @@ function termRoot() {
       <button class="btn sm ghost" id="termSnipBtn" title="دستورهای ذخیره‌شده: با یک کلیک به ترمینال فعال (یا همه، در حالت MultiExec) فرستاده می‌شوند">دستورها ▾</button>
       <button class="btn sm ghost" id="termMulti" title="MultiExec: هر چه تایپ یا ارسال کنید هم‌زمان به همه‌ی ترمینال‌های تیک‌خورده می‌رود">MultiExec</button>
       <div class="term-tools">
+        <button class="btn sm ghost" id="termFindBtn" title="جست‌وجو در متن همین ترمینال (Ctrl+Shift+F)">جست‌وجو</button>
+        <button class="btn sm ghost" id="termLogBtn" title="ذخیره‌ی متن کل این نشست، از اول تا الان، در یک فایل txt. لاگ فقط در حافظه است و با بستن ترمینال پاک می‌شود.">ذخیره‌ی لاگ</button>
         <button class="btn sm ghost" id="termFontM" title="کوچک کردن متن">A−</button><button class="btn sm ghost" id="termFontP" title="بزرگ کردن متن">A+</button>
         <label class="chk" title="رنگی کردن کلمه‌های مهم مثل error، up/down، IP و نام اینترفیس‌ها"><input type="checkbox" id="termHl" ${TP.highlight ? "checked" : ""}>رنگ کلمه‌ها</label>
         <label class="chk" title="متن انتخاب‌شده خودکار کپی شود (کلیک راست = چسباندن)"><input type="checkbox" id="termCs" ${TP.copySel ? "checked" : ""}>کپی با انتخاب</label>
@@ -100,6 +102,13 @@ function termRoot() {
       </div></div>
       <div class="term-snips" id="termSnips" hidden></div>
       <div class="term-multi" id="termMultiBar" hidden></div>
+      <div class="term-find" id="termFind" hidden>
+        <input type="text" class="ltr" id="termFindQ" placeholder="جست‌وجو در این ترمینال…" autocomplete="off" spellcheck="false">
+        <span class="muted" id="termFindN"></span>
+        <button class="btn sm ghost" id="termFindPrev" title="قبلی (Shift+Enter)">↑</button><button class="btn sm ghost" id="termFindNext" title="بعدی (Enter)">↓</button>
+        <label class="chk" title="حساس به بزرگی و کوچکی حروف"><input type="checkbox" id="termFindCase">Aa</label>
+        <button class="btn sm ghost" id="termFindX" title="بستن (Esc)">✕</button>
+      </div>
       <div class="term-stage" id="termStage"></div>
       <div class="term-stats" id="termStats" hidden></div>
       <div class="term-status" id="termStatus"></div>`;
@@ -107,6 +116,17 @@ function termRoot() {
     $("#termNew").onclick = () => termConnectDlg();
     $("#termMulti").onclick = () => termMultiToggle();
     $("#termSnipBtn").onclick = () => { const b = $("#termSnips"); b.hidden = !b.hidden; if (!b.hidden) termSnipsRender(); };
+    $("#termFindBtn").onclick = () => termFindOpen();
+    $("#termLogBtn").onclick = (e) => termSaveLog(e.currentTarget);
+    $("#termFindQ").oninput = () => termFindGo(1, true);
+    $("#termFindQ").onkeydown = (e) => {
+      if (e.key === "Enter") { e.preventDefault(); termFindGo(e.shiftKey ? -1 : 1); }
+      else if (e.key === "Escape") { e.preventDefault(); termFindClose(); }
+    };
+    $("#termFindPrev").onclick = () => termFindGo(-1);
+    $("#termFindNext").onclick = () => termFindGo(1);
+    $("#termFindCase").onchange = () => termFindGo(1, true);
+    $("#termFindX").onclick = () => termFindClose();
     $("#termFontM").onclick = () => termFont(-1);
     $("#termFontP").onclick = () => termFont(1);
     $("#termHl").onchange = (e) => { TP.highlight = e.target.checked; saveTP(); };
@@ -115,6 +135,41 @@ function termRoot() {
     window.addEventListener("resize", () => { clearTimeout(TERM._rz); TERM._rz = setTimeout(termFitActive, 120); });
   }
   return r;
+}
+/* --- جست‌وجو در متن ترمینال فعال (افزونه‌ی رسمی xterm) و ذخیره‌ی لاگ نشست (1.54) --- */
+const TFIND_DECO = { matchBackground: "#7c5a00", matchOverviewRuler: "#c9a227", activeMatchBackground: "#d97706", activeMatchColorOverviewRuler: "#f59e0b" };
+function termCur() { return TERM.tabs.find((x) => x.id === TERM.active); }
+function termFindOpen() {
+  const t = termCur(), bar = $("#termFind"); if (!t || !bar) return;
+  if (!t.search) return toast("جست‌وجو در این ترمینال در دسترس نیست.", "warn");
+  bar.hidden = false; termFitActive();
+  const q = $("#termFindQ"), sel = t.term.hasSelection() ? t.term.getSelection() : "";
+  if (sel && !sel.includes("\n") && sel.length <= 200) q.value = sel;
+  q.focus(); q.select(); if (q.value) termFindGo(1, true);
+}
+function termFindClose() {
+  const bar = $("#termFind"); if (!bar || bar.hidden) return;
+  bar.hidden = true; $("#termFindN").textContent = "";
+  TERM.tabs.forEach((t) => { if (t.search) t.search.clearDecorations(); });
+  termFitActive(); const t = termCur(); if (t) t.term.focus();
+}
+function termFindGo(dir, incremental) {
+  const t = termCur(), q = $("#termFindQ").value; if (!t || !t.search) return;
+  if (!q) { t.search.clearDecorations(); t.term.clearSelection(); $("#termFindN").textContent = ""; return; }
+  const opts = { caseSensitive: $("#termFindCase").checked, incremental: !!incremental, decorations: TFIND_DECO };
+  const found = dir < 0 ? t.search.findPrevious(q, opts) : t.search.findNext(q, opts);
+  if (!found) $("#termFindN").textContent = tt("پیدا نشد");
+}
+function termFindCount(t, e) {
+  if (t.id !== TERM.active || !$("#termFind") || $("#termFind").hidden) return;
+  const n = e && e.resultCount || 0;
+  $("#termFindN").textContent = !$("#termFindQ").value ? "" : !n ? tt("پیدا نشد") : e.resultIndex >= 0 ? `${num(e.resultIndex + 1)} / ${num(n)}` : `${num(n)}${n >= 1000 ? "+" : ""}`;
+}
+async function termSaveLog(btn) {
+  const t = termCur(); if (!t) return toast("ترمینالی باز نیست.", "warn");
+  const r = await withSpin(btn, () => api("term_log", t.id));
+  if (!r.ok) return toast(r.error, "error");
+  if (!r.cancelled) { toast("ذخیره شد: " + r.path, "ok"); t.logWarned = false; }
 }
 function termFont(d) {
   TP.font = Math.max(9, Math.min(28, TP.font + d)); saveTP();
@@ -152,7 +207,7 @@ function termStatus() {
   el.innerHTML = t ? `<span class="dot" style="background:${t.color}"></span>${t.proto === "serial"
       ? `<span class="ltr">${esc(t.host)} · ${esc(t.info || "")}</span><span class="tag info">کابل کنسول</span>${t.closed ? "" : `<button class="btn sm" id="termBrk" title="ارسال سیگنال Break (مثلاً برای Password Recovery روتر Cisco در ۶۰ ثانیه‌ی اول روشن شدن)">Break</button>`}`
       : `<span class="ltr">${esc(t.user ? t.user + "@" : "")}${esc(t.host)}:${t.port}</span>${t.proto === "telnet" ? `<span class="tag warn" title="یوزر، رمز و همه‌ی متن‌ها روی شبکه خوانا منتقل می‌شوند">Telnet — بدون رمزنگاری</span>` : ""}`}
-    ${t.kind === "adhoc" ? `<span class="tag mute">موقت</span>` : ""}${t.recording ? `<span class="tag warn">ضبط روشن</span>` : ""}
+    ${t.kind === "adhoc" ? `<span class="tag mute">موقت</span>` : ""}${t.recording ? `<span class="tag warn">ضبط روشن</span>` : ""}${t.logcut ? `<span class="tag warn" title="لاگ نشست به سقف حافظه رسید و ابتدای آن پاک شد. «ذخیره‌ی لاگ» فقط بخش باقی‌مانده را ذخیره می‌کند.">ابتدای لاگ پاک شد</span>` : (t.logp || 0) >= 80 ? `<span class="tag warn" title="لاگ نشست فقط در حافظه است. اگر لازم دارید با «ذخیره‌ی لاگ» ذخیره کنید؛ با پر شدن، قسمت‌های قدیمی‌تر پاک می‌شوند.">لاگ نشست ${num(t.logp)}٪ پر</span>` : ""}
     ${t.closed ? `<span class="tag err">قطع: ${esc(t.reason || "")}</span><button class="btn sm" id="termRe">اتصال دوباره</button>` : `<span class="tag ok">وصل</span>`}
     <span class="muted ltr" style="margin-inline-start:auto">${t.cols}×${t.rows}</span>` : "";
   const re = $("#termRe"); if (re) re.onclick = () => termReconnect(t);
@@ -165,6 +220,7 @@ function termActivate(id) {
   termRenderTabs();
   const t = TERM.tabs.find((x) => x.id === id);
   termStatsRender();
+  if ($("#termFind") && !$("#termFind").hidden) { TERM.tabs.forEach((x) => { if (x !== t && x.search) x.search.clearDecorations(); }); $("#termFindN").textContent = ""; if (t && t.search && $("#termFindQ").value) setTimeout(() => termFindGo(1, true), 60); }
   if (t) setTimeout(() => { termFit(t); t.term.focus(); termStatsTick(); }, 20);
 }
 function termFit(t) {
@@ -297,18 +353,23 @@ async function termAttach(s) {
   const el = document.createElement("div"); el.className = "term-pane"; el.hidden = true; el.setAttribute("data-no-i18n", "");   // خروجی دستگاه ترجمه نشود
   $("#termStage").appendChild(el);
   const term = new window.Terminal({ fontFamily: 'Consolas, "Cascadia Mono", "DejaVu Sans Mono", monospace', fontSize: TP.font, cursorBlink: true,
-    scrollback: 5000, theme: XTHEME, allowProposedApi: false, rightClickSelectsWord: false, convertEol: false });
+    scrollback: 5000, theme: XTHEME, allowProposedApi: true, rightClickSelectsWord: false, convertEol: false });
   const fit = new window.FitAddon.FitAddon(); term.loadAddon(fit); term.open(el);
-  const t = { ...s, el, term, fit, next: 0, dec: new TextDecoder("utf-8"), fg: false, pend: "", color: TCOLORS[TERM.seq++ % TCOLORS.length], cols: term.cols, rows: term.rows, out: "", sending: false };
+  let search = null;
+  try { if (window.SearchAddon) { search = new window.SearchAddon.SearchAddon({ highlightLimit: 1000 }); term.loadAddon(search); } } catch (_) { search = null; }
+  const t = { ...s, el, term, fit, search, next: 0, dec: new TextDecoder("utf-8"), fg: false, pend: "", color: TCOLORS[TERM.seq++ % TCOLORS.length], cols: term.cols, rows: term.rows, out: "", sending: false };
   TERM.tabs.push(t);
   // ورودی: تجمیع و ارسال ترتیبی
   term.onData((d) => termInput(t, d));
   term.onResize(({ cols, rows }) => { t.cols = cols; t.rows = rows; termStatus(); clearTimeout(t._rz); t._rz = setTimeout(() => !t.closed && api("term_resize", t.id, cols, rows), 150); });
-  term.onSelectionChange(() => { if (TP.copySel && term.hasSelection()) termCopy(term.getSelection()); });
+  term.onSelectionChange(() => { if (TP.copySel && term.hasSelection() && document.activeElement !== $("#termFindQ")) termCopy(term.getSelection()); });
+  if (search) search.onDidChangeResults((e) => termFindCount(t, e));
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== "keydown") return true;
     if (e.ctrlKey && e.shiftKey && (e.key === "C" || e.key === "c")) { if (term.hasSelection()) termCopy(term.getSelection()); return false; }
     if (e.ctrlKey && e.shiftKey && (e.key === "V" || e.key === "v")) { termPaste(t); return false; }
+    if (e.ctrlKey && e.shiftKey && (e.key === "F" || e.key === "f")) { e.preventDefault(); termFindOpen(); return false; }
+    if (e.key === "Escape" && $("#termFind") && !$("#termFind").hidden) { termFindClose(); return false; }
     return true;
   });
   el.addEventListener("contextmenu", (e) => { e.preventDefault(); termPaste(t); });
@@ -436,6 +497,11 @@ async function termPoll(t) {
       t.term.write(s);
     }
     t.next = r.next;
+    if ((r.logp || 0) !== t.logp || !!r.logcut !== !!t.logcut) {      // لاگ نشست فقط در حافظه است؛ نزدیک سقف هشدار بده
+      t.logp = r.logp || 0; t.logcut = !!r.logcut;
+      if (t.logp >= 80 && !t.logWarned) { t.logWarned = true; toast(`${tt("لاگ نشست")} «${t.title}» ${tt("نزدیک سقف حافظه است؛ اگر لازم دارید با «ذخیره‌ی لاگ» ذخیره کنید، وگرنه قسمت‌های قدیمی‌تر پاک می‌شوند.")}`, "warn"); }
+      if (t.id === TERM.active) termStatus();
+    }
     if (r.closed) { termDead(t, r.reason); break; }
   }
   t.polling = false;
@@ -830,7 +896,7 @@ async function xfOpen(o, accept) {
 
 /* --- صف انتقال‌ها --- */
 function xfJobUpdate(j) { const i = XF.jobs.findIndex((x) => x.id === j.id); if (i >= 0) XF.jobs[i] = j; else XF.jobs.unshift(j); xfRenderJobs(); }
-const XJ_ST = { running: ["info", "در حال انتقال"], waiting: ["mute", "در انتظار"], ok: ["ok", "کامل"], error: ["err", "خطا"], cancelled: ["mute", "لغو شد"] };
+const XJ_ST = { running: ["info", "در حال انتقال"], queued: ["mute", "در صف"], waiting: ["mute", "در انتظار"], ok: ["ok", "کامل"], error: ["err", "خطا"], cancelled: ["mute", "لغو شد"] };
 function xfRenderJobs() {
   const box = $("#xfJobs"); if (!box) return;
   if (!XF.jobs.length) { box.innerHTML = `<div class="empty">انتقالی نیست.</div>`; return; }
@@ -839,7 +905,7 @@ function xfRenderJobs() {
     return `<tr><td>${j.dir === "up" ? "↑ آپلود" : j.dir === "stage" ? "↑ TFTP" : "↓ دانلود"}</td><td class="ltr wrap">${esc(j.remote || j.name)}</td><td class="ltr">${esc(j.proto.toUpperCase())} ${esc(j.host)}</td>
       <td><div class="xf-prog"><span style="width:${pct}%"></span></div><small class="muted ltr">${fsize(j.done)}${j.size != null ? " / " + fsize(j.size) : ""}</small></td>
       <td class="ltr">${j.state === "running" ? fsize(j.speed) + "/s" : ""}</td><td><span class="tag ${st[0]}">${st[1]}</span>${j.error ? `<div class="muted wrap">${esc(j.error)}</div>` : ""}</td>
-      <td>${["running", "waiting"].includes(j.state) ? `<button class="btn sm ghost" data-xjc="${j.id}">لغو</button>`
+      <td>${["running", "waiting", "queued"].includes(j.state) ? `<button class="btn sm ghost" data-xjc="${j.id}">لغو</button>`
         : ["error", "cancelled"].includes(j.state) && xfCanRetry(j) ? `<button class="btn sm" data-xjr="${j.id}">تلاش مجدد</button>` : ""}</td></tr>`; }).join("")}</tbody></table>`;
   $$("[data-xjc]", box).forEach((b) => (b.onclick = () => api("xfer_cancel", b.dataset.xjc).then(() => xfPollJobs(true))));
   $$("[data-xjr]", box).forEach((b) => (b.onclick = () => withSpin(b, () => xfRetry(XF.jobs.find((x) => x.id === b.dataset.xjr)))));
@@ -875,14 +941,14 @@ async function xfPollJobs(once) {
   if (!axOk("term.xfer")) return;
   const r = await api("xfer_jobs");
   if (r.ok) {
-    const before = XF.jobs.filter((j) => j.state === "running").map((j) => j.id);
+    const before = XF.jobs.filter((j) => j.state === "running" || j.state === "queued").map((j) => j.id);
     XF.jobs = r.jobs; xfRenderJobs();
-    const finished = before.filter((id) => { const j = XF.jobs.find((x) => x.id === id); return j && j.state !== "running"; });
+    const finished = before.filter((id) => { const j = XF.jobs.find((x) => x.id === id); return j && j.state !== "running" && j.state !== "queued"; });
     if (finished.length && XF.desktop && XF.local.loaded && $("#xfLocal")) xfLocalGo(XF.local.cwd);
     if (finished.length && XF.cur && XF.cur.browse && $("#xrList")) xfRemoteGo(XF.cur.cwd);
   }
   if (XF.polling) return;
-  if (XF.jobs.some((j) => ["running", "waiting"].includes(j.state)) && SSH.tab === "xfer" && S.page === "ssh") {
+  if (XF.jobs.some((j) => ["running", "waiting", "queued"].includes(j.state)) && SSH.tab === "xfer" && S.page === "ssh") {
     XF.polling = true; setTimeout(() => { XF.polling = false; xfPollJobs(); }, 1000);
   }
 }

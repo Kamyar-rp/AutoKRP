@@ -411,6 +411,10 @@ body.nadm .bigswitch { pointer-events: none; opacity: .75; }
 .term-pane .xterm { height: 100%; }
 .term-status { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 6px 2px 0; color: var(--muted); }
 .term-snips { margin-bottom: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.term-find { margin-bottom: 8px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.term-find[hidden] { display: none; }
+.term-find input[type=text] { flex: 0 1 320px; width: 320px; max-width: 45%; min-width: 120px; }
+.term-find #termFindN { min-width: 70px; }
 .term-multi { margin-bottom: 8px; padding: 6px 10px; border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent); border-radius: 8px; color: var(--warn); font-size: 13px; display: flex; gap: 8px; align-items: center; }
 .term-tab .tm-chk { margin: 0; }
 .term-tab .tp { font-size: 10.5px; padding: 0 5px; }
@@ -1265,3 +1269,9 @@ body.noc-on .side-edge, .db-wrap:fullscreen ~ .side-edge { display: none; }
 .td-msg .tm { font-size: 11px; color: var(--muted); margin-top: 3px; }
 .td-send { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line2); }
 .td-send textarea { flex: 1; resize: none; }
+
+/* 1.54 قاعده‌های مدت بلاک */
+.br-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.br-row select, .br-row input { width: auto; }
+.br-row .br-tools { margin-inline-start: auto; display: inline-flex; gap: 4px; }
+.nowrap { white-space: nowrap; }

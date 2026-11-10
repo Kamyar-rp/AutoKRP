@@ -12,6 +12,11 @@ build/
 dist/
 *.spec
 requirements-lock.txt
+# 1.52: build tools (vendor\README.md) and their local installs
+vendor/*
+!vendor/README.md
+.pybuild/
+.innosetup/
 
 # Generated at build time (dev/deps_snapshot.py)
 autokrp/build_deps.txt

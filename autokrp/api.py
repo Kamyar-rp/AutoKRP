@@ -239,11 +239,11 @@ class Api:
         from . import dbmysql
         try:
             c = self._db_conf(conf)
-            info = dbmysql.MySQLBackend(c).probe()
+            info = dbmysql.backend_for(c).probe()
         except dbmysql.DbError as e:
             raise ConnectorError(str(e))
         cur = self._store.backend
-        info["current"] = bool(cur and cur.conf.get("host") == c["host"] and int(cur.conf.get("port")) == c["port"]
+        info["current"] = bool(cur and (cur.conf.get("backend") or "mysql") == c["backend"] and cur.conf.get("host") == c["host"] and int(cur.conf.get("port")) == c["port"]
                                and cur.conf.get("database") == c["database"])
         return {"info": info}
 
@@ -258,10 +258,11 @@ class Api:
                 return {"exists": True}
             raise ConnectorError(str(e))
         self._settings.update({"database": {"asked": True}})
+        eng = dbmysql.ENGINE_NAME[c["backend"]]
         what = ("تنظیمات اتصال عوض شد" if r.get("reconnected") else
-                "داده‌های موجود در MySQL بارگذاری شد" if r["loaded"] else "داده‌های فعلی به MySQL منتقل شد")
+                f"داده‌های موجود در {eng} بارگذاری شد" if r["loaded"] else f"داده‌های فعلی به {eng} منتقل شد")
         self._store.add_history("security", "پایگاه داده", "ok",
-                                f"پایگاه داده: MySQL {c['host']}:{c['port']}/{c['database']} (حالت {c['mode']}، TLS {c['ssl']}) — {what}")
+                                f"پایگاه داده: {eng} {c['host']}:{c['port']}/{c['database']} (حالت {c['mode']}، TLS {c['ssl']}) — {what}")
         self._stats_cache = {}
         return {"db": self._db_state(), "loaded": r["loaded"], "reconnected": bool(r.get("reconnected"))}
 
@@ -272,7 +273,7 @@ class Api:
         self._settings.update({"database": {"asked": True}})
         if was["backend"] != "local":
             self._store.add_history("security", "پایگاه داده", "ok",
-                                    f"پایگاه داده: برگشت به فایل محلی (داده‌های MySQL {was.get('host')}/{was.get('database')} دست نخورد)")
+                                    f"پایگاه داده: برگشت به فایل محلی (داده‌های {'PostgreSQL' if was.get('backend') == 'postgres' else 'MySQL'} {was.get('host')}/{was.get('database')} دست نخورد)")
         return {"db": self._db_state()}
 
     def _excluded_fn(self):
@@ -1826,6 +1827,20 @@ class Api:
                     raise ConnectorError(f"AbuseIPDB: پوشه‌ی «{d}» وجود ندارد.")
                 if Path(d).resolve() == paths.data_dir().resolve() or paths.data_dir().resolve() in Path(d).resolve().parents:
                     raise ConnectorError("AbuseIPDB: پوشه‌ی خروجی بی‌رمز نباید داخل پوشه‌ی داده‌های برنامه باشد.")
+        from . import banrules            # 1.54: مدت بلاک به روز و قاعده‌های مدت بلاک
+        from .settings import FG_EXTRA
+        try:
+            for conn in ("fortigate",) + FG_EXTRA:
+                sub = p.get(conn)
+                if isinstance(sub, dict) and "ban_days" in sub:
+                    sub["ban_days"] = banrules.clean_days(sub["ban_days"], "مدت بلاک پیش‌فرض")
+            fgp = p.get("fortigate")
+            if isinstance(fgp, dict) and "ban_rules" in fgp:
+                fgp["ban_rules"] = banrules.clean(fgp["ban_rules"])
+                if fgp["ban_rules"] != (self._settings.get("fortigate", "ban_rules", default=[]) or []):
+                    self._store.add_history("security", "FortiGate", "ok", f"قاعده‌های مدت بلاک تغییر کرد ({len(fgp['ban_rules'])} قاعده)")
+        except banrules.RuleError as e:
+            raise ConnectorError(str(e))
         if "fg_scenarios" in p:           # 1.29: تسک‌های پایتونی FortiGate (فقط ادمین؛ هر تغییر کد در تاریخچه)
             from . import fgtask
             try:
@@ -1977,7 +1992,7 @@ class Api:
                     except Exception:
                         has = False
                     if not has:
-                        raise ConnectorError("برای ذخیره‌ی داده‌ی مانیتورینگ در MySQL، اول پایگاه داده‌ی برنامه را MySQL کنید (تنظیمات ← پایگاه داده).")
+                        raise ConnectorError("برای ذخیره‌ی داده‌ی مانیتورینگ در پایگاه داده، اول پایگاه داده‌ی برنامه را MySQL یا PostgreSQL کنید (تنظیمات ← پایگاه داده).")
             for k, lo in (("keep_detail_days", 7), ("keep_hour_days", 30)):
                 if k in mo:
                     try:
@@ -2479,7 +2494,7 @@ class Api:
         return {"ip": row, "history": hist}
 
     @_safe
-    def ips_action(self, action, ips):
+    def ips_action(self, action, ips, opts=None):
         ips = [str(i).strip() for i in (ips or []) if str(i).strip()]
         if not ips:
             raise ConnectorError("هیچ IPای انتخاب نشده است.")
@@ -2502,8 +2517,17 @@ class Api:
                                                "abuse_input": {"source": "list", "text": "\n".join(ips), "force": True}}, "manual")
             return {"run_id": run.id, "message": f"چک مجدد {len(ips)}\u200f IP شروع شد" + note}
         if action == "ban":
-            run = self._worker.pipeline.start({"steps": {"fortigate": True}, "user": self._who(),
-                                               "fortigate_input": {"source": "list", "text": "\n".join(ips)}}, "manual")
+            # 1.54: مدت بلاک به روز (۰ = دائم). بدون days = طبق قاعده‌های تنظیمات. با days صریح، IPهای از قبل بلاک‌شده هم
+            # با همین مدت دوباره بلاک می‌شوند (تغییر مدت)، همه با پیش‌نمایش و تأیید.
+            o = {"steps": {"fortigate": True}, "user": self._who(), "fortigate_input": {"source": "list", "text": "\n".join(ips)}}
+            days = (opts or {}).get("days") if isinstance(opts, dict) else None
+            if days not in (None, "", "rules"):
+                from . import banrules
+                try:
+                    o["ban_days"] = banrules.clean_days(days)
+                except banrules.RuleError as e:
+                    raise ConnectorError(str(e))
+            run = self._worker.pipeline.start(o, "manual")
             return {"run_id": run.id, "message": "پیش‌نمایش بلاک آماده می‌شود"}
         if action in ("reviewed", "pending"):
             for ip in ips:
@@ -2819,6 +2843,17 @@ class Api:
     @_safe
     def term_close(self, sid):
         return self._term_call(self._term.close, sid, self._uname())
+
+    @_safe
+    def term_log(self, sid):
+        """ذخیره‌ی لاگ کل نشست ترمینال (متن خالص). لاگ فقط در حافظه است و با بستن ترمینال پاک می‌شود."""
+        s, text = self._term_call(self._term.session_log, str(sid), self._uname())
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", s.title or s.host).strip("_")[:40] or "terminal"
+        r = self._save_bytes(f"terminal_{safe}_{time.strftime('%Y%m%d_%H%M%S')}.txt", ".txt", text.encode("utf-8"))
+        if not r.get("cancelled"):
+            self._store.add_history("terminal", s.host, "ok", f"ذخیره‌ی لاگ نشست ترمینال — {s.title} — {len(text) // 1024 + 1} کیلوبایت",
+                                    user=self._uname())
+        return r
 
     @_safe
     def term_list(self):

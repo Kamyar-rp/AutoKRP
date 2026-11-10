@@ -675,12 +675,13 @@ async function monCapacityBox(el) {
     lines.push(`کارگرهای SNMP: ${num(w.n)} — خوانده‌شده ${num(w.done)}، اجراشده درون برنامه ${num(w.fallback)}، اجرای دوباره ${num(w.restarts)}، بازیافت ${num(w.recycled)}، timeout ${num(w.timeouts)}.`);
     if (w.degraded) lines.push(w.degraded);
   } else lines.push("کارگرهای SNMP: خاموش (هدف SNMP فعالی نیست یا تنظیم ۰ است؛ خواندن درون خود برنامه).");
-  lines.push(ts.target === "mysql" ? "محل ذخیره‌ی نمودارها و Trap/Syslog: MySQL" : "محل ذخیره‌ی نمودارها و Trap/Syslog: فایل‌های محلی");
+  const eng = my && my.backend === "postgres" ? "PostgreSQL" : "MySQL";     // 1.53
+  lines.push(ts.target === "mysql" ? `محل ذخیره‌ی نمودارها و Trap/Syslog: ${eng}` : "محل ذخیره‌ی نمودارها و Trap/Syslog: فایل‌های محلی");
   if (my) {
-    if (my.error) lines.push(`خطای MySQL: ${my.error}`);
-    lines.push(`MySQL: در صف ${num(my.queue)}، نوشته‌شده ${num(my.written)}، موقتاً در فایل ${num(my.spilled)}، پارتیشن‌بندی ${my.partitioned && my.partitioned.akrp_ts_d ? "دارد (پاک کردن سریع)" : "ندارد (پاک کردن با DELETE)"}.`);
+    if (my.error) lines.push(`خطای ${eng}: ${my.error}`);
+    lines.push(`${eng}: در صف ${num(my.queue)}، نوشته‌شده ${num(my.written)}، موقتاً در فایل ${num(my.spilled)}، پارتیشن‌بندی ${my.partitioned && my.partitioned.akrp_ts_d ? "دارد (پاک کردن سریع)" : "ندارد (پاک کردن با DELETE)"}.`);
   }
-  if (ts.target === "mysql") lines.push(mg.running ? `انتقال فایل‌های محلی به MySQL در جریان است: ${num(mg.done)} از ${num(mg.files)} فایل.`
+  if (ts.target === "mysql") lines.push(mg.running ? `انتقال فایل‌های محلی به ${eng} در جریان است: ${num(mg.done)} از ${num(mg.files)} فایل.`
     : `فایل‌های محلی منتظر انتقال: ${num(ts.local_files || 0)}${mg.error ? ` (آخرین خطا: ${mg.error})` : ""}.`);
   el.innerHTML = lines.map((x) => `<div>${esc(x)}</div>`).join("") + (w ? `<div class="table-wrap inner" style="margin-top:6px"><table class="grid cap-tbl"><thead><tr><th>کارگر</th><th>PID</th><th>وضعیت</th><th>در جریان</th><th>خوانده‌شده</th><th>RAM</th></tr></thead><tbody>
     ${w.workers.map((x) => `<tr><td>${num(x.slot + 1)}</td><td class="ltr">${esc(x.pid || "—")}</td><td>${esc(x.state === "ok" ? "فعال" : x.state === "starting" ? "در حال شروع" : "اجرای دوباره")}</td><td>${num(x.pending || 0)}</td><td>${num(x.polls || 0)}</td><td>${x.mem ? fmtBytes(x.mem) : "—"}</td></tr>`).join("")}</tbody></table></div>` : "")

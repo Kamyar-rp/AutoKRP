@@ -48,6 +48,11 @@ def legacy_items(options):
 CONN = {"splunk": "splunk", "abuse": "abuseipdb", "fortigate": "fortigate", "redmine": "redmine"}
 
 
+def _until(days):
+    """زمان پایان بلاک موقت از همین لحظه ("" = دائم)."""
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + int(days) * 86400)) if int(days or 0) else ""
+
+
 def block_reason(rec, cfg):
     """
     قانون واحد تصمیم (هم در اجرای روزانه و هم در بررسی کامل دیتابیس):
@@ -1782,9 +1787,32 @@ class Pipeline:
                 self.store.fw_reconcile(banned)
         want_exp = int(cli.cfg.get("ban_expiry") or 0)
         conv = bool(cli.cfg.get("convert_auto_bans", True)) and not sc
-        plan = fg.classify(targets, addresses, banned, ignore_nets, want_exp, conv)
-
         origin = run.data.get("fw_origin", {})
+        # 1.54 مدت بلاک (روز؛ ۰ = دائم): انتخاب صریح کاربر در این اجرا ← قاعده‌های تنظیمات ← پیش‌فرض دستگاه
+        from . import banrules
+        def_days = int(cli.cfg.get("ban_days") or 0)
+        forced = run.options.get("ban_days")
+        if forced is not None:
+            forced = banrules.clean_days(forced)
+            days_of = lambda ip: forced            # noqa: E731
+            self._log(run, f"FortiGate: مدت بلاک این اجرا به انتخاب کاربر: {banrules.label(forced)}")
+        else:
+            rules = self.settings.get("fortigate", "ban_rules", default=[]) or []
+            info = self.store.ips_info(targets) if rules else {}
+            hits = {}
+
+            def days_of(ip):
+                d, n = banrules.days_for(rules, info.get(ip), origin.get(ip, "manual"), def_days)
+                if n:
+                    hits[n] = hits.get(n, 0) + 1
+                return d
+        timed = self.store.fw_timed() if db else {}
+        plan = fg.classify(targets, addresses, banned, ignore_nets, want_exp, conv, days_of, timed, forced is not None and db)
+        if forced is None and rules:
+            used = "، ".join(f"قاعده‌ی {n}: {c}\u200f IP" for n, c in sorted(hits.items())) or "هیچ قاعده‌ای جور نشد"
+            self._log(run, f"FortiGate: قاعده‌های مدت بلاک ({len(rules)}) — {used}؛ بقیه پیش‌فرض ({banrules.label(def_days)})")
+        ip_days = {p["ip"]: int(p.get("days") or 0) for p in plan if "days" in p}
+
         for p in plan:
             p["origin"] = origin.get(p["ip"], "manual")
         run.data["fw_plan"] = plan
@@ -1795,7 +1823,7 @@ class Pipeline:
                                ("ignored", "ignored"), ("invalid", "invalid"))}
         if counts["to_convert"]:
             self._log(run, f"FortiGate: {counts['to_convert']}\u200f IP در Banned هست ولی بلاک خودکار (IPS، Application Control، ...) "
-                           "یا با انقضاست؛ پس از تأیید پاک و دوباره به‌صورت Administrative دائمی بلاک می‌شود", "warn")
+                           "یا با مدت دیگری است؛ پس از تأیید پاک و دوباره به‌صورت Administrative با مدت تعیین‌شده بلاک می‌شود", "warn")
         self._st(run)["message"] = f"{counts['to_ban'] + counts['to_convert']}\u200f IP برای بلاک"
 
         approved = []
@@ -1853,13 +1881,16 @@ class Pipeline:
                     results.append({**p, "result": "test"})
                     up(ip, fw_status="test", fw_detail="حالت تست: تبدیل به Administrative ارسال نشد", fw_at=now)
                     continue
-                ok, detail = cli.convert_ip(ip)
+                days = ip_days.get(ip, def_days)
+                ok, detail = cli.convert_ip(ip, days)
                 if ok:
                     fw_counts["converted"] += 1
                     converted.append(ip)
-                    msg = f"بلاک {p.get('source') or 'خودکار'} به Administrative" + (" دائمی" if not want_exp else "") + " تبدیل شد"
+                    until = _until(days)
+                    msg = (p["detail"].split("؛")[0] if p.get("retime") else
+                           f"بلاک {p.get('source') or 'خودکار'} به Administrative ({banrules.label(days)}) تبدیل شد") + (f" — تا {until}" if until else "")
                     self._log(run, f"{ip} → {msg}", "ok", "ban")
-                    up(ip, fw_status="banned", fw_detail=msg, fw_at=now)
+                    up(ip, fw_status="banned", fw_detail=msg, fw_at=now, fw_until=until, fw_days=str(days) if days else "")
                     self.store.add_history("ban", ip, "ok", f"{msg} ({APPROVED_TXT.get(run.data.get('approved_by', {}).get('fortigate'), 'تأیید دستی')}){tag}", run.id)
                     self.store.add_stat("ban", "ok", ip, src=p.get("origin", ""))
                 else:
@@ -1881,13 +1912,16 @@ class Pipeline:
                     self.store.add_stat("ban", "test", ip, src=p.get("origin", ""))
                     up(ip, fw_status="test", fw_detail="حالت تست: بلاک ارسال نشد", fw_at=now)
                     continue
-                ok, detail = cli.ban_ip(ip)
+                days = ip_days.get(ip, def_days)
+                ok, detail = cli.ban_ip(ip, days)
                 if ok:
                     fw_counts["banned"] += 1
                     db and self.store.mark_processed(f"ban:{ip}", run.id)
-                    self._log(run, f"{ip} → بلاک شد", "ok", "ban")
-                    up(ip, fw_status="banned", fw_detail="در این اجرا بلاک شد", fw_at=now)
-                    self.store.add_history("ban", ip, "ok", f"افزوده شد به Banned IP ({APPROVED_TXT.get(run.data.get('approved_by', {}).get('fortigate'), 'تأیید دستی')}){tag}", run.id)
+                    until = _until(days)
+                    dur = f" — {banrules.label(days)}" + (f"، تا {until}" if until else "")
+                    self._log(run, f"{ip} → بلاک شد{dur}", "ok", "ban")
+                    up(ip, fw_status="banned", fw_detail="در این اجرا بلاک شد" + dur, fw_at=now, fw_until=until, fw_days=str(days) if days else "")
+                    self.store.add_history("ban", ip, "ok", f"افزوده شد به Banned IP{dur} ({APPROVED_TXT.get(run.data.get('approved_by', {}).get('fortigate'), 'تأیید دستی')}){tag}", run.id)
                     self.store.add_stat("ban", "ok", ip, src=p.get("origin", ""))
                 else:
                     fw_counts["failed"] += 1
@@ -1902,12 +1936,12 @@ class Pipeline:
                     up(ip, fw_status={"address": "address", "banned": "already",
                                                         "ignored": "ignored"}[d], fw_detail=p["detail"], fw_at=now)
         if converted:
-            self._fw_verify(run, cli, converted, want_exp, results, fw_counts)
+            self._fw_verify(run, cli, converted, ip_days, results, fw_counts)
         conv_set = {p["ip"] for p in plan if p["decision"] == "convert"}
         if test and approved and not sc:
             # 1.23.1: به‌جای فایل json جدا (که در برنامه نمایش داده نمی‌شد) در گزارش اجرا (run.log، قابل نمایش در تاریخچه)
             body = json.dumps({"endpoint": "/api/v2/monitor/user/banned/add_users",
-                               "vdom": cli.vdom, "expiry": int(cli.cfg.get("ban_expiry") or 0),
+                               "vdom": cli.vdom, "expiry_seconds_by_ip": {ip: ip_days.get(ip, def_days) * 86400 for ip in approved},
                                "ip_addresses": [ip for ip in approved if ip not in conv_set],
                                "convert_to_admin (clear_users + add_users)": [ip for ip in approved if ip in conv_set]},
                               ensure_ascii=False)
@@ -1927,8 +1961,8 @@ class Pipeline:
         self._st(run)["message"] = msg
         self._log(run, "FortiGate: " + msg, "ok")
 
-    def _fw_verify(self, run, cli, ips, want_exp, results, fw_counts):
-        """پس از تبدیل، لیست Banned دوباره خوانده می‌شود: هر IP باید Administrative (و بدون انقضا اگر خواسته‌ایم) باشد."""
+    def _fw_verify(self, run, cli, ips, ip_days, results, fw_counts):
+        """پس از تبدیل، لیست Banned دوباره خوانده می‌شود: هر IP باید Administrative (و بدون انقضا اگر دائم خواسته‌ایم) باشد."""
         try:
             now_b = {b["ip"]: b for b in cli.get_banned()}
         except Exception as e:
@@ -1936,7 +1970,7 @@ class Pipeline:
             return
         for ip in ips:
             b = now_b.get(ip)
-            why = "در لیست Banned نیست" if not b else fg.needs_convert(b, want_exp)
+            why = "در لیست Banned نیست" if not b else fg.needs_convert(b, int(ip_days.get(ip) or 0) * 86400)
             if not why:
                 continue
             msg = f"پس از تبدیل هنوز درست نیست: {why}"

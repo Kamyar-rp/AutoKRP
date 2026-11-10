@@ -240,14 +240,14 @@ class MySqlTS:
     name = "mysql"
 
     def __init__(self, conf, spill=None, create=True):
-        from .dbmysql import MySQLBackend
+        from .dbmysql import backend_for
         self.conf = dict(conf)
         self.create = create          # False: فقط خواندن داده‌ی موجود (محل نوشتن فایل است)؛ جدول ساخته نمی‌شود
         self.absent = False
         self.missing = set()          # جدول‌هایی که (در حالت فقط‌خواندنی) وجود ندارند
         self.down_until = 0.0         # پس از خطای اتصال، خواندن‌ها ۳۰ ثانیه منتظر MySQL نمی‌مانند (رابط کند نشود)
         self.mode = self.conf.get("mode", "cols")
-        self._be = MySQLBackend(self.conf)
+        self._be = backend_for(self.conf)
         self.spill = spill or FileTS()
         self.cn = None
         self._lock = threading.RLock()
@@ -632,6 +632,190 @@ class MySqlTS:
                 "spilled": self.spilled, "partitioned": {k: len(v) > 0 for k, v in self.partitioned.items()}}
 
 
+# ============================================================================ PostgreSQL (1.53)
+class PgTS(MySqlTS):
+    """همان رفتار MySqlTS روی PostgreSQL 16+: جدول‌های پارتیشن‌شده‌ی RANGE روی t (روزانه/ماهانه) با یک پارتیشن DEFAULT
+    برای داده‌ی خارج از بازه (مثلاً انتقال فایل‌های قدیمی)؛ پاک کردن قدیمی‌ها با DROP TABLE پارتیشن."""
+    name = "postgres"
+    TABLES = (("akrp_ts_d", False), ("akrp_ts_h", True), ("akrp_ev", False))
+
+    def _conn(self):
+        if self.cn is None:
+            self.cn = self._be._connect()
+            self.cn.autocommit = True
+            if not self.ready:
+                self._ensure()
+        return self.cn
+
+    @staticmethod
+    def _lower(name):
+        s = name[1:]
+        if len(s) == 8:
+            return int(datetime.strptime(s, "%Y%m%d").replace(tzinfo=timezone.utc).timestamp())
+        return int(datetime.strptime(s, "%Y%m").replace(tzinfo=timezone.utc).timestamp())
+
+    def _parts(self, c, table):
+        c.execute("SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid JOIN pg_class p ON p.oid = i.inhparent "
+                  "WHERE p.relname = %s AND p.relnamespace = current_schema()::regnamespace", (table,))
+        pre = table + "_"
+        return sorted(r[0][len(pre):] for r in c.fetchall() if r[0].startswith(pre))
+
+    def _ensure(self):
+        c = self.cn.cursor()
+        for table, monthly in self.TABLES:
+            c.execute("SELECT to_regclass(%s)", (table,))
+            exists = c.fetchone()[0] is not None
+            if not exists and not self.create:
+                self.missing.add(table)
+                self.absent = len(self.missing) == 3
+                continue
+            if not exists:
+                cols = ("(k SMALLINT NOT NULL, tid BIGINT NOT NULL, t BIGINT NOT NULL, h BIGINT NOT NULL, d TEXT NOT NULL,"
+                        " PRIMARY KEY (k, tid, t, h))")
+                if table == "akrp_ev":
+                    cols = ("(t BIGINT NOT NULL, h BIGINT NOT NULL, k SMALLINT NOT NULL, sev SMALLINT NOT NULL, tid BIGINT NULL,"
+                            " src VARCHAR(64) NOT NULL DEFAULT '', d TEXT NOT NULL, PRIMARY KEY (t, h))")
+                try:
+                    c.execute("BEGIN")
+                    c.execute(f"CREATE TABLE {table} {cols} PARTITION BY RANGE (t)")  # nosec B608 — نام و ساختار ثابت در کد
+                    c.execute(f"CREATE TABLE {table}_pdef PARTITION OF {table} DEFAULT")  # nosec B608
+                    c.execute("COMMIT")
+                except Exception as e:  # noqa — بدون اجازه/پشتیبانی پارتیشن: جدول ساده، پاک کردن با DELETE
+                    c.execute("ROLLBACK")
+                    log.warning("tsdb: partitioning unavailable (%s), plain table", e)
+                    c.execute(f"CREATE TABLE IF NOT EXISTS {table} {cols}")  # nosec B608
+                if table == "akrp_ev":
+                    c.execute("CREATE INDEX IF NOT EXISTS akrp_ev_tid ON akrp_ev (tid, t)")
+                    c.execute("CREATE INDEX IF NOT EXISTS akrp_ev_src ON akrp_ev (src, t)")
+            self.partitioned[table] = self._parts(c, table)
+        self.ready = True
+        self._maintain(c)
+
+    def _maintain(self, c=None):
+        """پارتیشن‌های امروز و چند روز/ماه آینده ساخته شوند."""
+        c = c or self.cn.cursor()
+        now = int(time.time())
+        for table, monthly in self.TABLES:
+            have = self.partitioned.get(table) or []
+            if "pdef" not in have:
+                continue
+            for i in range(FUTURE_MONTHS + 1 if monthly else FUTURE_DAYS + 1):
+                n = self._pname(now + i * (31 * DAY if monthly else DAY), monthly)
+                if n in have:
+                    continue
+                try:
+                    c.execute(f"CREATE TABLE IF NOT EXISTS {table}_{n} PARTITION OF {table} "  # nosec B608 — نام‌ها از تاریخ
+                              f"FOR VALUES FROM ({self._lower(n)}) TO ({self._bound(n)})")
+                    have.append(n)
+                except Exception as e:  # noqa — داده‌ای از همین بازه در DEFAULT است (برنامه چند روز خاموش بوده)
+                    log.warning("tsdb: partition %s_%s not created (%s); rows stay in the default partition", table, n, e)
+            self.partitioned[table] = sorted(set(have))
+
+    def _write(self, batch, spill=True):
+        rows = {"akrp_ts_d": [], "akrp_ts_h": [], "akrp_ev": []}
+        for kind, tid, rec in batch:
+            if kind == "ev":
+                src = "" if self.mode == "blob" else str(rec.get("src") or "")[:64].replace("\x00", "")
+                rows["akrp_ev"].append((int(rec["t"]), secrets.randbelow(2 ** 31), EV_K.get(rec.get("k"), 0), EV_SEV.get(rec.get("sev"), 3),
+                                        rec.get("tid"), src, self.encode(rec)))
+                continue
+            rows[TABLE[kind]].append((KCODE[kind], int(tid), int(rec["t"]), secrets.randbelow(2 ** 31), self.encode(rec)))
+
+        def go(cn):
+            c = cn.cursor()
+            c.execute("BEGIN")                    # همه یا هیچ
+            try:
+                for table, rs in rows.items():
+                    if not rs:
+                        continue
+                    head = ("INSERT INTO akrp_ev (t, h, k, sev, tid, src, d) VALUES " if table == "akrp_ev"
+                            else f"INSERT INTO {table} (k, tid, t, h, d) VALUES ")  # nosec B608 — نام جدول ثابت
+                    ph = "(" + ", ".join(["%s"] * len(rs[0])) + ")"
+                    for i in range(0, len(rs), BATCH):
+                        part = rs[i:i + BATCH]
+                        c.execute(head + ", ".join([ph] * len(part)), [v for r in part for v in r])
+                c.execute("COMMIT")
+            except Exception:
+                try:
+                    c.execute("ROLLBACK")
+                except Exception:  # noqa
+                    pass
+                raise
+        try:
+            self._run(go)
+            self.written += len(batch)
+        except Exception as e:  # noqa — PostgreSQL در دسترس نیست: فایل محلی (بعداً منتقل می‌شود)
+            if not spill:
+                raise
+            log.warning("tsdb write failed, spilling %d records: %s", len(batch), e)
+            try:
+                self.spill.put(batch)
+                self.spilled += len(batch)
+            except Exception:
+                log.exception("tsdb spill")
+
+    def drop_before(self, table, before):
+        have = self.partitioned.get(table) or []
+        old = [p for p in have if p != "pdef" and self._bound(p) <= before]
+        if not old:
+            return 0
+
+        def go(cn):
+            c = cn.cursor()
+            for p in old:
+                c.execute(f"DROP TABLE IF EXISTS {table}_{p}")  # nosec B608 — نام‌ها از pg_inherits و تاریخ
+        self._run(go)
+        self.partitioned[table] = [p for p in have if p not in old]
+        return len(old)
+
+    def purge(self, kind, before, tid=None):
+        if self._skip() or TABLE[kind] in self.missing:
+            return
+        if kind == "ev":
+            sql, args = "DELETE FROM akrp_ev WHERE t < %s", (int(before),)
+        else:
+            sql = f"DELETE FROM {TABLE[kind]} WHERE k=%s" + (" AND tid=%s" if tid is not None else "") + " AND t < %s"  # nosec B608
+            args = (KCODE[kind],) + ((int(tid),) if tid is not None else ()) + (int(before),)
+        self._run(lambda cn: cn.cursor().execute(sql, args))
+
+    def sizes(self, max_age=600):
+        if self._sizes[1] is not None and time.time() - self._sizes[0] < max_age:
+            return self._sizes[1]
+        if self._skip():
+            return {"by": {k: {} for k in KINDS}, "day": {"sd": 0, "pm": 0, "ev": 0}, "days_pm": 0, "oldest": None}
+
+        def go(cn):
+            c = cn.cursor()
+            out = {k: {} for k in KINDS}
+            for table, kinds in (("akrp_ts_d", {1: "sd", 2: "pm"}), ("akrp_ts_h", {1: "sh", 2: "ph"})):
+                if table in self.missing:
+                    continue
+                c.execute(f"SELECT k, tid, SUM(octet_length(d)) + COUNT(*) * 24 FROM {table} GROUP BY k, tid")  # nosec B608
+                for k, tid, n in c.fetchall():
+                    if k in kinds:
+                        out[kinds[k]][int(tid)] = int(n or 0)
+            y0 = int(time.time() // DAY - 1) * DAY
+            day = {"sd": 0, "pm": 0, "ev": 0}
+            if "akrp_ts_d" not in self.missing:
+                c.execute("SELECT k, SUM(octet_length(d)) + COUNT(*) * 24 FROM akrp_ts_d WHERE t >= %s AND t < %s GROUP BY k", (y0, y0 + DAY))
+                for k, n in c.fetchall():
+                    day["sd" if k == 1 else "pm"] = int(n or 0)
+            if "akrp_ev" not in self.missing:
+                c.execute("SELECT SUM(octet_length(d)) + COUNT(*) * 40 FROM akrp_ev")
+                out["ev"][0] = int(c.fetchone()[0] or 0)
+            mn = None
+            if "akrp_ts_h" not in self.missing:
+                c.execute("SELECT MIN(t) FROM akrp_ts_h")
+                mn = c.fetchone()[0]
+            return {"by": out, "day": day, "days_pm": 0, "oldest": _month(mn) if mn else None}
+        r = self._run(go)
+        self._sizes = (time.time(), r)
+        return r
+
+    def status(self):
+        return dict(super().status(), backend="postgres")
+
+
 # ============================================================================ دسترسی یکپارچه
 class Store:
     """نوشتن در محل انتخاب‌شده؛ خواندن و پاک کردن از هر دو."""
@@ -655,7 +839,8 @@ class Store:
         elif self.mysql is None or self.mysql.conf != dict(conf) or (create and not self.mysql.create):
             if self.mysql is not None:
                 self.mysql.close()
-            self.mysql = MySqlTS(conf, spill=self.files, create=create)
+            cls = PgTS if conf.get("backend") == "postgres" else MySqlTS      # 1.53: PostgreSQL
+            self.mysql = cls(conf, spill=self.files, create=create)
         self.target = want
 
     def writer(self):

@@ -29,7 +29,7 @@ FEATURE_API = {
                 "dash_list", "dash_save", "dash_delete",
                 # 1.27.1: MIB سازنده‌ها ← نوع دستگاه خودکار
                 "mib_list", "mib_upload", "mib_delete", "mib_compile", "mib_types"},
-    "term": {"term_open", "term_break", "serial_ports", "term_snips_save", "term_read", "term_write", "term_resize", "term_close", "term_list", "term_stats", "conn_cancel",
+    "term": {"term_open", "term_break", "serial_ports", "term_snips_save", "term_read", "term_write", "term_resize", "term_close", "term_list", "term_stats", "term_log", "conn_cancel",
              "xfer_open", "xfer_conns", "xfer_ls", "xfer_mkdir", "xfer_delete", "xfer_rename", "xfer_close", "xfer_put_begin",
              "xfer_put", "xfer_get", "xfer_local", "local_ls", "xfer_jobs", "xfer_cancel", "xfer_clear", "xfer_clear_one", "tftp_start",
              "tftp_status", "tftp_stop", "tftp_add_local", "tftp_remove", "tftp_received_get"},
@@ -119,7 +119,7 @@ OPERATOR_MON = {"mon_save", "mon_delete", "mon_toggle", "mon_icon_upload", "mon_
 OPERATOR_TERM = {"xfer_open", "xfer_conns", "xfer_ls", "xfer_mkdir", "xfer_delete", "xfer_rename", "xfer_close",
                  "xfer_put_begin", "xfer_put", "xfer_get", "xfer_local", "local_ls", "xfer_jobs", "xfer_cancel", "xfer_clear", "xfer_clear_one",
                  "tftp_start", "tftp_status", "tftp_stop", "tftp_add_local", "tftp_remove", "tftp_received_get",
-                 "term_open", "term_read", "term_write", "term_resize", "term_close", "term_list", "term_stats",
+                 "term_open", "term_read", "term_write", "term_resize", "term_close", "term_list", "term_stats", "term_log",
                  "term_break", "serial_ports", "term_snips_save"}
 # اپراتوری که ابزار SSH دارد
 OPERATOR_SSH = {"ssh_save_device", "ssh_delete_devices", "ssh_list", "cred_list", "cred_save", "cred_delete", "ssh_preview", "ssh_start", "ssh_test", "ssh_job", "ssh_cancel", "ssh_jobs",

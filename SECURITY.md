@@ -20,6 +20,8 @@ A full description in Persian is in [docs/security-design.fa.md](docs/security-d
 ### Secrets and data at rest
 - API tokens and passwords are never stored in settings or the database; they live in an encrypted vault file (AES-256-GCM, random nonce, versioned AAD, padded to fixed size classes so the file size does not reveal the number of secrets).
 - Settings, run files, SSH outputs, config backups and logs are encrypted as well; the local database is an **SQLCipher 4** file (every page encrypted and authenticated).
+- External database (MySQL/MariaDB or PostgreSQL 16+, optional): "Encrypt sensitive columns" stores texts, details, device addresses, users and scripts with AES-256-GCM (the data key of this installation); "Fully encrypted" stores one encrypted image; "Readable" stores everything in plain text, so then security depends on TLS, database permissions and the database server's own disk encryption. The database password is kept in an encrypted file (AES-256-GCM, like the settings); changing the engine, server, port or user requires entering it again. TLS can be required and the server certificate verified against a CA.
+- The terminal "Save log" text is kept in memory only (never written by the app; up to 20 MB per session) and is cleared when the terminal is closed. The file you save with it is a plain-text export, like other exports.
 - Files are written atomically (unique temp file, fsync, replace). Exported CSV files are protected against formula injection.
 
 ### Key protection

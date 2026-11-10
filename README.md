@@ -27,13 +27,14 @@ A typical SOC chore: take the source IPs from IDS alerts, check them on AbuseIPD
 
 **FortiGate**
 - Several FortiGate devices, each with its own connection, token and certificate pin.
+- Permanent or **temporary blocks** (in days): pick the duration when blocking from the Addresses list (also for IPs that are already blocked), or set rules such as "country is IR → 30 days, everything else permanent".
 - **Python tasks**: write a `plan(fg, rows, ctx)` function that reads from the device and *proposes* actions (create an address, add it to a group, build a policy, …). AutoKRP shows the proposed requests and sends only the approved ones. Templates and a dry-run are included.
 - Offline FortiGate signature updates over SSH/TFTP; a CLI log-search command builder.
 
 **Device access (SSH, Telnet, console cable)**
 - Script library with variables from the previous tool's output; run on many devices at once; the last command's output can be passed on as CSV.
 - Scheduled config backups with version diff and "download latest of selected devices" as a zip.
-- Live terminal in tabs over SSH, Telnet or a USB/serial console cable (COM port, desktop mode only, with Break), MultiExec and saved command buttons; WinSCP-style file transfer (SFTP, SCP, FTP/FTPS, temporary TFTP server).
+- Live terminal in tabs over SSH, Telnet or a USB/serial console cable (COM port, desktop mode only, with Break), MultiExec, saved command buttons, search in the terminal text (Ctrl+Shift+F) and saving the whole session log; WinSCP-style file transfer (SFTP, SCP, FTP/FTPS, temporary TFTP server).
 - Telnet devices for runs and config backups (Cisco and other network devices supported by netmiko).
 - Network tools: find where an IP/MAC is connected (switch and port, via SNMP ARP/MAC tables), traceroute, IP owner lookup (RDAP), MAC vendor lookup (IEEE).
 - **API tool**: saved connections (base URL + Basic, Bearer or API-key auth; secrets in the encrypted store), GET/POST/PUT/PATCH/DELETE with parameters, headers and body, formatted JSON responses (copy or save), saved requests and a request log in the database (who, when, what; secrets masked).
@@ -46,6 +47,7 @@ A typical SOC chore: take the source IPs from IDS alerts, check them on AbuseIPD
 - Asset inventory from SNMP (ENTITY-MIB) and SSH, with change history and admin approval.
 
 **Everything else**
+- Data in a local encrypted SQLCipher file, or on a separate **MySQL/MariaDB** or **PostgreSQL 16+** server (existing data is moved automatically; sensitive columns can stay encrypted).
 - Statistics, repeated-IP analysis, full history, email notifications, offline tools (subnet calculator, hashes, IOC extractor, port list, …).
 - Every section and sub-feature can be turned off for everyone (really stopped, not just hidden) or limited per user/group (hidden / view / run).
 - English and Persian UI.
@@ -88,9 +90,24 @@ run.bat           &rem normal start
 |---|---|
 | `run_demo.bat` | Run with sample data |
 | `run.bat` | Run normally |
-| `build.bat` | Build `dist\AutoKRP.exe` (isolated venv, `pip-audit`, SHA-256 next to the exe) |
+| `build.bat` | Build the portable `dist\AutoKRP.exe` **and** the installer `dist\AutoKRP-Setup-X.Y.Z.exe` (isolated venv, `pip-audit`, SHA-256 next to each) |
+| `build.bat portable` | Build only the portable exe |
 
 Command-line options: `AutoKRP.exe --help` (`--server`, `--client`, `--demo`, `--install-service`, `--local-db`, `--memdiag`, …).
+
+### Installer (build it yourself)
+
+Releases contain only the portable `AutoKRP.exe`. To get an installer (`C:\Program Files\AutoKRP`, Start menu,
+uninstall entry), build it from source:
+
+1. Put the build tools into `vendor\` as listed in [vendor/README.md](vendor/README.md): the Python 3.14 Windows
+   installer (only if Python 3.14 is not installed) and the Inno Setup 6.3+/7 installer (only if Inno Setup is not
+   installed). Nothing is installed system-wide.
+2. Run `build.bat`. The output is `dist\AutoKRP-Setup-X.Y.Z.exe`.
+
+The installed app **continues with the existing data**: it uses the same data folder as the portable exe for the same
+Windows user. Running copies are closed before installing, and uninstalling never deletes data. If server auto-start
+was set up from the portable exe, the server window offers **Update to this copy**.
 
 ## Security
 

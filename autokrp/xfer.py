@@ -21,6 +21,8 @@ import time
 import uuid
 from pathlib import Path
 
+import paramiko
+
 from . import atrest, paths
 from .abort import CANCEL_MSG, Aborted, ftp_class
 from .term import TermError, check_hostkey, ssh_connect
@@ -32,6 +34,9 @@ PUT_MAX_CHUNK = 4 * 1024 * 1024
 MAX_CONN_PER_USER = 6
 IDLE_SECS = 30 * 60
 JOB_KEEP = 3600
+IO_TIMEOUT = 60                    # مهلت هر خواندن/نوشتن روی کانال انتقال (1.54: SFTP مهلت نداشت و تا ابد می‌ماند)
+STALL_SECS = 120                  # انتقال محلی بدون هیچ پیشرفت ← خطا و ادامه‌ی صف
+ACTIVE = ("running", "waiting", "queued")
 PROTOS = ("sftp", "scp", "ftp", "ftps")
 _BAD = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -137,13 +142,16 @@ class _ScpWriter:
         d, name = posixpath.split(path)
         self.chan = cli.get_transport().open_session(timeout=20)
         self.chan.settimeout(60)
-        self.chan.exec_command(f"scp -t {_scp_path(path)}")
+        self.chan.exec_command(f"scp -t {_scp_path(path)}")  # nosec B601 — مسیر با _scp_path اعتبارسنجی شده (بدون فاصله، نقل‌قول، ; & | $ و «-» اول)
         _scp_ack(self.chan)
         self.chan.sendall(f"C0644 {int(size)} {clean_name(name)}\n".encode())
         _scp_ack(self.chan)
 
     def write(self, data):
         self.chan.sendall(data)
+
+    def abort(self):
+        self.chan.close()
 
     def close(self, ok=True):
         try:
@@ -158,7 +166,7 @@ class _ScpReader:
     def __init__(self, cli, path):
         self.chan = cli.get_transport().open_session(timeout=20)
         self.chan.settimeout(60)
-        self.chan.exec_command(f"scp -f {_scp_path(path)}")
+        self.chan.exec_command(f"scp -f {_scp_path(path)}")  # nosec B601 — مسیر با _scp_path اعتبارسنجی شده
         self.chan.sendall(b"\0")
         line = b""
         while not line.endswith(b"\n"):
@@ -186,6 +194,9 @@ class _ScpReader:
         self.left -= len(d)
         return d
 
+    def abort(self):
+        self.chan.close()
+
     def close(self, ok=True):
         try:
             if ok and self.left == 0:
@@ -198,6 +209,18 @@ class _ScpReader:
 
 
 # ---------------------------------------------------------------- FTP
+def _sock_kill(sock):
+    """بستن فوری سوکت داده تا خواندن/نوشتنِ گیرکرده در نخ دیگر با خطا برگردد."""
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
 class _FtpWriter:
     def __init__(self, ftp, path):
         self.ftp = ftp
@@ -206,6 +229,9 @@ class _FtpWriter:
 
     def write(self, data):
         self.sock.sendall(data)
+
+    def abort(self):
+        _sock_kill(self.sock)
 
     def close(self, ok=True):
         try:
@@ -236,6 +262,9 @@ class _FtpReader:
 
     def read(self, n):
         return self.sock.recv(n)
+
+    def abort(self):
+        _sock_kill(self.sock)
 
     def close(self, ok=True):
         try:
@@ -334,13 +363,24 @@ class Conn:
         self.cli.get_transport().set_keepalive(30)
         if self.proto == "sftp":
             try:
-                self.sftp = self.cli.open_sftp()
+                self.sftp = self._sftp_new()
                 self.home = self.sftp.normalize(".") or "/"
             except Exception as e:
                 self.cli.close()
                 if attempt and attempt.cancelled:
                     raise XferError(CANCEL_MSG)
                 raise XferError(f"SFTP روی این دستگاه فعال نیست ({e}). SCP یا TFTP را امتحان کنید.")
+
+    def _sftp_new(self):
+        """کانال SFTP با مهلت: بدون مهلت، خواندن/نوشتن روی اتصال قطع‌شده هیچ‌وقت برنمی‌گشت."""
+        ch = self.cli.get_transport().open_session(timeout=20)
+        try:
+            ch.settimeout(IO_TIMEOUT)
+            ch.invoke_subsystem("sftp")
+            return paramiko.SFTPClient(ch)
+        except Exception:
+            ch.close()
+            raise
 
     def close(self):
         self.closed = True
@@ -448,13 +488,20 @@ class Conn:
     def writer(self, path, size):
         path = clean_rpath(path)
         if self.proto == "sftp":
-            s = self.cli.open_sftp()
-            f = s.open(path, "wb")
+            s = self._sftp_new()
+            try:
+                f = s.open(path, "wb")
+            except Exception:
+                s.close()
+                raise
             f.set_pipelined(True)
 
             class W:
                 def write(self, d):
                     f.write(d)
+
+                def abort(self):
+                    s.close()
 
                 def close(self, ok=True):
                     try:
@@ -474,7 +521,7 @@ class Conn:
     def reader(self, path):
         path = clean_rpath(path)
         if self.proto == "sftp":
-            s = self.cli.open_sftp()
+            s = self._sftp_new()
             try:
                 f = s.open(path, "rb")
                 size = f.stat().st_size
@@ -496,6 +543,7 @@ class Conn:
                 finally:
                     s.close()
             r.close = close
+            r.abort = s.close
             return r
         if self.proto == "scp":
             return _ScpReader(self.cli, path)
@@ -577,21 +625,42 @@ class XferManager:
 
     def close(self, cid, owner):
         c = self.get(cid, owner)
+        self._drop_conn(c)
+
+    def _drop_conn(self, c, why="اتصال بسته شد"):
+        """بستن اتصال و پایان فوری انتقال‌های همان اتصال (در صف یا در جریان). خروجی: تعداد انتقال‌های متوقف‌شده."""
+        n = 0
+        for j in list(self.jobs.values()):
+            if j["conn"] == c.id and j["state"] in ACTIVE:
+                self._stop(j, why, "error")
+                n += 1
         c.close()
         with self._lock:
             self.conns.pop(c.id, None)
+        return n
+
+    def _stop(self, j, err, state):
+        """پایان فوری یک انتقال از بیرونِ نخ خودش: وضعیت ثبت و جریان داده بسته می‌شود تا نخِ گیرکرده آزاد شود."""
+        j["cancel"].set()
+        if j.get("_w"):                     # آپلود مرورگر
+            self._abort_put(j, err, state)
+            return
+        self._end(j, False, err, state)
+        for f in list(j.get("_io") or ()):
+            try:
+                f.abort()
+            except Exception:  # nosec B110 — بستن اضطراری؛ خطای بستن مهم نیست
+                pass
 
     def close_conns(self, owner=None):
         """اتصال‌های SFTP/SCP/FTP و انتقال‌های در جریان (بدون سرور TFTP). خروجی: تعداد بسته‌شده."""
         n = 0
         for c in list(self.conns.values()):
             if owner is None or c.owner == owner:
-                c.close()
-                self.conns.pop(c.id, None)
-                n += 1
+                n += 1 + self._drop_conn(c)
         for j in list(self.jobs.values()):
-            if (owner is None or j["owner"] == owner) and j["state"] in ("running", "waiting"):
-                j["cancel"].set()
+            if (owner is None or j["owner"] == owner) and j["state"] in ACTIVE:
+                self._stop(j, "لغو شد", "cancelled")
                 n += 1
         return n
 
@@ -604,10 +673,10 @@ class XferManager:
         return [c.public() for c in self.conns.values() if c.owner == owner and not c.closed]
 
     # ---- کارها
-    def _job(self, owner, conn, direction, name, remote, size, local=""):
+    def _job(self, owner, conn, direction, name, remote, size, local="", state="running"):
         j = {"id": uuid.uuid4().hex, "owner": owner, "conn": conn.id if conn else "", "proto": conn.proto if conn else "tftp",
              "host": conn.host if conn else "", "dir": direction, "name": name, "remote": remote, "local": local,
-             "size": size, "done": 0, "state": "running", "error": "", "started": time.time(), "ended": 0,
+             "size": size, "done": 0, "state": state, "error": "", "started": time.time(), "ended": 0,
              "cancel": threading.Event()}
         with self._lock:
             self.jobs[j["id"]] = j
@@ -616,16 +685,17 @@ class XferManager:
     @staticmethod
     def pub_job(j):
         el = max(0.001, (j["ended"] or time.time()) - j["started"])
-        return {k: v for k, v in j.items() if k not in ("cancel", "_w", "_r", "token")} | {"speed": int(j["done"] / el)}
+        return {k: v for k, v in j.items() if k not in ("cancel", "_w", "_r", "_io", "_touch", "token")} | {"speed": int(j["done"] / el)}
 
     def job_list(self, owner):
         return [self.pub_job(j) for j in sorted(self.jobs.values(), key=lambda x: -x["started"]) if j["owner"] == owner][:100]
 
-    def _end(self, j, ok, err=""):
-        if j["state"] not in ("running", "waiting"):
-            return
-        j["ended"] = time.time()
-        j["state"] = "ok" if ok else ("cancelled" if j["cancel"].is_set() else "error")
+    def _end(self, j, ok, err="", state=None):
+        with self._lock:                      # پایان فقط یک بار (نخ انتقال و لغو/نگهبان هم‌زمان می‌رسند)
+            if j["state"] not in ACTIVE:
+                return
+            j["ended"] = time.time()
+            j["state"] = "ok" if ok else (state or ("cancelled" if j["cancel"].is_set() else "error"))
         j["error"] = "" if ok else (err or "لغو شد")
         extra = (f" — {j['error']}" if not ok else "") + (f" — {j['local']}" if j.get("local") else "")
         size, pr = human(j["done"]), j["proto"].upper()
@@ -641,11 +711,8 @@ class XferManager:
         j = self.jobs.get(str(jid))
         if not j or j["owner"] != owner:
             raise XferError("کار پیدا نشد.")
-        j["cancel"].set()
-        if j["state"] == "running" and j.get("_w"):        # آپلود مرورگر که منتظر تکه‌ی بعدی است
-            self._abort_put(j)
-        elif j["state"] == "waiting":
-            self._end(j, False, "لغو شد")
+        if j["state"] in ACTIVE:       # 1.54: لغو فوری است (در صف، منتظر، یا گیرکرده روی شبکه)
+            self._stop(j, "لغو شد", "cancelled")
 
     def clear_jobs(self, owner, only=None):
         """پاک کردن کارهای تمام‌شده (یا فقط یکی، مثلاً کاری که «تلاش مجدد» جایش را گرفت)."""
@@ -653,7 +720,7 @@ class XferManager:
             for k, j in list(self.jobs.items()):
                 if only and k != only:
                     continue
-                if j["owner"] == owner and j["state"] not in ("running", "waiting"):
+                if j["owner"] == owner and j["state"] not in ACTIVE:
                     self.jobs.pop(k, None)
 
     # ---- آپلود تکه‌ای از مرورگر
@@ -715,14 +782,14 @@ class XferManager:
             self._tftp_staged(j)
         self._end(j, True)
 
-    def _abort_put(self, j, err="لغو شد"):
+    def _abort_put(self, j, err="لغو شد", state=None):
         w = j.pop("_w", None)
+        self._end(j, False, err, state)
         if w:
             try:
                 w.close(False)
             except Exception:
                 pass
-        self._end(j, False, err)
 
     # ---- انتقال از/به مسیر محلی (حالت دسکتاپ)
     def local_transfer(self, owner, cid, direction, items, target_dir, overwrite=False):
@@ -738,7 +805,7 @@ class XferManager:
                     posixpath.join(clean_rpath(target_dir or c.home), clean_name(lp.name))
                 if not overwrite and c.proto != "scp" and c.exists(remote):
                     return {"exists": True, "remote": remote}
-                jobs.append(self._job(owner, c, "up", lp.name, remote, lp.stat().st_size, str(lp)))
+                jobs.append(self._job(owner, c, "up", lp.name, remote, lp.stat().st_size, str(lp), "queued"))
             else:
                 rp = clean_rpath(it)
                 name = clean_name(posixpath.basename(rp.split(":")[-1]) if c.proto == "scp" else posixpath.basename(rp))
@@ -747,24 +814,30 @@ class XferManager:
                     raise XferError("پوشه‌ی مقصد محلی پیدا نشد.")
                 if lp.exists() and not overwrite:
                     return {"exists": True, "local": str(lp)}
-                jobs.append(self._job(owner, c, "down", name, rp, None, str(lp)))
+                jobs.append(self._job(owner, c, "down", name, rp, None, str(lp), "queued"))
         threading.Thread(target=self._run_local, args=(c, jobs), name="xfer-local", daemon=True).start()
         return {"jobs": [self.pub_job(j) for j in jobs]}
 
     def _run_local(self, c, jobs):
         for j in jobs:
-            if j["cancel"].is_set():
-                self._end(j, False)
-                continue
+            with self._lock:
+                if j["state"] != "queued":       # در صف لغو شد یا اتصال بسته شد
+                    continue
+                j["state"], j["started"], j["_touch"] = "running", time.time(), time.time()
             src = dst = None
             ok = False
+            err = ""
             try:
+                if c.closed:
+                    raise XferError("اتصال بسته شده است")
                 if j["dir"] == "up":
                     src = open(j["local"], "rb")
                     dst = c.writer(j["remote"], j["size"])
+                    j["_io"] = [dst]
                     rd = src.read
                 else:
                     src = c.reader(j["remote"])
+                    j["_io"] = [src]
                     j["size"] = src.size
                     self._check_size(src.size)
                     dst = open(j["local"] + ".part", "wb")
@@ -776,13 +849,14 @@ class XferManager:
                         break
                     dst.write(d)
                     j["done"] += len(d)
+                    j["_touch"] = c.last = time.time()
                     if lim and j["done"] > lim:
                         raise XferError(f"از سقف حجم ({human(lim)}) بیشتر شد.")
                 ok = not j["cancel"].is_set()
-                err = ""
             except Exception as e:
                 err = self._err(e)
             finally:
+                j.pop("_io", None)
                 for f in (src, dst):
                     if f is None:
                         continue
@@ -861,6 +935,7 @@ class XferManager:
             return None
         j["state"] = "running"
         j["size"] = r.size
+        j["_io"] = [r]
 
         def gen():
             ok, err = False, ""
@@ -881,6 +956,7 @@ class XferManager:
             except Exception as e:
                 err = self._err(e)
             finally:
+                j.pop("_io", None)
                 try:
                     r.close(ok)
                 except Exception:
@@ -896,6 +972,8 @@ class XferManager:
             return "دسترسی روی دستگاه رد شد (Permission denied)."
         if isinstance(e, FileNotFoundError) or "No such file" in str(e):
             return "فایل یا پوشه پیدا نشد."
+        if isinstance(e, (socket.timeout, TimeoutError)):
+            return f"دستگاه {IO_TIMEOUT} ثانیه پاسخ نداد (اتصال قطع شده؟)."
         if isinstance(e, ftplib.Error):
             return f"FTP: {e}"
         return f"{e.__class__.__name__}: {e}"
@@ -1084,17 +1162,19 @@ class XferManager:
             try:
                 now = time.time()
                 for c in list(self.conns.values()):
-                    busy = any(j["conn"] == c.id and j["state"] == "running" for j in self.jobs.values())
+                    busy = any(j["conn"] == c.id and j["state"] in ("running", "queued") for j in self.jobs.values())
                     if not busy and now - c.last > IDLE_SECS:
-                        c.close()
-                        self.conns.pop(c.id, None)
+                        self._drop_conn(c, "اتصال به‌خاطر بی‌کاری بسته شد")
                 for k, j in list(self.jobs.items()):
                     if j["state"] == "running" and j.get("_w") and now - j["started"] > 60 and \
                             now - j.get("_touch", j["started"]) > 600:
                         self._abort_put(j, "بدون ادامه از طرف مرورگر")
+                    if j["state"] == "running" and j.get("local") and "_touch" in j and not j.get("_w") and \
+                            now - j["_touch"] > STALL_SECS:
+                        self._stop(j, f"بدون پیشرفت در {STALL_SECS} ثانیه (اتصال قطع شده؟)؛ انتقال متوقف شد.", "error")
                     if j["state"] == "waiting" and now - j["started"] > 600:
                         self._end(j, False, "دانلود شروع نشد")
-                    if j["state"] not in ("running", "waiting") and now - j["ended"] > JOB_KEEP:
+                    if j["state"] not in ACTIVE and now - j["ended"] > JOB_KEEP:
                         self.jobs.pop(k, None)
                 for t, jid in list(self.tokens.items()):
                     if jid not in self.jobs:

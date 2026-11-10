@@ -166,15 +166,23 @@ class DemoForti(_DemoMixin, FortiClient):
                 for i in (7, 99, 233)]
         base.append({"ip": "45.155.205.138", "created": now - 600, "source": "IPS", "expires": now + 3000, "ipv6": False})
         base = [b for b in base if b["ip"] not in DemoForti._removed and b["ip"] not in DemoForti._banned]
-        return base + [{"ip": ip, "created": t, "source": "Administrative", "expires": 0, "ipv6": False}
+        for ip in [k for k, e in DemoForti._exp.items() if e and e <= now]:      # بلاک موقت تمام‌شده
+            DemoForti._banned.pop(ip, None)
+            DemoForti._exp.pop(ip, None)
+        return base + [{"ip": ip, "created": t, "source": "Administrative", "expires": DemoForti._exp.get(ip, 0), "ipv6": False}
                        for ip, t in DemoForti._banned.items()]
 
-    def ban_ip(self, ip):
+    _exp = {}          # Demo: زمان پایان بلاک موقت (قالب واقعی فیلد expires در FortiGate دیده نشده؛ کد فقط صفر/غیرصفر را می‌خواند)
+
+    def ban_ip(self, ip, days=None):
         self._lag(0.05, 0.25)
         if _h(ip) % 31 == 0:
             return False, "HTTP 500: demo failure"
+        secs = int(self.cfg.get("ban_expiry") or 0) if days is None else max(0, int(days)) * 86400
         DemoForti._banned[ip] = int(time.time())
+        DemoForti._exp[ip] = int(time.time()) + secs if secs else 0
         DemoForti._removed.discard(ip)
+        DemoForti.last_expiry = secs
         return True, '{"status": "success"}'
 
     # Demo سناریوها: Address و Address Group در حافظه (برای هر دستگاه جدا)
@@ -235,6 +243,7 @@ class DemoForti(_DemoMixin, FortiClient):
     def unban_ip(self, ip):
         self._lag(0.05, 0.2)
         DemoForti._banned.pop(ip, None)
+        DemoForti._exp.pop(ip, None)
         DemoForti._removed.add(ip)
         return True, '{"status": "success"}'
 
