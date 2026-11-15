@@ -1837,7 +1837,11 @@ class LiveProbe:
                 for v in due:
                     v["busy"], v["next"] = True, now + v["iv"]
             for v in due:
-                self._poll(v)
+                try:
+                    self._poll(v)
+                except Exception as e:      # 1.55: یک هدف خراب (مثلاً حذف‌شده وسط کار) نباید نخ نمودار زنده را بکشد
+                    log.exception("snmp live poll")
+                    v["err"], v["busy"] = e.__class__.__name__, False
 
     def _poll(self, v):
         t = v["t"]

@@ -221,7 +221,15 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; font-siz
 .grid td.ltr { text-align: start; white-space: nowrap; }
 .bidi, .grid td.wrap, .kv dd { unicode-bidi: plaintext; text-align: start; }
 .grid td.num { font-variant-numeric: tabular-nums; }
-.grid td.wrap { max-width: 340px; overflow-wrap: anywhere; }
+.grid td.wrap { max-width: 340px; overflow-wrap: anywhere; min-width: 11ch; }
+/* 1.55: ستون‌های متنی جدول آدرس‌ها دیگر حرف‌به‌حرف نمی‌شکنند (ISP، دسته‌ها) */
+.grid td.wrap.w-md { min-width: 105px; } .grid td.wrap.w-lg { min-width: 150px; }
+#ipTable th, #ipTable td { padding-inline: 8px; }
+html[dir="rtl"] .grid td.wrap { text-align: right; } html[dir="ltr"] .grid td.wrap { text-align: left; }
+/* 1.55: مقدارهای لاتین در فهرست «برچسب: مقدار» کنار برچسب می‌مانند (قبلاً به لبه‌ی دیگر پنجره می‌چسبیدند) */
+html[dir="rtl"] .kv dd { text-align: right !important; } html[dir="ltr"] .kv dd { text-align: left !important; }
+.kv dd a, .m-body p a, .hint a, main p a { color: var(--accent); text-decoration: none; } .kv dd a:hover, .m-body p a:hover, .hint a:hover, main p a:hover { text-decoration: underline; }
+div.field > .btn:only-child { align-self: flex-start; min-width: 110px; }
 .grid td.chk, .grid th.chk { width: 36px; text-align: center; cursor: default; }
 a.link, button.link, span.link { color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
 button.link:hover, span.link:hover { text-decoration: underline; }
@@ -1275,3 +1283,12 @@ body.noc-on .side-edge, .db-wrap:fullscreen ~ .side-edge { display: none; }
 .br-row select, .br-row input { width: auto; }
 .br-row .br-tools { margin-inline-start: auto; display: inline-flex; gap: 4px; }
 .nowrap { white-space: nowrap; }
+
+/* 1.55 */
+.clamp2 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.ev .msg.clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; cursor: pointer; }
+.ev .msg.clamp.open { display: block; overflow: visible; }
+
+/* 1.56 بیلد ماژولار: body.nb-<ماژول> = این ماژول در این بیلد نیست؛ data-b="a|b" = فقط وقتی هیچ‌کدام نیستند پنهان */
+body.nb-sec [data-b="sec"], body.nb-dev [data-b="dev"], body.nb-monitor [data-b="monitor"], body.nb-asset [data-b="asset"], body.nb-offline [data-b="offline"],
+body.nb-sec.nb-dev [data-b="sec|dev"], body.nb-sec.nb-monitor [data-b="sec|monitor"], body.nb-sec.nb-offline [data-b="sec|offline"] { display: none !important; }

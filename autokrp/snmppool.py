@@ -362,50 +362,55 @@ class WorkerPool:
 
     def _watch(self):
         while not self._stop.wait(1.0):
-            now = time.time()
-            for w in list(self._old):
-                if w.dead or not w.pending or now - w.last_rx > HUNG_AFTER:
-                    self._old.remove(w)
-                    if not w.dead:
-                        self._died(w) if w.pending else self._kill(w, quit_msg=True)
-            if self.degraded and now - max(self._fails or [0]) > FAIL_WINDOW:
-                self.degraded, self._fails = "", []
-            for i in range(self.n):
-                w = self.slots[i]
-                if w is None:
-                    if not self.degraded and now >= self._restart_at[i]:
-                        self.stats["restarts"] += 1
-                        self._spawn(i)
-                    continue
-                if not w.ready.is_set():
-                    if w.proc.poll() is not None or now - w.started > START_TIMEOUT:
-                        log.warning("snmp worker %d did not connect (exit %s)", i, w.proc.poll())
-                        with self._lock:
-                            self._waiting.pop(w.token, None)
-                        self._kill(w)
-                        self._failed(i)
-                    continue
-                # کار با زمان گذشته: مثل timeout دستگاه
-                late = []
-                with self._lock:
-                    for jid, ent in list(w.pending.items()):
-                        if now > ent[2]:
-                            late.append(w.pending.pop(jid))
-                for cb, _, _ in late:
-                    self.stats["timeouts"] += 1
-                    from .snmp import SnmpError
-                    cb(SnmpError("خواندن SNMP بیش از حد طول کشید و متوقف شد"))
-                if w.pending and now - w.last_rx > HUNG_AFTER:
-                    log.warning("snmp worker %d hung; restarting", i)
-                    self._died(w)
-                    continue
-                if w.proc.poll() is not None:
-                    self._died(w)
-                    continue
-                if not w.draining and (w.polls >= RECYCLE_POLLS or w.mem > RECYCLE_MB * 1024 * 1024):
-                    if not any(x.slot == i for x in self._waiting.values()):
-                        self.stats["recycled"] += 1
-                        self._spawn(i, replace=True)
+            try:
+                self._watch_once(time.time())
+            except Exception:          # 1.55: خطای پیش‌بینی‌نشده نباید نگهبان را برای همیشه متوقف کند (کارگرها دیگر راه‌اندازی نمی‌شدند)
+                log.exception("snmp pool watchdog")
+
+    def _watch_once(self, now):
+        for w in list(self._old):
+            if w.dead or not w.pending or now - w.last_rx > HUNG_AFTER:
+                self._old.remove(w)
+                if not w.dead:
+                    self._died(w) if w.pending else self._kill(w, quit_msg=True)
+        if self.degraded and now - max(self._fails or [0]) > FAIL_WINDOW:
+            self.degraded, self._fails = "", []
+        for i in range(self.n):
+            w = self.slots[i]
+            if w is None:
+                if not self.degraded and now >= self._restart_at[i]:
+                    self.stats["restarts"] += 1
+                    self._spawn(i)
+                continue
+            if not w.ready.is_set():
+                if w.proc.poll() is not None or now - w.started > START_TIMEOUT:
+                    log.warning("snmp worker %d did not connect (exit %s)", i, w.proc.poll())
+                    with self._lock:
+                        self._waiting.pop(w.token, None)
+                    self._kill(w)
+                    self._failed(i)
+                continue
+            # کار با زمان گذشته: مثل timeout دستگاه
+            late = []
+            with self._lock:
+                for jid, ent in list(w.pending.items()):
+                    if now > ent[2]:
+                        late.append(w.pending.pop(jid))
+            for cb, _, _ in late:
+                self.stats["timeouts"] += 1
+                from .snmp import SnmpError
+                cb(SnmpError("خواندن SNMP بیش از حد طول کشید و متوقف شد"))
+            if w.pending and now - w.last_rx > HUNG_AFTER:
+                log.warning("snmp worker %d hung; restarting", i)
+                self._died(w)
+                continue
+            if w.proc.poll() is not None:
+                self._died(w)
+                continue
+            if not w.draining and (w.polls >= RECYCLE_POLLS or w.mem > RECYCLE_MB * 1024 * 1024):
+                if not any(x.slot == i for x in self._waiting.values()):
+                    self.stats["recycled"] += 1
+                    self._spawn(i, replace=True)
 
     def status(self):
         out = []

@@ -59,9 +59,22 @@
 pip install -r requirements.txt
 run_demo.bat
 run.bat
-build.bat            &rem exe قابل‌حمل + فایل نصبی
-build.bat portable   &rem فقط exe قابل‌حمل
+build.bat            &rem می‌پرسد چه ساخته شود، سپس exe قابل‌حمل + فایل نصبی
+build.bat full       &rem همه‌چیز، بدون پرسش
+build.bat portable   &rem نسخه‌ی کامل، فقط exe قابل‌حمل
 ```
+
+### ساخت ماژولار (انتخاب بخش‌های داخل exe)
+```bat
+build.bat monitor                   &rem فقط مانیتورینگ            -> dist\AutoKRP-Monitor.exe
+build.bat monitor server            &rem فقط مانیتورینگ، فقط سرور   -> dist\AutoKRP-Monitor-Server.exe
+build.bat sec+dev client portable   &rem امنیت + ارتباط با دستگاه‌ها، فقط کلاینت، بدون فایل نصبی
+```
+بخش‌ها: `sec` (امنیت: Splunk، AbuseIPDB، FortiGate، Redmine، DNS، اسکن، آدرس‌ها، کارهای خودکار)، `dev` (ارتباط با دستگاه‌ها: SSH/Telnet، پشتیبان کانفیگ، ترمینال، انتقال فایل، TFTP، ابزارهای شبکه، ابزار API)، `monitor` (مانیتورینگ، SNMP، Trap/Syslog، نقشه‌ها، داشبوردها، NOC)، `asset` (دارایی‌ها)، `offline` (ابزارهای آفلاین). حالت‌ها: `both` (پیش‌فرض؛ در اولین اجرا پرسیده می‌شود)، `client`، `server`.
+
+همیشه در هر بیلد هست: ورود، کاربران و گروه‌ها، رمزنگاری و تنظیمات امنیت، پایگاه داده (محلی، MySQL/MariaDB، PostgreSQL)، تنظیمات عمومی، تاریخچه و لاگ ممیزی، کارهای من و پیام‌ها، اعلان‌ها، بررسی به‌روزرسانی، درباره، مجوز و سازنده.
+
+بخشی که انتخاب نشده فقط پنهان نیست: کد موتور آن با stub خالی جایگزین می‌شود، اسکریپت‌هایش فرستاده نمی‌شود، متدهای API آن حذف می‌شود و کتابخانه‌هایش (مثلاً netmiko/paramiko بدون `dev`، pysnmp بدون `monitor`) داخل exe نمی‌آید. هر چیزی که یک بخشِ انتخاب‌شده از بخش دیگر لازم دارد می‌ماند. بیلد سفارشی نام خودش را دارد ولی از **همان پوشه‌ی داده** استفاده می‌کند و داده‌ی بخش‌های غایب دست‌نخورده می‌ماند. سورس اصلی تغییر نمی‌کند (کپی در `build\stage\`). جزئیات: `dev\mkbuild.py` و `autokrp\buildcfg.py`.
 
 ### فایل نصبی (ساخت از سورس)
 در Release فقط `AutoKRP.exe` قابل‌حمل منتشر می‌شود. برای فایل نصبی (نصب در `C:\Program Files\AutoKRP`، منوی Start و حذف از تنظیمات ویندوز):

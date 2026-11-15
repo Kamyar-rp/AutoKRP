@@ -3,17 +3,25 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 rem Official build: isolated venv (.venv-build), stop on any error, dependency audit,
 rem record exact versions and SHA-256 next to the outputs in dist\.
-rem   build.bat            portable exe (dist\AutoKRP.exe) + installer (dist\AutoKRP-Setup-X.Y.Z.exe)
-rem   build.bat portable   portable exe only (used by the release script; only the portable exe is published)
+rem   build.bat            asks what to build (menu), then: portable exe + installer
+rem   build.bat portable   full build, portable exe only (used by the release script; only the portable exe is published)
+rem 1.56 modular builds - choose the sections and the mode that go into the exe (details: dev\mkbuild.py, autokrp\buildcfg.py):
+rem   build.bat full                     everything (dist\AutoKRP.exe + dist\AutoKRP-Setup-X.Y.Z.exe), no questions
+rem   build.bat monitor                  monitoring only  (dist\AutoKRP-Monitor.exe)
+rem   build.bat monitor server           monitoring only, server (web) mode only  (dist\AutoKRP-Monitor-Server.exe)
+rem   build.bat sec+dev client portable  several sections (sec, dev, monitor, asset, offline), client only, no installer
+rem   modes: both (default, asked at first start) ^| client ^| server
+rem A section that is left out is really not in the exe: no engine code, no pages, no API methods, no libraries.
 rem Build tools (1.52): put the files listed in vendor\README.md into vendor\. Nothing is installed system-wide:
 rem Python goes to .pybuild\ and Inno Setup to .innosetup\ (current user only) when they are not already present.
-set "WHAT=%~1"
-if "%WHAT%"=="" set "WHAT=all"
-if /i not "%WHAT%"=="all" if /i not "%WHAT%"=="portable" (
-  echo Usage: build.bat [portable]
-  goto :err
-)
 call :pick_python || goto :err
+rem 1.56: decide first (menu when no section was given and a console is attached), then prepare the tools
+if not exist build mkdir build
+if exist build\build_choice.cmd del build\build_choice.cmd
+"%BASEPY%" dev\mkbuild.py --ask %*
+if errorlevel 1 goto :err
+if not exist build\build_choice.cmd goto :err
+call build\build_choice.cmd
 set "VENVVER="
 if exist ".venv-build\Scripts\python.exe" (
   for /f "delims=" %%V in ('call ".venv-build\Scripts\python.exe" -c "import sys;print(sys.version_info[0],sys.version_info[1],sep='.')"') do set "VENVVER=%%V"
@@ -30,6 +38,8 @@ set PY=.venv-build\Scripts\python.exe
 if exist requirements-lock.txt (
   echo Using requirements-lock.txt
   "%PY%" -m pip install -r requirements-lock.txt || goto :err
+  rem 1.57: the minimum (security) versions of requirements.txt still apply on top of an older lock file
+  "%PY%" -m pip install -r requirements.txt || goto :err
 ) else (
   "%PY%" -m pip install -r requirements.txt || goto :err
 )
@@ -70,41 +80,40 @@ type "%AUDLOG%"
 echo Dependency audit: OK
 :audit_done
 del "%AUDLOG%" >nul 2>&1
-REM 1.40.1: exe version info (Properties - Details): product, version, author, copyright
-"%PY%" dev\version_info.py build\version_info.txt || goto :err
-set ICON=assets\app.ico
-if exist "%ICON%" (set ICONARG=--icon "%ICON%") else (set ICONARG=)
-set "PYI=--windowed --name AutoKRP %ICONARG% --version-file build\version_info.txt --add-data "ui;ui" --add-data "assets\app.png;assets" --add-data "assets\mibs;assets\mibs" --add-data "autokrp\trapdb.json;autokrp" --add-data "autokrp\oui.dat;autokrp" --add-data "autokrp\build_deps.txt;autokrp" --collect-submodules serial --hidden-import pystray._win32 --hidden-import pymysql --hidden-import pg8000 --hidden-import autokrp.dbpg --hidden-import autokrp.fgtask_child --hidden-import autokrp.snmpworker --hidden-import autokrp.snmppool --hidden-import autokrp.tsdb --hidden-import autokrp.icmp --hidden-import autokrp.monviews --hidden-import autokrp.netmap --hidden-import autokrp.terms --hidden-import autokrp.apitool --hidden-import autokrp.cfgpack --hidden-import autokrp.dashboards --hidden-import autokrp.mapdisc --hidden-import autokrp.auditlog --hidden-import autokrp.todo --hidden-import autokrp.clientgate --collect-submodules netmiko --collect-submodules dns --collect-submodules pysnmp --collect-submodules ldap3 --collect-all pysmi --collect-data lark --hidden-import sqlcipher3 --collect-binaries sqlcipher3"
-"%PY%" -m PyInstaller --noconfirm --clean --onefile --workpath build\onefile %PYI% app.py || goto :err
-if not exist dist\AutoKRP.exe goto :err
-"%PY%" -m pip freeze > dist\AutoKRP-build-requirements.txt
-"%PY%" --version > dist\AutoKRP-build-python.txt
-certutil -hashfile dist\AutoKRP.exe SHA256 > dist\AutoKRP.exe.sha256.txt
-set "SETUPNOTE=(skipped: build.bat portable)"
-if /i "%WHAT%"=="portable" goto :done
+rem ---- 1.56: staged source for the chosen profile + PyInstaller (one-file exe, and the folder build for the installer) ----
+if exist build\last_build.cmd del build\last_build.cmd
+"%PY%" dev\mkbuild.py %BUILDARGS% || goto :err
+if not exist build\last_build.cmd goto :err
+call build\last_build.cmd
+if not exist "dist\%EXENAME%.exe" goto :err
+"%PY%" -m pip freeze > "dist\%EXENAME%-build-requirements.txt"
+"%PY%" --version > "dist\%EXENAME%-build-python.txt"
+certutil -hashfile "dist\%EXENAME%.exe" SHA256 > "dist\%EXENAME%.exe.sha256.txt"
+set "SETUPNOTE=(skipped: portable)"
+if "%INSTDIR%"=="" goto :done
 rem ---- 1.52: installer (PyInstaller folder build + Inno Setup) ----
 set "SETUPNOTE="
 for /f "delims=" %%V in ('call "%PY%" -c "import autokrp;print(autokrp.__version__)"') do set "VER=%%V"
-"%PY%" -m PyInstaller --noconfirm --clean --onedir --distpath dist\installer --workpath build\onedir %PYI% app.py || goto :err
-if not exist dist\installer\AutoKRP\AutoKRP.exe goto :err
+if not exist "%INSTDIR%\%EXENAME%.exe" goto :err
 call :pick_iscc
 if not defined ISCC (
   set "SETUPNOTE=(NOT built: Inno Setup not found - see vendor\README.md)"
   goto :done
 )
-if exist "dist\AutoKRP-Setup-%VER%.exe" del "dist\AutoKRP-Setup-%VER%.exe"
-"%ISCC%" /Q "/DAppVer=%VER%" "/DSrcDir=%CD%\dist\installer\AutoKRP" "/O%CD%\dist" installer\AutoKRP.iss
+if exist "dist\%EXENAME%-Setup-%VER%.exe" del "dist\%EXENAME%-Setup-%VER%.exe"
+"%ISCC%" /Q "/DAppVer=%VER%" "/DSrcDir=%INSTDIR%" "/DExeName=%EXENAME%" "/DAppGuid=%APPGUID%" "/O%CD%\dist" installer\AutoKRP.iss
 if errorlevel 1 (
   set "SETUPNOTE=(FAILED: Inno Setup reported an error above)"
   goto :done
 )
-certutil -hashfile "dist\AutoKRP-Setup-%VER%.exe" SHA256 > "dist\AutoKRP-Setup-%VER%.exe.sha256.txt"
-set "SETUPNOTE=dist\AutoKRP-Setup-%VER%.exe (+ .sha256.txt)"
+certutil -hashfile "dist\%EXENAME%-Setup-%VER%.exe" SHA256 > "dist\%EXENAME%-Setup-%VER%.exe.sha256.txt"
+set "SETUPNOTE=dist\%EXENAME%-Setup-%VER%.exe (+ .sha256.txt)"
 :done
 echo.
-echo Output: dist\AutoKRP.exe  (portable; published with the release)
-echo         dist\AutoKRP.exe.sha256.txt  (publish with the release)
-echo         dist\AutoKRP-build-requirements.txt  (exact versions; copy to requirements-lock.txt to pin future builds)
+echo Build:  %EXENAME%   sections: %BUILDMODS%   mode: %BUILDMODE%
+echo Output: dist\%EXENAME%.exe  (portable)
+echo         dist\%EXENAME%.exe.sha256.txt
+echo         dist\%EXENAME%-build-requirements.txt  (exact versions; copy to requirements-lock.txt to pin future builds)
 echo Installer: %SETUPNOTE%
 pause
 exit /b 0

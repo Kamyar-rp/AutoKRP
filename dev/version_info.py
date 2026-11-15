@@ -29,6 +29,8 @@ VSVersionInfo(
 )
 """
 out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "build", "version_info.txt")
+exe = sys.argv[2] if len(sys.argv) > 2 else "AutoKRP"            # 1.56: modular builds have their own exe name (AutoKRP-Monitor, ...)
+TEXT = TEXT.replace("'InternalName', 'AutoKRP'", f"'InternalName', '{exe}'").replace("'OriginalFilename', 'AutoKRP.exe'", f"'OriginalFilename', '{exe}.exe'")
 os.makedirs(os.path.dirname(out), exist_ok=True)
 open(out, "w", encoding="utf-8").write(TEXT)
 print("version info:", out, vs)

@@ -44,13 +44,6 @@ function monIcon(icon, cls = "") {
   }
   return `<svg class="mon-svg ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${MON_ICON_SVG[icon] || MON_ICON_SVG.other}</svg>`;
 }
-function monDur(s) {
-  s = Math.max(0, Math.floor(s || 0));
-  if (s < 60) return `${num(s)} ثانیه`;
-  if (s < 3600) return `${num(Math.floor(s / 60))} دقیقه`;
-  if (s < 86400) return `${num(Math.floor(s / 3600))} ساعت و ${num(Math.floor((s % 3600) / 60))} دقیقه`;
-  return `${num(Math.floor(s / 86400))} روز و ${num(Math.floor((s % 86400) / 3600))} ساعت`;
-}
 /* 1.31: روزهای باقی‌مانده‌ی گواهی HTTPS (فقط وقتی هشدار روشن است و به آستانه رسیده یا خطا داشته) */
 function monCertTag(t) {
   const c = t.cert; if (!c || !t.cert_days) return "";

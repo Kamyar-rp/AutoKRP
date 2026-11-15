@@ -147,6 +147,32 @@ def _safe(fn):
 
 
 
+def _pack_rows(cols, data):
+    """1.55: فشرده‌سازی جدول بزرگ برای رابط (با ۵۰ هزار IP حدود ۱۸ ← ۵ مگابایت و حافظه‌ی کمتر در WebView):
+      empty ← ستون‌هایی که در همه‌ی ردیف‌ها خالی‌اند (در data نمی‌آیند)
+      dict  ← {نام ستون: [مقدارهای متمایز]} برای ستون‌های متنیِ پرتکرار (ISP، دسته‌ها، زمان‌ها…)؛ در data شماره‌ی مقدار می‌آید
+    رابط (ipRows) همان شیءهای قبلی را می‌سازد."""
+    if not data:
+        return {"cols": list(cols), "data": []}
+    n = len(data)
+    columns = list(zip(*data))
+    keep, empty, dic, out = [], [], {}, []
+    for name, vals in zip(cols, columns):
+        distinct = set(vals)
+        if distinct <= {None, ""}:
+            empty.append(name)
+            continue
+        if len(distinct) <= max(16, n // 4) and n >= 200 and all(isinstance(v, str) or v is None for v in distinct):
+            lut = sorted(v for v in distinct if v is not None)
+            ix = {v: i for i, v in enumerate(lut)}
+            ix[None] = None
+            vals = [ix[v] for v in vals]
+            dic[name] = lut
+        keep.append(name)
+        out.append(vals)
+    return {"cols": keep, "data": list(zip(*out)), "empty": empty, "dict": dic}
+
+
 class _DialogGuard:
     """1.42.1: فقط یک پنجره‌ی انتخاب/ذخیره‌ی فایل در هر لحظه. کلیک دوباره روی دکمه‌ی خروجی وقتی Save as باز است
     پنجره‌ی دوم را از ترد دیگر باز می‌کرد و WebView2/WinForms قفل یا کرش می‌کرد. بقیه‌ی ویژگی‌های پنجره دست نمی‌خورد."""
@@ -1050,7 +1076,7 @@ class Api:
             # صفحه‌ی قفل/ورود: فقط آنچه برای نمایش آن لازم است
             return {"events": [], "conn": {}, "last_check": None, "run": None, "last_run": None,
                     "counts": {}, "test_mode": True, "master": False, "jobs_on": 0, "demo": self._demo,
-                    "version": __version__, "author": AUTHOR, "branding": self._branding(),
+                    "version": __version__, "author": AUTHOR, "build": self._build_info(), "branding": self._branding(),
                     "security": self._sec_status(), "lang": self._settings.get("ui", "lang") or "en",
                     "me": None, "tools": [], "tools_enabled": []}
         run = self._worker.pipeline.current
@@ -1074,7 +1100,7 @@ class Api:
             "test_mode": self._settings.get("test_mode", default=True),
             "master": self._settings.get("automation", "master", default=False),
             "jobs_on": sum(1 for j in self._settings.get("jobs", default=[]) or [] if j.get("enabled")),
-            "demo": self._demo, "version": __version__, "author": AUTHOR,
+            "demo": self._demo, "version": __version__, "author": AUTHOR, "build": self._build_info(),
             "branding": self._branding(),
             "security": self._sec_status() if self._vault else None,
             "lang": self._settings.get("ui", "lang") or "en",
@@ -1189,7 +1215,15 @@ class Api:
                 "credit": "با کمک Claude (Anthropic) نوشته شده است",
                 "python": platform.python_version(), "os": platform.platform(),
                 "libs": {"pywebview": ver("webview"), "requests": ver("requests"), "cryptography": ver("cryptography")},
-                "data_dir": str(paths.data_dir())}
+                "data_dir": str(paths.data_dir()), "build": self._build_info()}
+
+    @staticmethod
+    def _build_info():
+        """1.56: نوع بیلد برای «درباره» — ماژول‌های داخل این نسخه و حالت اجرا."""
+        from . import buildcfg
+        b = buildcfg.info()
+        b["titles"] = {"sec": "امنیت", "dev": "ارتباط با دستگاه‌ها", "monitor": "مانیتورینگ", "asset": "دارایی‌ها", "offline": "ابزارهای آفلاین"}
+        return b
 
     # ------------------------------------------------------------ 1.33: به‌روزرسانی و آسیب‌پذیری (فقط ادمین)
     @_safe
@@ -2390,7 +2424,7 @@ class Api:
         cols = cols + ["should_block", "fw_pending", "seen_days"]
         rd = int(acfg.get("repeat_days") or 0)
         if compact:
-            return {"cols": cols, "data": data, "repeat_days": rd}
+            return {"repeat_days": rd, **_pack_rows(cols, data)}
         return {"rows": [dict(zip(cols, t)) for t in data], "repeat_days": rd}
 
     # ------------------------------------------------------------ بررسی تکمیلی (فید و لیست داخلی؛ فقط ادمین)
@@ -6416,3 +6450,16 @@ class Api:
         if not res:
             return {"path": ""}
         return {"path": res[0] if isinstance(res, (list, tuple)) else res}
+
+
+def _strip_build():
+    """1.56: در بیلد ماژولار، متدهای API ماژول‌هایی که در این بیلد نیستند از کلاس برداشته می‌شوند (نه فقط مسدود)."""
+    from . import buildcfg
+    if tuple(buildcfg.MODULES) == buildcfg.ALL_MODULES:
+        return
+    for n in [k for k, v in vars(Api).items() if callable(v) and not k.startswith("_")]:
+        if perms.build_block(n):
+            delattr(Api, n)
+
+
+_strip_build()

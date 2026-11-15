@@ -2,6 +2,52 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.57.0] — 2026-11-15
+
+### Fixed
+- **Modular builds: Settings → General → "Active parts and tools" listed every section** (security, device access, …) even in a monitoring-only build. It now shows only the sections that are part of the build, and the preset buttons ("Monitoring only", …) are hidden when the build has a single section.
+- After sign-in, a user who may not open the current page is sent to the first page that exists in this build (it was always the security dashboard).
+
+### Security
+- **dnspython ≥ 2.9.2** (CVE-2026-128089, reported by pip-audit for 2.9.0). `build.bat` also applies the minimum versions of `requirements.txt` when a `requirements-lock.txt` is used, so an older lock file cannot bring back a vulnerable version.
+
+### Changed
+- Release notes on GitHub now include the changes of every version since the last published release (not only the newest one).
+- `build.bat portable` (used by the release script) builds the full app without showing the build menu, and the menu falls back to the defaults when there is no keyboard input. Before, publishing stopped with `EOFError` at the menu.
+
+## [1.56.0] — 2026-11-15
+
+### Added
+- **Modular builds.** `build.bat` now asks what should be inside the exe, or takes it as arguments:
+  `build.bat full`, `build.bat monitor`, `build.bat monitor server`, `build.bat sec+dev client portable`.
+  - Sections: `sec` (security), `dev` (device access), `monitor` (monitoring), `asset` (assets), `offline` (offline tools). Modes: `both`, `client`, `server`.
+  - A section that is left out is really not in the exe: its engine code is replaced by empty stubs, its scripts are not shipped, its API methods are removed and blocked, and its libraries are not bundled (for example no netmiko/paramiko/pyserial/dnspython in a monitoring-only build). What a kept section needs from another one stays (assets keep the SSH and SNMP engines).
+  - Sign-in, users and groups, encryption, database, settings, history and audit log, tasks, notifications, About, licence and author are part of every build.
+  - A custom build has its own exe name and installer (`AutoKRP-Monitor.exe`, `AutoKRP-Monitor-Setup-X.Y.Z.exe`, own install folder) and uses the same data folder as the full app; data of missing sections is left untouched. About shows the build type and its sections.
+  - A build made for one mode only starts in that mode and refuses the other one.
+  - The full build is unchanged, and the working tree is never modified (the source is staged in `build\stage\`). See "Modular builds" in the README, `dev\mkbuild.py` and `autokrp\buildcfg.py`.
+
+### Changed
+- In a build (or for a user) without the security section, pages and controls that only make sense with it are hidden: security dashboard, Tools, Addresses, general statistics, the scheduled security jobs tab, test-mode banner and switch, and the related history filters. The app opens on the first page that exists.
+
+## [1.55.0] — 2026-11-14
+
+A review release: every page was checked in Persian and English, dark and light, and at a small window size; the heavy pages were measured with 50,000 addresses.
+
+### Fixed
+- **Addresses table:** the ISP and Categories columns were squeezed and broke words letter by letter ("Digi / talO / cea / n"), making every row several lines tall. Text columns now keep a sensible width, and categories show at most two lines (full text on hover).
+- **"Label: value" lists (IP details, About, …):** Latin values (IP data, versions, paths) were pushed to the far edge of the window, away from their labels. Values now sit next to the label in both languages.
+- **About page:** the contact links were dark blue on the dark background and hard to read.
+- **IP details:** the title showed the IP with Persian digits; Tor / Whitelisted showed raw `False`; "Last reported" showed a raw ISO timestamp.
+- **Dashboards:** a small traffic widget with several ports could still end up with a scroll bar after the window was resized (the one-step size estimate was sometimes a few pixels short).
+- **Network tools:** the Search button stretched across the whole form.
+- **SNMP:** an unexpected error in the worker watchdog or in the live-chart poller could stop that background thread until the app was restarted (workers were then never restarted / live charts froze). Both loops now log the error and continue.
+
+### Changed
+- **Addresses with tens of thousands of IPs load lighter.** The list sent to the window is packed: empty columns are left out and repeated texts (ISP, categories, usage type, timestamps) are sent once. With 50,000 synthetic addresses the response went from about 18 MB to about 4 MB, and the window keeps far fewer duplicate strings in memory.
+- Sorting the address list by IP is about ten times faster with large lists; typing in the search box of a large list no longer rebuilds the table on every keystroke.
+- Dashboard "Live events": long messages show three lines; click a message to expand it.
+
 ## [1.54.0] — 2026-11-10
 
 ### Added

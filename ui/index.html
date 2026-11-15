@@ -42,23 +42,23 @@
       <button class="side-tog" id="sideTog" title="جمع کردن منو" aria-label="جمع کردن منو"><svg><use href="#i-side"/></svg></button>
     </div>
     <nav class="nav" id="nav">
-      <button data-page="dashboard" class="active"><svg><use href="#i-dash"/></svg>داشبورد</button>
+      <button data-page="dashboard" class="active" data-b="sec"><svg><use href="#i-dash"/></svg>داشبورد</button>
       <button data-page="todo"><svg><use href="#i-todo"/></svg>کارهای من<span class="nav-count warn" id="navTodo" hidden></span></button>
-      <button data-page="run"><svg><use href="#i-run"/></svg>ابزارها<span class="nav-dot" id="navRunDot" hidden></span></button>
-      <button data-page="auto"><svg><use href="#i-auto"/></svg>کارهای خودکار</button>
-      <button data-page="ips"><svg><use href="#i-ip"/></svg>آدرس‌ها<span class="nav-count" id="navReview" hidden></span></button>
+      <button data-page="run" data-b="sec|offline"><svg><use href="#i-run"/></svg>ابزارها<span class="nav-dot" id="navRunDot" hidden></span></button>
+      <button data-page="auto" data-b="sec|dev"><svg><use href="#i-auto"/></svg>کارهای خودکار</button>
+      <button data-page="ips" data-b="sec"><svg><use href="#i-ip"/></svg>آدرس‌ها<span class="nav-count" id="navReview" hidden></span></button>
       <button data-page="ssh" id="navSsh"><svg><use href="#i-term"/></svg>ارتباط با دستگاه‌ها<span class="nav-dot" id="navSshDot" hidden></span></button>
       <button data-page="monitor" data-need-tool="monitor"><svg><use href="#i-mon"/></svg>مانیتورینگ<span class="nav-count err" id="navMonDot" hidden></span></button>
       <button data-page="dash" data-need-tool="monitor.dash"><svg><use href="#i-wdg"/></svg>داشبوردها</button>
       <button data-page="assets" data-need-tool="asset"><svg><use href="#i-box"/></svg>دارایی‌ها<span class="nav-count" id="navAssets" hidden></span></button>
-      <button data-page="stats"><svg><use href="#i-chart"/></svg>آمار</button>
+      <button data-page="stats" data-b="sec|monitor"><svg><use href="#i-chart"/></svg>آمار</button>
       <button data-page="history"><svg><use href="#i-hist"/></svg>تاریخچه</button>
       <button data-page="settings" class="adm-only"><svg><use href="#i-set"/></svg>تنظیمات</button>
       <button data-page="about"><svg><use href="#i-info"/></svg>درباره<span class="nav-count warn" id="navAbout" hidden></span></button>
     </nav>
     <div class="side-foot">
       <div class="conn-list" id="sideConn"></div>
-      <div class="badge-test" id="testBadge" hidden title="حالت تست — بلاک و تیکت واقعی ارسال نمی‌شود">حالت تست — بلاک و تیکت واقعی ارسال نمی‌شود</div>
+      <div class="badge-test" id="testBadge" data-b="sec" hidden title="حالت تست — بلاک و تیکت واقعی ارسال نمی‌شود">حالت تست — بلاک و تیکت واقعی ارسال نمی‌شود</div>
       <button class="badge-test" id="recBadge" hidden title="کد بازیابی رمز ندارید — برای ساخت کلیک کنید" style="cursor:pointer;text-align:start;width:100%;font:inherit">کد بازیابی رمز ندارید — برای ساخت کلیک کنید</button>
       <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:6px"><div class="side-ver" id="sideVer"></div>
         <div class="row" style="gap:4px;flex-wrap:wrap;margin-inline-start:auto"><button class="btn sm ghost lang-btn" id="btnLang" title="English / فارسی" data-no-i18n><svg><use href="#i-globe"/></svg><span id="langLabel">English</span></button>
@@ -111,7 +111,7 @@
           <button class="btn primary no-ro" id="btnStart">شروع اجرا</button>
         </div>
       </header>
-      <div class="tabs big" id="runTabs"><button data-t="run" class="on">اجرای ابزارها</button><button data-t="offline" data-need-tool="offline">ابزارهای آفلاین</button></div>
+      <div class="tabs big" id="runTabs"><button data-t="run" class="on" data-b="sec">اجرای ابزارها</button><button data-t="offline" data-need-tool="offline">ابزارهای آفلاین</button></div>
       <div id="offPane" hidden><div id="offBody"></div></div>
       <div id="runPane">
       <div class="stages" id="stageForm"></div>
@@ -133,7 +133,7 @@
         <div class="ph-actions"><button class="btn ghost adm-only" id="btnUndoAuto" data-undo title="برگرداندن همه‌ی تغییرهای ذخیره‌نشده">لغو تغییرها</button><button class="btn primary adm-only" id="btnSaveAuto">ذخیره</button></div>
       </header>
       <div class="tabs big" id="autoTabs">
-        <button data-t="daily" class="on">کارهای زمان‌بندی‌شده</button>
+        <button data-t="daily" class="on" data-b="sec">کارهای زمان‌بندی‌شده</button>
         <button data-t="retry" data-need-tool="abuse">چک مجدد خطاها</button>
         <button data-t="backup" data-need-tool="ssh">پشتیبان کانفیگ</button>
         <button data-t="sshsched" data-need-tool="ssh">زمان‌بندی SSH</button>
@@ -191,8 +191,8 @@
         <input type="search" class="search" id="histSearch" placeholder="جستجو در همه‌ی تاریخچه…">
         <select id="histRange" title="بازه‌ی زمانی"><option value="">همه‌ی زمان‌ها</option><option value="24h">۲۴ ساعت گذشته</option><option value="7d">۷ روز گذشته</option><option value="30d">۳۰ روز گذشته</option><option value="90d">۹۰ روز گذشته</option><option value="365d">یک سال گذشته</option></select>
         <div class="seg" id="histFilter">
-          <button data-f="all" class="on">همه</button><button data-f="splunk">Splunk</button><button data-f="abuse">AbuseIPDB</button>
-          <button data-f="ban">بلاک</button><button data-f="ticket">تیکت</button><button data-f="security">امنیت</button><button data-f="ssh">SSH</button><button data-f="terminal">ترمینال</button><button data-f="transfer">انتقال فایل</button><button data-f="scan">اسکن شبکه</button><button data-f="error">خطاها</button>
+          <button data-f="all" class="on">همه</button><button data-f="splunk" data-b="sec">Splunk</button><button data-f="abuse" data-b="sec">AbuseIPDB</button>
+          <button data-f="ban" data-b="sec">بلاک</button><button data-f="ticket" data-b="sec">تیکت</button><button data-f="security">امنیت</button><button data-f="ssh" data-b="dev">SSH</button><button data-f="terminal" data-b="dev">ترمینال</button><button data-f="transfer" data-b="dev">انتقال فایل</button><button data-f="scan" data-b="sec">اسکن شبکه</button><button data-f="error">خطاها</button>
         </div>
         <span class="muted" id="histCount"></span>
       </div>
@@ -279,7 +279,7 @@
       <header class="ph">
         <div><h1>آمار عملکرد</h1><p id="statsSub">روند هر بخش در بازه‌ی انتخابی، با مقایسه‌ی دوره‌ی قبل</p></div>
         <div class="ph-actions">
-          <div class="seg" id="stTab"><button data-v="general" class="on">گزارش‌های عمومی</button><button data-v="repeat">IPهای تکراری</button><button data-v="monitor" data-need-tool="monitor">مانیتورینگ</button></div>
+          <div class="seg" id="stTab"><button data-v="general" class="on" data-b="sec">گزارش‌های عمومی</button><button data-v="repeat" data-b="sec">IPهای تکراری</button><button data-v="monitor" data-need-tool="monitor">مانیتورینگ</button></div>
           <div class="seg" id="stCal"><button data-v="jalali" class="on">شمسی</button><button data-v="gregorian">میلادی</button></div>
           <div class="seg" id="stRange"><button data-v="7d">۷ روز</button><button data-v="30d" class="on">۳۰ روز</button><button data-v="90d">۹۰ روز</button><button data-v="12m">۱۲ ماه</button></div>
           <button class="btn no-ro" id="btnStatsPngAll"><svg><use href="#i-img"/></svg>ذخیره‌ی همه‌ی نمودارها</button>

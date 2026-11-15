@@ -90,8 +90,10 @@ run.bat           &rem normal start
 |---|---|
 | `run_demo.bat` | Run with sample data |
 | `run.bat` | Run normally |
-| `build.bat` | Build the portable `dist\AutoKRP.exe` **and** the installer `dist\AutoKRP-Setup-X.Y.Z.exe` (isolated venv, `pip-audit`, SHA-256 next to each) |
-| `build.bat portable` | Build only the portable exe |
+| `build.bat` | Asks what to build (full, monitoring only, or your own choice of sections, and the mode), then builds the portable exe **and** the installer (isolated venv, `pip-audit`, SHA-256 next to each) |
+| `build.bat full` | Everything, without questions: `dist\AutoKRP.exe` and `dist\AutoKRP-Setup-X.Y.Z.exe` |
+| `build.bat portable` | Full build, portable exe only |
+| `build.bat monitor` | Monitoring-only build: `dist\AutoKRP-Monitor.exe` (see "Modular builds") |
 
 Command-line options: `AutoKRP.exe --help` (`--server`, `--client`, `--demo`, `--install-service`, `--local-db`, `--memdiag`, …).
 
@@ -108,6 +110,39 @@ uninstall entry), build it from source:
 The installed app **continues with the existing data**: it uses the same data folder as the portable exe for the same
 Windows user. Running copies are closed before installing, and uninstalling never deletes data. If server auto-start
 was set up from the portable exe, the server window offers **Update to this copy**.
+
+### Modular builds (choose what goes into the exe)
+
+`build.bat` can build an exe that contains only some sections, and only one run mode:
+
+```bat
+build.bat                           &rem menu: full / monitoring only / custom, then the mode
+build.bat full                      &rem everything (the default; this is what releases contain)
+build.bat monitor                   &rem monitoring only            -> dist\AutoKRP-Monitor.exe
+build.bat monitor server            &rem monitoring only, server    -> dist\AutoKRP-Monitor-Server.exe
+build.bat sec+dev client portable   &rem security + device access, client only, no installer
+```
+
+| Section | Contains |
+|---|---|
+| `sec` | Splunk, AbuseIPDB, FortiGate, Redmine, DNS, scan, extra check, Tools / Addresses / Automation pages, security dashboard and statistics |
+| `dev` | SSH/Telnet devices and commands, config backup, terminal, file transfer, TFTP, serial console, network tools, API tool |
+| `monitor` | Monitoring targets, SNMP, traps and syslog, maps, dashboards, NOC view, live check |
+| `asset` | Assets and asset scan (keeps the SSH and SNMP engines it needs, not their pages) |
+| `offline` | Offline tools and FortiGate offline update |
+
+Modes: `both` (default; asked at first start), `client` (desktop only), `server` (web only).
+
+Always included in every build: sign-in, users and groups, encryption and security settings, database (local,
+MySQL/MariaDB, PostgreSQL), general settings, history and audit log, tasks and messages, notifications, updates check,
+About, licence and author.
+
+A section that is left out is not just hidden. Its engine code is replaced by empty stubs, its scripts are not shipped,
+its API methods are removed, and its libraries (for example netmiko/paramiko without `dev`, pysnmp without `monitor`) are
+not bundled. Anything a kept section needs from another one stays. The page markup in `index.html` is shared and stays
+(hidden). A custom build has its own name (`AutoKRP-Monitor.exe`, own installer and install folder) but uses the **same
+data folder**, so it continues with existing data; data of sections that are not in the build is left untouched.
+The working tree is never changed: the source is staged in `build\stage\`. Details: `dev\mkbuild.py`, `autokrp\buildcfg.py`.
 
 ## Security
 

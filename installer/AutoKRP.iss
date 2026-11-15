@@ -1,5 +1,5 @@
 ; AutoKRP installer (Inno Setup 6.3+ / 7). Built by build.bat:
-;   ISCC.exe /DAppVer=1.52.0 /DSrcDir=<dist\installer\AutoKRP> /O<dist> installer\AutoKRP.iss
+;   ISCC.exe /DAppVer=1.56.0 /DSrcDir=<dist\installer\AutoKRP> [/DExeName=AutoKRP-Monitor /DAppGuid=<guid>] /O<dist> installer\AutoKRP.iss
 ; The installer copies the program only. Data stays where it is (%LOCALAPPDATA%\AutoKRP or the folder chosen
 ; at first start), so an installed copy continues with the data of the portable exe for the same Windows user.
 ; Uninstalling never deletes data.
@@ -10,27 +10,35 @@
 #ifndef SrcDir
   #define SrcDir "..\dist\installer\AutoKRP"
 #endif
+; 1.56 modular builds: build.bat passes the exe name (AutoKRP-Monitor, ...) and its own AppId, so a custom build
+; installs next to the full app instead of replacing it. Data is shared (same data folder).
+#ifndef ExeName
+  #define ExeName "AutoKRP"
+#endif
+#ifndef AppGuid
+  #define AppGuid "AD6B0823-5846-4C49-9730-7DAAD1702EE9"
+#endif
 
 [Setup]
-AppId={{AD6B0823-5846-4C49-9730-7DAAD1702EE9}
-AppName=AutoKRP
+AppId={{{#AppGuid}}
+AppName={#ExeName}
 AppVersion={#AppVer}
-AppVerName=AutoKRP {#AppVer}
+AppVerName={#ExeName} {#AppVer}
 AppPublisher=Kamyar RP
 AppPublisherURL=https://github.com/kamyar-rp/AutoKRP
 AppSupportURL=https://github.com/kamyar-rp/AutoKRP/issues
 VersionInfoVersion={#AppVer}
-DefaultDirName={autopf}\AutoKRP
-DefaultGroupName=AutoKRP
+DefaultDirName={autopf}\{#ExeName}
+DefaultGroupName={#ExeName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
-OutputBaseFilename=AutoKRP-Setup-{#AppVer}
+OutputBaseFilename={#ExeName}-Setup-{#AppVer}
 SetupIconFile=..\assets\app.ico
-UninstallDisplayIcon={app}\AutoKRP.exe
-UninstallDisplayName=AutoKRP {#AppVer}
+UninstallDisplayIcon={app}\{#ExeName}.exe
+UninstallDisplayName={#ExeName} {#AppVer}
 LicenseFile=..\LICENSE
 Compression=lzma2
 SolidCompression=yes
@@ -52,14 +60,14 @@ Source: "{#SrcDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs cre
 Type: filesandordirs; Name: "{app}\_internal"
 
 [Icons]
-Name: "{autoprograms}\AutoKRP"; Filename: "{app}\AutoKRP.exe"
-Name: "{autodesktop}\AutoKRP"; Filename: "{app}\AutoKRP.exe"; Tasks: desktopicon
+Name: "{autoprograms}\{#ExeName}"; Filename: "{app}\{#ExeName}.exe"
+Name: "{autodesktop}\{#ExeName}"; Filename: "{app}\{#ExeName}.exe"; Tasks: desktopicon
 
 [Run]
 ; close a running copy (for example the portable exe in the tray) of the user who started the setup
-Filename: "{app}\AutoKRP.exe"; Parameters: "--quit-running"; Flags: runhidden waituntilterminated runasoriginaluser; StatusMsg: "Closing a running AutoKRP..."
+Filename: "{app}\{#ExeName}.exe"; Parameters: "--quit-running"; Flags: runhidden waituntilterminated runasoriginaluser; StatusMsg: "Closing a running AutoKRP..."
 ; start as the user who started the setup (not as Administrator): the data folder belongs to that user
-Filename: "{app}\AutoKRP.exe"; Description: "{cm:LaunchProgram,AutoKRP}"; Flags: nowait postinstall skipifsilent runasoriginaluser
+Filename: "{app}\{#ExeName}.exe"; Description: "{cm:LaunchProgram,{#ExeName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallDelete]
 Type: dirifempty; Name: "{app}"
@@ -75,7 +83,7 @@ var
   exe: String;
 begin
   Result := '';
-  exe := ExpandConstant('{app}\AutoKRP.exe');
+  exe := ExpandConstant('{app}\{#ExeName}.exe');
   if FileExists(exe) then
     ExecAsOriginalUser(exe, '--quit-running', '', SW_HIDE, ewWaitUntilTerminated, rc);
 end;
@@ -86,7 +94,7 @@ var
   rc: Integer;
   exe: String;
 begin
-  exe := ExpandConstant('{app}\AutoKRP.exe');
+  exe := ExpandConstant('{app}\{#ExeName}.exe');
   if FileExists(exe) then
     Exec(exe, '--quit-running', '', SW_HIDE, ewWaitUntilTerminated, rc);
   Result := True;

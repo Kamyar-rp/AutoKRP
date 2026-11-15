@@ -457,14 +457,17 @@ function dbFitChart(el, draw) {
     st.style.zoom = "";
     const ov = over(), wz = st.scrollWidth > el.clientWidth ? (el.clientWidth - 2) / st.scrollWidth : 1;
     const hz = ov > 0 ? (st.offsetHeight - ov - 1) / st.offsetHeight : 1;
-    const z = Math.min(1, wz, hz);
-    if (z < 1) st.style.zoom = Math.max(min, z).toFixed(3);
-    return over() <= 0 && st.getBoundingClientRect().width <= el.clientWidth + 1;
+    let z = Math.max(min, Math.min(1, wz, hz));
+    const fits = () => over() <= 0 && st.getBoundingClientRect().width <= el.clientWidth + 1;
+    if (z < 1) st.style.zoom = z.toFixed(3);
+    // 1.55: برآورد یک‌مرحله‌ای گاهی چند پیکسل کم می‌آورد (گرد شدن و شکستن خط بعد از zoom) و اسکرول می‌ماند؛ پله‌پله تا جا شود
+    for (let i = 0; i < 12 && !fits() && z > min; i++) { z = Math.max(min, z - 0.03); st.style.zoom = z.toFixed(3); }
+    return fits();
   };
   if (fitZoom(0.8)) return;
   // جا برای نمودار خوانا نیست: فقط عددها (ویجت را بزرگ‌تر کنید تا نمودار هم دیده شود)
   el.classList.add("db-nochart"); el.title = I18N.t("برای دیدن نمودار، ویجت را بزرگ‌تر کنید.");
-  fitZoom(0.55);
+  if (!fitZoom(0.55)) fitZoom(0.45);
 }
 function dbGaugeSvg(v, max, wn, cr, unit, label) {
   const f = v === null || v === undefined ? 0 : Math.max(0, Math.min(1, v / max));

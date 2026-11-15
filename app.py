@@ -731,6 +731,13 @@ def main():
     # انتخاب حالت: پرچم خط فرمان > فایل ذخیره‌شده > انتخاب اولین اجرا
     saved = paths.saved_mode()
     want = "server" if args.server else "client" if args.client else None
+    from autokrp import buildcfg
+    if buildcfg.MODE in ("client", "server"):          # 1.56: بیلدی که فقط برای یک حالت ساخته شده
+        if want and want != buildcfg.MODE:
+            message_box(paths.L(f"این نسخه‌ی برنامه فقط برای حالت «{buildcfg.MODE}» ساخته شده است.",
+                                f"This build of the app only supports “{buildcfg.MODE}” mode."))
+            return 1
+        want = buildcfg.MODE
     if want and saved and want != saved:
         message_box(paths.L(f"داده‌های این نصب برای حالت «{saved}» است. حالت فقط با پاک‌سازی کامل (RESET) عوض می‌شود.",
                             f"This installation's data is for “{saved}” mode. The mode can only be changed with a full reset (RESET)."))

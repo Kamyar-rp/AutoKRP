@@ -39,9 +39,50 @@ FEATURE_API["nettools"] = {"net_oui", "net_oui_update", "net_oui_import", "net_r
 API_VIEW = {"api_conn_list", "api_log_list", "api_log_get"}                   # 1.40: ابزار API
 FEATURE_API["apitool"] = API_VIEW | {"api_conn_save", "api_conn_delete", "api_req_save", "api_req_delete", "api_send"}
 FEATURE_API["offline"] = {"fgu_info", "fgu_check_folder", "fgu_start", "fgu_job", "fgu_cancel"}   # 1.22: خاموش بودن واقعاً اجرا نشود
+# ============================================================== 1.56: بیلد ماژولار (buildcfg.py)
+# کلید هر ابزار/بخش ← ماژول بیلد. ماژولی که در این بیلد نیست از همه‌ی فهرست‌ها حذف می‌شود: نه در «ابزارهای فعال» دیده می‌شود،
+# نه در دسترسی‌ها، نه قابل روشن شدن است؛ متدهای API آن هم پاسخ نمی‌دهند (build_block) و از کلاس Api برداشته می‌شوند.
+from . import buildcfg  # noqa: E402
+
+KEY_SECTION = {"splunk": "sec", "abuse": "sec", "fortigate": "sec", "redmine": "sec", "dns": "sec", "scan": "sec", "intel": "sec",
+               "ssh": "dev", "term": "dev", "nettools": "dev", "apitool": "dev", "monitor": "monitor", "asset": "asset", "offline": "offline"}
+TOOLS = [t for t in TOOLS if buildcfg.has(KEY_SECTION[t])]
+FEATURES = [f for f in FEATURES if buildcfg.has(KEY_SECTION[f])]
+# متدهای امنیت که در جدول‌های دسترسی نیستند (ادمین‌محور یا با check_tools داخل خود متد)
+SEC_API = {"test_connection", "fg_device_add", "fg_device_delete", "fg_task_dryrun", "fg_task_templates", "forget_cert_pin",
+           "splunk_diagnose", "splunk_optimize", "splunk_check_fields", "splunk_save_mapping", "redmine_load_meta", "redmine_discover",
+           "preview_template", "start_run", "start_full_sync", "cancel_run", "decide", "intel_status", "intel_list_update",
+           "intel_feed_update", "intel_local_upload", "intel_local_clear", "repeat_ips", "ips_action", "import_preview", "import_commit",
+           "add_manual", "export_ips", "export_run_files", "pick_csv", "list_ips", "ip_detail"}
+AUTO_API = {"jobs_list", "job_save", "job_delete", "job_run", "set_master"}      # کارهای خودکار: امنیت یا ارتباط با دستگاه‌ها
+
+
+def method_sections(name):
+    """ماژول(های) بیلدی که این متد API به آن‌ها تعلق دارد؛ () = همیشه هست (هسته)."""
+    if name in SEC_API:
+        return ("sec",)
+    if name in AUTO_API:
+        return ("sec", "dev")
+    for f, names in FEATURE_API.items():
+        if name in names:
+            return (KEY_SECTION[f],)
+    k = SUB_OF.get(name) or (_access_base(name) or (None,))[0]
+    if k:
+        return (KEY_SECTION.get(k.split(".")[0], ""),) if KEY_SECTION.get(k.split(".")[0]) else ()
+    return ()
+
+
+def build_block(name):
+    """None = در این بیلد هست؛ وگرنه پیام خطا."""
+    secs = method_sections(name)
+    if secs and not buildcfg.has(*secs):
+        return "این بخش در این نسخه‌ی برنامه (بیلد) نیست."
+    return None
+
+
 ROLE_TITLES = {"admin": "ادمین", "operator": "اپراتور", "readonly": "فقط‌خواندنی"}
 # 1.22: دسترسی به «بخش‌ها» برای هر اپراتور جدا (قبلاً مانیتورینگ برای همه‌ی اپراتورها باز بود و ترمینال همراه SSH)
-USER_PERMS = ["monitor", "term"]
+USER_PERMS = [k for k in ("monitor", "term") if buildcfg.has(KEY_SECTION[k])]
 USER_PERM_TITLES = {"monitor": "مانیتورینگ: افزودن و ویرایش هدف‌ها و پروفایل‌های SNMP شخصی", "term": "ترمینال و انتقال فایل"}
 USER_TOOLS = TOOLS + USER_PERMS
 PERMS_V = 2
@@ -146,8 +187,9 @@ SUB_TITLES = {"ssh": "دستگاه‌ها و اجرای دستور (SSH/Telnet)"
               "term.tftp": "سرور TFTP", "term.serial": "کنسول سریال", "nettools": "ابزارهای شبکه", "apitool": "ابزار API",
               "monitor.events": "دریافت Trap و Syslog", "monitor.maps": "نقشه‌ها", "monitor.dash": "داشبوردها", "monitor.topo": "نقشه‌ی خودکار (LLDP)",
               "monitor.noc": "نمای NOC", "monitor.live": "بررسی زنده‌ی موقت", "asset.scan": "اسکن دارایی"}
+SECTIONS = [(sec, kids) for sec, kids in SECTIONS if buildcfg.has(sec)]          # 1.56: فقط ماژول‌های همین بیلد
 SUBKEYS = [k for _, kids in SECTIONS for k in kids if "." in k]
-PURE_SECTIONS = ["sec", "dev"]
+PURE_SECTIONS = [k for k in ("sec", "dev") if buildcfg.has(k)]
 
 
 def parent_of(k):
@@ -407,6 +449,9 @@ def can_call(user, name, settings, lv=None):
     """None = مجاز؛ وگرنه پیام خطا. lv = levels(...) همین کاربر (اگر نیامد از نقش و تیک‌ها حساب می‌شود)."""
     if name in PUBLIC:
         return None
+    bb = build_block(name)
+    if bb:
+        return bb
     mb = mode_block(name)
     if mb:
         return mb

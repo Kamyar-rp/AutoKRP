@@ -50,6 +50,19 @@ async function webLogout() {
   try { await fetch("/auth/logout", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-AKRP-CSRF": window.__AKRP_WEB__.csrf }, body: "{}" }); } catch (e) { /* */ }
   location.href = "/login";
 }
+/* 1.56: کمک‌تابع‌های مشترک (قبلاً در sshlive.js؛ بیلد ماژولار بدون «ارتباط با دستگاه‌ها» آن فایل را ندارد) */
+const tt = (s) => (window.I18N ? window.I18N.t(s) : s);
+const fsize = (n) => { n = Number(n || 0); if (n < 1024) return n + " B"; const u = ["KB", "MB", "GB", "TB"]; let i = -1; do { n /= 1024; i++; } while (n >= 1024 && i < 3); return n.toFixed(n < 10 ? 1 : 0) + " " + u[i]; };
+function blobB64(blob) { return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1] || ""); fr.onerror = () => rej(fr.error); fr.readAsDataURL(blob); }); }
+function fmtBytes(n, d = 1) { n = Number(n || 0); const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return (i ? n.toFixed(n < 10 ? d : 0) : n) + " " + u[i]; }
+function fmtUp(sec) { sec = Number(sec || 0); const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`; }
+function monDur(s) {
+  s = Math.max(0, Math.floor(s || 0));
+  if (s < 60) return `${num(s)} ثانیه`;
+  if (s < 3600) return `${num(Math.floor(s / 60))} دقیقه`;
+  if (s < 86400) return `${num(Math.floor(s / 3600))} ساعت و ${num(Math.floor((s % 3600) / 60))} دقیقه`;
+  return `${num(Math.floor(s / 86400))} روز و ${num(Math.floor((s % 86400) / 3600))} ساعت`;
+}
 async function api(name, ...args) {
   await ready;
   try {
@@ -154,7 +167,7 @@ let modalClose = null;
 function openModal({ title, body, foot = "", wide = false, onOpen, overLock = false }) {
   const back = $("#modalBack"), m = $("#modal");
   m.className = "modal" + (wide ? " wide" : "");
-  m.innerHTML = `<div class="m-head"><h2>${esc(title)}</h2><button class="m-close" aria-label="بستن"><svg><use href="#i-x"/></svg></button></div>
+  m.innerHTML = `<div class="m-head"><h2${/^[0-9a-fA-F.:\/ -]+$/.test(String(title).replace(/[\u2066-\u2069\u200e\u200f]/g, "")) ? ' class="ltr"' : ""}>${esc(title)}</h2><button class="m-close" aria-label="بستن"><svg><use href="#i-x"/></svg></button></div>
     <div class="m-body">${body}</div>${foot ? `<div class="m-foot">${foot}</div>` : ""}`;
   back.hidden = false;
   back.classList.toggle("over-noc", !!document.getElementById("noc") || overLock);   // 1.37: روی NOC؛ 1.51: روی صفحه‌ی قفل («بستن برنامه»)
@@ -359,9 +372,11 @@ const TE_TREE = [
   ["offline", "ابزارهای آفلاین", [], ""],
 ];
 const teKey = (k) => k.replace(".", ":");
+/* 1.57: فقط بخش‌هایی که در این بیلد هستند (بیلد ماژولار) */
+function teTree() { return TE_TREE.filter(([k]) => hasB(k)); }
 function teOn(D, k) { return ((D.tools_enabled || {})[teKey(k)] ?? true) !== false; }
 function teTreeHtml(D) {
-  return `<div class="te-tree">${TE_TREE.map(([k, t, kids, stop]) => `<div class="te-sec" data-tes="${k}"><div class="te-head">${sw("tools_enabled." + teKey(k), teOn(D, k), `<b>${esc(I18N.t(t))}</b>`)}
+  return `<div class="te-tree">${teTree().map(([k, t, kids, stop]) => `<div class="te-sec" data-tes="${k}"><div class="te-head">${sw("tools_enabled." + teKey(k), teOn(D, k), `<b>${esc(I18N.t(t))}</b>`)}
       <span class="tag ${teOn(D, k) ? "ok" : "err"}">${teOn(D, k) ? "فعال" : "متوقف"}</span></div>
     ${kids.length ? `<div class="te-kids">${kids.map(([c, ct, sub]) => `<label class="chk ${sub ? "te-sub" : ""}"><input type="checkbox" data-type="bool" data-path="tools_enabled.${teKey(c)}" ${teOn(D, c) ? "checked" : ""}>${esc(I18N.t(ct))}</label>`).join("")}</div>` : ""}
     ${stop ? `<div class="hint te-stop"><span>خاموش کردن:</span> ${esc(I18N.t(stop))}</div>` : ""}</div>`).join("")}</div>`;
@@ -369,7 +384,7 @@ function teTreeHtml(D) {
 /** کلیدهایی که با این ذخیره خاموش می‌شوند (روشن در تنظیمات فعلی، خاموش در پیش‌نویس) */
 function teTurningOff() {
   const out = [];
-  for (const [k, t, kids] of TE_TREE) {
+  for (const [k, t, kids] of teTree()) {
     const was = teOn(S.settings, k), now = teOn(S.draft, k);
     if (was && !now) { out.push(I18N.t(t)); continue; }
     if (now) for (const [c, ct] of kids) if (teOn(S.settings, c) && !teOn(S.draft, c) && teOn(S.settings, k)) out.push(I18N.t(ct));
@@ -486,7 +501,17 @@ function axOk(k, lvl = "view") {
   if (v === undefined) return true;          // پیش از رسیدن وضعیت از سرور (سرور خودش بررسی می‌کند)
   return lvl === "run" ? v === "run" : v !== "none";
 }
+/* 1.56 بیلد ماژولار: ماژول‌هایی که در این نسخه نیستند (S.state.build از سرور؛ ثابت تا پایان اجرا) */
+function hasB(...mods) { const b = S.state && S.state.build; return !b || mods.some((m) => b.modules.includes(m)); }
+let buildDone = false;
+function applyBuild(b) {
+  if (!b || buildDone) return;
+  buildDone = true;
+  ["sec", "dev", "monitor", "asset", "offline"].forEach((m) => document.body.classList.toggle("nb-" + m, !b.modules.includes(m)));
+  if (!b.modules.includes("sec")) { S.runTab = "offline"; S.autoTab = "backup"; $(`#nav button[data-page="auto"]`).classList.add("adm-only"); ST.tab = b.modules.includes("monitor") ? "monitor" : ST.tab; }
+}
 function applyRole(r) {
+  applyBuild(r.build);
   const hid = hiddenTools();
   const me = r.me, sig = JSON.stringify([me, r.tools, r.tools_enabled, r.features, hid, r.hidden_modes, r.access]);
   if (sig === roleSig) return;
@@ -518,7 +543,7 @@ function applyRole(r) {
   // تب یا صفحه‌ای که الان پنهان شد
   const off = (sel) => { const b = $(sel); return !!b && b.classList.contains("tool-off"); };
   if (off(`#setTabs button[data-t="${S.setTab}"]`)) { S.setTab = "general"; if (S.page === "settings") renderSettings(); }
-  if (off(`#autoTabs button[data-t="${S.autoTab}"]`)) { S.autoTab = "daily"; if (S.page === "auto") renderAuto(); }
+  if (off(`#autoTabs button[data-t="${S.autoTab}"]`)) { S.autoTab = hasB("sec") ? "daily" : "backup"; if (S.page === "auto") renderAuto(); }
   if (typeof SSH !== "undefined" && off(`#sshTabs button[data-t="${SSH.tab}"]`)) {
     const first = $$("#sshTabs button").find((b) => !b.classList.contains("tool-off") && getComputedStyle(b).display !== "none");
     SSH.tab = first ? first.dataset.t : "devices"; if (S.page === "ssh") loadSsh();
@@ -527,13 +552,16 @@ function applyRole(r) {
   if (S.page === "monitor" && off(`#nav button[data-page="monitor"]`)) go("dashboard");
   if (S.page === "assets" && off(`#nav button[data-page="assets"]`)) go("dashboard");
   if (S.page === "run" && S.runTab === "offline" && off(`#runTabs button[data-t="offline"]`)) { S.runTab = "run"; runTabApply(); }
+  // 1.56: صفحه‌ی فعلی در این بیلد (یا برای این کاربر) دیده نمی‌شود ← اولین صفحه‌ی موجود
+  { const cur = $(`#nav button[data-page="${S.page}"]`), vis = (x) => !!x && getComputedStyle(x).display !== "none";
+    if (cur && !vis(cur)) { const first = $$("#nav button[data-page]").find(vis); if (first && first.dataset.page !== S.page) go(first.dataset.page); } }
   const chip = $("#userChip");
   chip.hidden = !(me && !me.single);
   if (me && !me.single) chip.innerHTML = `<svg style="width:14px;height:14px"><use href="#i-lock"/></svg><b class="ltr">${esc(me.username)}</b> — ${ROLE_FA[me.role] || me.role}`;
   if (me && !me.single) chip.title = me.username;
   if (!me) return;
   const forbidden = (role !== "admin" && S.page === "settings") || ($("#navSsh").hidden && S.page === "ssh");
-  if (forbidden) go("dashboard");
+  if (forbidden) { const first = $$("#nav button[data-page]").find((x) => getComputedStyle(x).display !== "none" && !x.hidden); go(first ? first.dataset.page : "dashboard"); }
   if (S.page === "run") renderStageForm();
   if (S.page === "auto") renderAuto();
 }
@@ -648,7 +676,7 @@ function renderFeed() {
   const f = S.feedFilter;
   const evs = S.events.filter((e) => f === "all" || e.level === f).slice(-250).reverse();
   $("#feed").innerHTML = evs.length ? evs.map((e) =>
-    `<div class="ev ${esc(e.level)}"><time>${fmtTime(e.ts)}</time><span class="dot"></span><span class="msg">${esc(e.msg)}</span></div>`).join("")
+    `<div class="ev ${esc(e.level)}"><time>${fmtTime(e.ts)}</time><span class="dot"></span><span class="msg clamp">${esc(e.msg)}</span></div>`).join("")
     : `<div class="empty">رویدادی برای نمایش نیست.</div>`;
 }
 $("#feedFilter").addEventListener("click", (e) => {
@@ -1290,7 +1318,7 @@ function nextDaily(d) {
   return `اجرای بعدی: ${fmtDate(t.getTime() / 1000)}${S.draft.automation.master ? "" : " — کلید اصلی کار خودکار خاموش است"}`;
 }
 function renderAuto() {
-  if (!isAdmin()) S.autoTab = "daily";
+  if (!isAdmin() && hasB("sec")) S.autoTab = "daily";
   $$("#autoTabs button").forEach((b) => { b.classList.toggle("on", b.dataset.t === S.autoTab); b.hidden = !isAdmin() && b.dataset.t !== "daily"; });
   if (S.autoTab === "daily") { $("#btnSaveAuto").hidden = $("#btnUndoAuto").hidden = true; renderJobs($("#autoBody")); return; }
   if (!S.draft) return;
@@ -1434,8 +1462,13 @@ const IP_PAGE = 500;
 /** list_ips فشرده: نام ستون‌ها یک بار + آرایه‌ی مقدارها برای هر ردیف ← همان شیءهای قبلی */
 function ipRows(r) {
   if (r.rows) return r.rows;
-  const c = r.cols || [];
-  return (r.data || []).map((a) => { const o = {}; for (let i = 0; i < c.length; i++) o[c[i]] = a[i]; return o; });
+  const c = r.cols || [], em = r.empty || [], lut = c.map((k) => (r.dict && r.dict[k]) || null);   // 1.55: dict/empty (فشرده‌سازی سمت سرور)
+  return (r.data || []).map((a) => {
+    const o = {};
+    for (let i = 0; i < c.length; i++) { const v = a[i]; o[c[i]] = lut[i] && v !== null ? lut[i][v] : v; }
+    for (let i = 0; i < em.length; i++) o[em[i]] = null;
+    return o;
+  });
 }
 async function loadIps() {
   const r = await api("list_ips", true);
@@ -1485,6 +1518,8 @@ function banDaysDlg(ips, listHtml) {
     },
   }).then((v) => (v === undefined ? null : v));
 }
+/* 1.55: پیام‌های بلند رویدادهای زنده سه خط نشان داده می‌شوند؛ کلیک = باز/بسته */
+document.addEventListener("click", (e) => { const m = e.target.closest && e.target.closest(".ev .msg.clamp"); if (m && !String(getSelection())) m.classList.toggle("open"); });
 function cell(k, r) {
   const v = r[k];
   if (k === "ip") return `<td class="ltr"><span class="link ip" data-ipd="${esc(v)}">${esc(v)}</span></td>`;
@@ -1495,7 +1530,9 @@ function cell(k, r) {
   if (k === "intel_status") return `<td>${intelTag(r)}</td>`;
   if (["reports", "attack_count"].includes(k)) return `<td class="num">${num(v)}</td>`;
   if (["asn", "domain", "dest_ports", "checked_at", "last_seen", "first_seen"].includes(k)) return `<td class="ltr">${esc(v ?? "—")}</td>`;
-  return `<td class="wrap">${esc(v === null || v === undefined || v === "" ? "—" : v)}</td>`;
+  const w = k === "categories" || k === "signatures" ? " w-lg" : k === "isp" || k === "usage_type" || k === "fw_detail" || k === "error" ? " w-md" : "";
+  const t = esc(v === null || v === undefined || v === "" ? "—" : v);
+  return w === " w-lg" ? `<td class="wrap w-lg"><div class="clamp2" title="${t}">${t}</div></td>` : `<td class="wrap${w}">${t}</td>`;
 }
 function isRepeat(r) { const n = S.repeatDays || 0; return n > 0 && r.abuse_status === "CLEAN" && (r.seen_days || 0) >= n && !["banned", "already"].includes(r.fw_status); }
 function intelTag(r) {
@@ -1517,9 +1554,12 @@ function filteredIps() {
     return ["ip", "country", "country_code", "isp", "domain", "categories", "signatures", "usage_type"].some((k) => String(r[k] || "").toLowerCase().includes(q));
   });
   const { k, d } = S.ipSort;
+  if (k === "ip") {          // 1.55: کلید عددی یک بار برای هر ردیف (قبلاً در هر مقایسه رشته ساخته می‌شد؛ با ۵۰ هزار IP حدود ۱۰ برابر کندتر)
+    const key = (r) => { if (r._ipk === undefined) { const p = String(r.ip).split("."); r._ipk = p.length === 4 && p.every((n) => /^\d+$/.test(n)) ? ((+p[0] * 256 + +p[1]) * 256 + +p[2]) * 256 + +p[3] : Infinity; } return r._ipk; };
+    return rows.sort((a, b) => (key(a) - key(b) || String(a.ip).localeCompare(String(b.ip))) * d);
+  }
   rows.sort((a, b) => {
     let x = a[k], y = b[k];
-    if (k === "ip") { const p = (s) => String(s).split(".").map((n) => n.padStart(3, "0")).join("."); x = p(x); y = p(y); }
     const nx = Number(x), ny = Number(y);
     if (x !== null && y !== null && x !== "" && y !== "" && !isNaN(nx) && !isNaN(ny)) return (nx - ny) * d;
     return String(x ?? "").localeCompare(String(y ?? "")) * d;
@@ -1599,7 +1639,8 @@ $("#ipTable").addEventListener("click", (e) => {
   if (!e.shiftKey && String(window.getSelection() || "").trim()) return;   // کاربر در حال انتخاب متن برای کپی است
   ipSelectRange(box.value, !box.checked, e.shiftKey);
 });
-$("#ipSearch").addEventListener("input", () => { S.ipShow = IP_PAGE; renderIps(); });
+{ let ipSearchT = 0;      // 1.55: فهرست بزرگ با هر حرف دوباره ساخته نشود
+  $("#ipSearch").addEventListener("input", () => { clearTimeout(ipSearchT); ipSearchT = setTimeout(() => { S.ipShow = IP_PAGE; renderIps(); }, S.ips.length > 5000 ? 160 : 0); }); }
 $("#ipFilter").addEventListener("click", (e) => {
   const b = e.target.closest("button"); if (!b) return;
   S.ipShow = IP_PAGE; S.ipFilter = b.dataset.f; $$("#ipFilter button").forEach((x) => x.classList.toggle("on", x === b)); renderIps();
@@ -1754,13 +1795,16 @@ function openAddData(tab = "import") {
     wire();
   } });
 }
+/* 1.55: مقدار بله/نه و زمان ISO خوانا در جزئیات IP (قبلاً False و 2026-11-12T07:43:05+00:00 خام) */
+function ynTxt(v) { const t = String(v ?? "").trim().toLowerCase(); return t === "" ? "—" : ["1", "true", "yes"].includes(t) ? I18N.t("بله") : ["0", "false", "no"].includes(t) ? I18N.t("نه") : v; }
+function isoTxt(v) { const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/.exec(String(v || "")); return m ? `${m[1]} ${m[2]}${m[3] && !/^(Z|[+-]00:?00)$/.test(m[3]) ? " " + m[3] : m[3] ? " UTC" : ""}` : v; }
 async function showIp(ip) {
   const r = await api("ip_detail", ip);
   if (!r.ok) return toast(r.error, "error");
   const d = r.ip;
-  const rows = [["وضعیت AbuseIPDB", statusTag(d.abuse_status), 1], ["امتیاز", scoreHtml(d.score), 1], ["تعداد گزارش", num(d.reports)], ["آخرین گزارش", d.last_reported],
+  const rows = [["وضعیت AbuseIPDB", statusTag(d.abuse_status), 1], ["امتیاز", scoreHtml(d.score), 1], ["تعداد گزارش", num(d.reports)], ["آخرین گزارش", isoTxt(d.last_reported)],
     ["کشور", `${d.country || "—"} (${d.country_code || "—"})`], ["شهر", d.city], ["ISP", d.isp], ["نوع کاربری", d.usage_type], ["دامنه", d.domain], ["ASN", d.asn],
-    ["Tor", d.is_tor], ["Whitelisted", d.is_whitelisted], ["دسته‌ها", d.categories], ["خطا", d.error],
+    ["Tor", ynTxt(d.is_tor)], ["Whitelisted", ynTxt(d.is_whitelisted)], ["دسته‌ها", d.categories], ["خطا", d.error],
     ["FortiGate", d.fw_status ? `${esc((FW[d.fw_status] || [0, d.fw_status])[1])} — ${esc(d.fw_detail || "")}` : "—", 1],
     ...(["banned", "already"].includes(d.fw_status) && d.fw_until ? [["مدت بلاک", `${banDaysTxt(d.fw_days)} — ${fwUntilTxt(d)}`]] : []),
     ["تعداد حمله (Splunk)", num(d.attack_count)], ["Signatureها", d.signatures], ["پورت‌های مقصد", d.dest_ports],
@@ -2292,14 +2336,14 @@ function renderSettings() {
     return;
   }
   if (t === "general") {
-    body.innerHTML = brandingSection() + `<div class="form"><h3>رفتار</h3><div class="form-grid">
-        <div class="field wide">${sw("test_mode", D.test_mode, "<b>حالت تست</b>")}<small class="hint">در حالت تست، Splunk و AbuseIPDB و خواندن از FortiGate واقعی انجام می‌شوند ولی بلاک و ساخت تیکت فقط در فایل JSON پوشه‌ی اجرا نوشته می‌شوند.</small></div>
+    body.innerHTML = brandingSection() + `<div class="form" data-b="sec|dev"><h3>رفتار</h3><div class="form-grid">
+        <div class="field wide" data-b="sec">${sw("test_mode", D.test_mode, "<b>حالت تست</b>")}<small class="hint">در حالت تست، Splunk و AbuseIPDB و خواندن از FortiGate واقعی انجام می‌شوند ولی بلاک و ساخت تیکت فقط در فایل JSON پوشه‌ی اجرا نوشته می‌شوند.</small></div>
         ${inp("poll_minutes", "فاصله‌ی بررسی وضعیت اتصال‌ها (دقیقه)", { type: "num" })}
         ${inp("max_age_hours", "حداکثر قدمت اجرای زمان‌بندی‌شده (ساعت)", { type: "num", hint: "اگر برنامه بسته بوده و نوبت اجرا بیش از این عقب افتاده باشد، آن نوبت رد می‌شود." })}
       </div></div>
       <div class="form"><h3>بخش‌ها و ابزارهای فعال برنامه</h3><p class="hint">خاموش = برای همه‌ی کاربران پنهان و <b>واقعاً متوقف</b> (کار پس‌زمینه‌اش هم قطع می‌شود). زیرمجموعه‌ها جدا خاموش می‌شوند؛ بخش اصلی خاموش = همه‌ی زیرمجموعه‌ها خاموش. داده‌ها و تنظیمات پاک نمی‌شوند.</p>
-        <div class="row" style="gap:6px;margin:8px 0;flex-wrap:wrap"><button class="btn sm ghost" id="teAll">همه روشن</button><button class="btn sm" id="teMonOnly" title="همه‌ی بخش‌ها جز مانیتورینگ خاموش">فقط مانیتورینگ</button>
-          <button class="btn sm" id="teDevOnly">فقط ارتباط با دستگاه‌ها</button><button class="btn sm" id="teSecOnly">فقط امنیت</button></div>
+        <div class="row" style="gap:6px;margin:8px 0;flex-wrap:wrap"${teTree().length > 1 ? "" : " hidden"}><button class="btn sm ghost" id="teAll">همه روشن</button><button class="btn sm" id="teMonOnly" data-b="monitor" title="همه‌ی بخش‌ها جز مانیتورینگ خاموش">فقط مانیتورینگ</button>
+          <button class="btn sm" id="teDevOnly" data-b="dev">فقط ارتباط با دستگاه‌ها</button><button class="btn sm" id="teSecOnly" data-b="sec">فقط امنیت</button></div>
         ${teTreeHtml(D)}
         <p class="hint">هر کاربر هم می‌تواند ابزارهایی را که لازم ندارد فقط برای خودش پنهان کند: دکمه‌ی «ابزارهای من» پایین منو. دسترسی هر کاربر یا گروه: تنظیمات ← کاربران ← دسترسی‌ها (چیزی را متوقف نمی‌کند).</p></div>
       <div class="form"><h3>ظاهر و برند</h3><div class="form-grid">
@@ -2310,7 +2354,7 @@ function renderSettings() {
         ${[["data", "داده و تنظیمات"], ["runs", "فایل‌های هر اجرا"], ["logs", "لاگ برنامه"]].map(([k, l]) => `<div class="row" style="margin-bottom:8px"><span style="width:130px" class="muted">${l}</span><div class="path ltr" style="flex:1">${esc(S.paths[k])}</div>${WEB ? "" : `<button class="btn sm" data-open="${esc(S.paths[k])}"><svg><use href="#i-folder"/></svg>باز کردن</button>`}</div>`).join("")}
         <p class="hint">اسرار (توکن و رمز) در فایل رمزنگاری‌شده نگهداری می‌شوند؛ «تنظیمات ← امنیت».</p></div>`;
     const preset = (keep) => {
-      TE_TREE.forEach(([k, , kids]) => { setPath(D, "tools_enabled." + teKey(k), keep ? keep.includes(k) : true); kids.forEach(([c]) => setPath(D, "tools_enabled." + teKey(c), true)); });
+      teTree().forEach(([k, , kids]) => { setPath(D, "tools_enabled." + teKey(k), keep ? keep.includes(k) : true); kids.forEach(([c]) => setPath(D, "tools_enabled." + teKey(c), true)); });
       renderSettings();
       toast(I18N.t("تغییر کرد؛ برای اعمال «ذخیره» را بزنید."), "info"); };
     $("#teMonOnly", body).onclick = () => preset(["monitor"]);
@@ -3401,9 +3445,10 @@ async function renderAbout() {
   const r = await api("get_about"); if (!r.ok) return toast(r.error, "error");
   const b = (S.state && S.state.branding) || {};
   $("#aboutBody").innerHTML = `<div class="form"><div class="about-hero"><div class="logo ${b.logo_data ? "has-img" : ""}">${logoHtml(b)}</div>
-      <div><h1 class="ltr" style="text-align:start">${esc(r.name)} <span class="muted">v${esc(r.version)}</span></h1><p class="muted" style="margin:2px 0 0">ابزار متن‌باز خودکارسازی پاسخ امنیتی: <span class="ltr">Splunk → AbuseIPDB → FortiGate → Redmine</span></p></div></div>
+      <div><h1 class="ltr" style="text-align:start">${esc(r.name)} <span class="muted">v${esc(r.version)}</span></h1><p class="muted" style="margin:2px 0 0">${!r.build || r.build.modules.includes("sec") ? `ابزار متن‌باز خودکارسازی پاسخ امنیتی: <span class="ltr">Splunk → AbuseIPDB → FortiGate → Redmine</span>` : "ابزار متن‌باز خودکارسازی شبکه و امنیت"}</p></div></div>
       <div class="sec"><dl class="kv"><dt>سازنده</dt><dd class="ltr" style="text-align:start"><b>${esc(r.author)}</b></dd><dt>همکاری</dt><dd>${esc(r.credit)}</dd>
-      <dt>مجوز</dt><dd>${esc(r.license)} — استفاده، تغییر و انتشار آزاد با حفظ نام سازنده</dd></dl></div>
+      <dt>مجوز</dt><dd>${esc(r.license)} — استفاده، تغییر و انتشار آزاد با حفظ نام سازنده</dd>
+      ${r.build ? `<dt>نوع نسخه</dt><dd>${r.build.full ? "کامل (همه‌ی ماژول‌ها)" : `${r.build.edition ? `<b class="ltr">${esc(r.build.edition)}</b> — ` : ""}${r.build.modules.map((m) => esc(I18N.t(r.build.titles[m] || m))).join(I18N.t("، ")) || "—"}`}${r.build.mode === "client" ? " — فقط کلاینت" : r.build.mode === "server" ? " — فقط سرور" : ""}</dd>` : ""}</dl></div>
       <div class="sec"><h3>ارتباط با سازنده</h3><dl class="kv">${(r.contacts || []).map((c) => `<dt>${{ email: "ایمیل", telegram: "تلگرام", github: "GitHub", issues: "گزارش مشکل / پیشنهاد" }[c.kind] || esc(c.kind)}</dt>
         <dd>${WEB && /^(https:|mailto:)/.test(c.url || "") ? `<a href="${esc(c.url)}" class="ltr" target="_blank" rel="noopener noreferrer">${esc(c.text)}</a>` : `<a href="#" class="ltr" data-contact="${esc(c.kind)}">${esc(c.text)}</a>`}</dd>`).join("")}</dl></div>
       <div class="sec"><h3>محیط اجرا</h3><dl class="kv"><dt>Python</dt><dd class="ltr" style="text-align:start">${esc(r.python)}</dd><dt>سیستم‌عامل</dt><dd class="ltr" style="text-align:start">${esc(r.os)}</dd>

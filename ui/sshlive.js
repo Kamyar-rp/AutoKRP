@@ -25,7 +25,6 @@ document.addEventListener("dragover", (e) => { if (e.dataTransfer && [...e.dataT
 document.addEventListener("drop", (e) => { if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) e.preventDefault(); });
 
 /* ---------- ترجیحات هر مرورگر ---------- */
-const tt = (s) => (window.I18N ? window.I18N.t(s) : s);
 const TPREF_KEY = "akrp_term";
 const TP = Object.assign({ font: 14, highlight: true, copySel: true, theme: "dark", stats: true }, (() => { try { return JSON.parse(localStorage.getItem(TPREF_KEY) || "{}"); } catch (_) { return {}; } })());
 function saveTP() { try { localStorage.setItem(TPREF_KEY, JSON.stringify(TP)); } catch (_) { /* */ } }
@@ -577,7 +576,6 @@ function xfRenderFiles() {
   xfRenderLocal(); xfRenderRemote();
 }
 
-const fsize = (n) => { n = Number(n || 0); if (n < 1024) return n + " B"; const u = ["KB", "MB", "GB", "TB"]; let i = -1; do { n /= 1024; i++; } while (n >= 1024 && i < 3); return n.toFixed(n < 10 ? 1 : 0) + " " + u[i]; };
 function xfSorted(items) {
   const { k, d } = XF.sort;
   return [...items].sort((a, b) => (b.dir - a.dir) || (k === "name" ? a.name.localeCompare(b.name, "en", { numeric: true }) : (a[k] || 0) - (b[k] || 0)) * d);
@@ -771,7 +769,6 @@ async function xfOverwrite(name) {
 
 /* --- آپلود تکه‌ای از مرورگر/پنجره (فایل‌های کشیده‌شده یا انتخاب‌شده) --- */
 const XCHUNK = 4 * 1024 * 1024;
-function blobB64(blob) { return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1] || ""); fr.onerror = () => rej(fr.error); fr.readAsDataURL(blob); }); }
 async function xfUploadFiles(files, toTftp = false, destDir = null, overwrite = false) {
   if (!toTftp && !XF.cur) return toast("ابتدا به دستگاه وصل شوید", "warn");
   const big = XF.limit ? files.filter((f) => f.size > XF.limit) : [];
@@ -1107,8 +1104,6 @@ async function histView(id, fname) {
 
 /* ---------- نوار منابع سرور لینوکس (مثل MobaXterm) ---------- */
 const STATS_MS = 3000;
-function fmtBytes(n, d = 1) { n = Number(n || 0); const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return (i ? n.toFixed(n < 10 ? d : 0) : n) + " " + u[i]; }
-function fmtUp(sec) { sec = Number(sec || 0); const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`; }
 function tsBar(p) { const v = Math.max(0, Math.min(100, Number(p || 0))); return `<span class="ts-bar ${v >= 90 ? "hot" : v >= 75 ? "warm" : ""}"><i style="width:${v}%"></i></span>`; }
 function tsSpark(arr) {
   if (!arr || arr.length < 2) return "";
