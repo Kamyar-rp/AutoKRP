@@ -30,7 +30,7 @@ FEATURE_API = {
                 # 1.27.1: MIB سازنده‌ها ← نوع دستگاه خودکار
                 "mib_list", "mib_upload", "mib_delete", "mib_compile", "mib_types"},
     "term": {"term_open", "term_break", "serial_ports", "term_snips_save", "term_read", "term_write", "term_resize", "term_close", "term_list", "term_stats", "term_log", "conn_cancel",
-             "xfer_open", "xfer_conns", "xfer_ls", "xfer_mkdir", "xfer_delete", "xfer_rename", "xfer_close", "xfer_put_begin",
+             "xfer_open", "xfer_conns", "xfer_ls", "xfer_mkdir", "xfer_delete", "xfer_rename", "xfer_read_text", "xfer_write_text", "xfer_text_versions", "xfer_text_version", "xfer_close", "xfer_put_begin",
              "xfer_put", "xfer_get", "xfer_local", "local_ls", "xfer_jobs", "xfer_cancel", "xfer_clear", "xfer_clear_one", "tftp_start",
              "tftp_status", "tftp_stop", "tftp_add_local", "tftp_remove", "tftp_received_get"},
 }
@@ -74,6 +74,8 @@ def method_sections(name):
 
 def build_block(name):
     """None = در این بیلد هست؛ وگرنه پیام خطا."""
+    if name.startswith(("todo_", "chat_")) and not buildcfg.full():      # 1.58: کارهای من و پیام‌ها فقط در نسخه‌ی کامل
+        return "این بخش در این نسخه‌ی برنامه (بیلد) نیست."
     secs = method_sections(name)
     if secs and not buildcfg.has(*secs):
         return "این بخش در این نسخه‌ی برنامه (بیلد) نیست."
@@ -157,7 +159,7 @@ OPERATOR_MON = {"mon_save", "mon_delete", "mon_toggle", "mon_icon_upload", "mon_
                 # 1.35: قالب نمایش و پورت‌های نمایشی هدف‌هایی که خودش اجازه‌ی ویرایش دارد
                 "mon_tpl_set", "mon_show_ports"}
 # اپراتوری که «ترمینال و انتقال فایل» دارد
-OPERATOR_TERM = {"xfer_open", "xfer_conns", "xfer_ls", "xfer_mkdir", "xfer_delete", "xfer_rename", "xfer_close",
+OPERATOR_TERM = {"xfer_open", "xfer_conns", "xfer_ls", "xfer_mkdir", "xfer_delete", "xfer_rename", "xfer_read_text", "xfer_write_text", "xfer_text_versions", "xfer_text_version", "xfer_close",
                  "xfer_put_begin", "xfer_put", "xfer_get", "xfer_local", "local_ls", "xfer_jobs", "xfer_cancel", "xfer_clear", "xfer_clear_one",
                  "tftp_start", "tftp_status", "tftp_stop", "tftp_add_local", "tftp_remove", "tftp_received_get",
                  "term_open", "term_read", "term_write", "term_resize", "term_close", "term_list", "term_stats", "term_log",
@@ -177,13 +179,13 @@ POLL = {"todo_badge", "chat_poll", "net_job", "mon_map_disc_job", "mon_state", "
 # خاموش در «ابزارهای فعال» = برای همه خاموش و متوقف (خود والد خاموش = همه‌ی فرزندان). سطح دسترسی فرزند ≤ والد؛
 # فرزندی که برایش سطحی تعیین نشده، سطح والدش را می‌گیرد (گروه‌ها و کاربرهای پیش از 1.39 بدون تغییر).
 SECTIONS = [("sec", ["splunk", "abuse", "fortigate", "redmine", "dns", "scan", "intel"]),
-            ("dev", ["ssh", "ssh.backup", "term", "term.xfer", "term.tftp", "term.serial", "nettools", "apitool"]),
+            ("dev", ["ssh", "ssh.backup", "ssh.fbackup", "term", "term.xfer", "term.tftp", "term.serial", "nettools", "apitool"]),
             ("monitor", ["monitor.events", "monitor.maps", "monitor.dash", "monitor.topo", "monitor.noc", "monitor.live"]),
             ("asset", ["asset.scan"]),
             ("offline", [])]
 SECTION_TITLES = {"sec": "امنیت (ابزارها، آدرس‌ها، کارهای خودکار)", "dev": "ارتباط با دستگاه‌ها", "monitor": "مانیتورینگ",
                   "asset": "دارایی‌ها", "offline": "ابزارهای آفلاین"}
-SUB_TITLES = {"ssh": "دستگاه‌ها و اجرای دستور (SSH/Telnet)", "ssh.backup": "پشتیبان کانفیگ", "term": "ترمینال", "term.xfer": "انتقال فایل (SFTP/FTP)",
+SUB_TITLES = {"ssh": "دستگاه‌ها و اجرای دستور (SSH/Telnet)", "ssh.backup": "پشتیبان کانفیگ", "ssh.fbackup": "پشتیبان پوشه‌ی لینوکس", "term": "ترمینال", "term.xfer": "انتقال فایل (SFTP/FTP)",
               "term.tftp": "سرور TFTP", "term.serial": "کنسول سریال", "nettools": "ابزارهای شبکه", "apitool": "ابزار API",
               "monitor.events": "دریافت Trap و Syslog", "monitor.maps": "نقشه‌ها", "monitor.dash": "داشبوردها", "monitor.topo": "نقشه‌ی خودکار (LLDP)",
               "monitor.noc": "نمای NOC", "monitor.live": "بررسی زنده‌ی موقت", "asset.scan": "اسکن دارایی"}
@@ -272,7 +274,7 @@ for _m in FEATURE_API["apitool"]:
     METHOD_ACCESS[_m] = ("apitool", "view" if _m in API_VIEW else "run")
 # متدهای دیگر با همین پیشوندها (بیشترشان فقط ادمین) هم سطح «اجرا»ی همان ابزار را می‌خواهند،
 # تا ادمینی که ادمین اصلی نیست و آن ابزار را ندارد از راه API هم به آن نرسد.
-PREFIX_ACCESS = (("asset_", "asset"), ("ssh_", "ssh"), ("backup_", "ssh"), ("cred_", "ssh"), ("fgu_", "offline"),
+PREFIX_ACCESS = (("asset_", "asset"), ("ssh_", "ssh"), ("backup_", "ssh"), ("fbk_", "ssh"), ("cred_", "ssh"), ("fgu_", "offline"),
                  ("mon_", "monitor"), ("snmp_", "monitor"), ("mib_", "monitor"), ("term_", "term"), ("xfer_", "term"),
                  ("tftp_", "term"), ("net_", "nettools"), ("api_", "apitool"))
 NO_ACCESS_CHECK = {"mon_state"}          # خودش برای سطح none پاسخ خالی می‌دهد (بنر هشدار سراسری)
@@ -297,7 +299,8 @@ SUB_API = {
     "monitor.live": {"mon_live_start", "mon_live_get", "mon_live_stop"},
     "monitor.dash": {"dash_list", "dash_save", "dash_delete"},
     "ssh.backup": {"backup_overview", "backup_versions", "backup_view", "backup_delete", "backup_diff", "backup_export", "backup_export_latest", "backup_now"},
-    "term.xfer": {"xfer_open", "xfer_conns", "xfer_ls", "xfer_mkdir", "xfer_delete", "xfer_rename", "xfer_close", "xfer_put_begin", "xfer_put", "xfer_get",
+    "ssh.fbackup": {"fbk_list", "fbk_save", "fbk_delete", "fbk_run", "fbk_cancel", "fbk_test", "fbk_pick_dir"},
+    "term.xfer": {"xfer_open", "xfer_conns", "xfer_ls", "xfer_mkdir", "xfer_delete", "xfer_rename", "xfer_read_text", "xfer_write_text", "xfer_text_versions", "xfer_text_version", "xfer_close", "xfer_put_begin", "xfer_put", "xfer_get",
                   "xfer_local", "local_ls", "xfer_jobs", "xfer_cancel", "xfer_clear", "xfer_clear_one"},
     "term.tftp": {"tftp_start", "tftp_status", "tftp_stop", "tftp_add_local", "tftp_remove", "tftp_received_get"},
     "term.serial": {"serial_ports"},

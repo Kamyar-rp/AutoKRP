@@ -144,7 +144,7 @@ function tsApply(t, col, dir) {
 }
 document.addEventListener("click", (e) => {
   const th = e.target.closest("table.grid > thead th");
-  if (!th || th.closest("#ipTable") || th.classList.contains("chk") || e.target.closest("input,button,select,a")) return;
+  if (!th || th.closest("#ipTable, table[data-own-sort]") || th.classList.contains("chk") || e.target.closest("input,button,select,a")) return;
   if (!th.textContent.replace(/[▲▼]/g, "").trim()) return;
   const t = th.closest("table"), key = tsKey(t), col = th.cellIndex;
   const cur = TSORT.get(key), dir = cur && cur.col === col ? -cur.dir : 1;
@@ -159,7 +159,7 @@ new MutationObserver((muts) => {
     if (n.matches("table.grid")) seen.add(n);
     else if (n.querySelectorAll) n.querySelectorAll("table.grid").forEach((t) => seen.add(t));
   }
-  for (const t of seen) { if (t.id === "ipTable") continue; const st = TSORT.get(tsKey(t)); if (st) tsApply(t, st.col, st.dir); }
+  for (const t of seen) { if (t.id === "ipTable" || t.hasAttribute("data-own-sort")) continue; const st = TSORT.get(tsKey(t)); if (st) tsApply(t, st.col, st.dir); }
 }).observe(document.body, { childList: true, subtree: true });
 
 /* ---------------------------------------------------------------- modal */
@@ -222,7 +222,7 @@ function go(page) {
   if (page === "monitor") { if (typeof MON !== "undefined" && MON.targets.length) renderMon(); loadMon(); }
   if (page === "assets") loadAssets();
   if (page === "dash") dashRender();
-  if (page === "todo") todoRender();
+  if (page === "todo" && typeof todoRender === "function") todoRender();
   if (page === "stats" && ST.tab === "monitor") { stTabApply(); renderMonStats(); }
   else if (page === "stats" && ST.tab === "repeat") { stTabApply(); renderRepeat(); loadRepeat(); }
   else if (page === "stats") {
@@ -363,7 +363,7 @@ $$("[data-undo]").forEach((b) => b.addEventListener("click", undoDraft));
 const TE_TREE = [
   ["sec", "امنیت (ابزارها، آدرس‌ها، کارهای خودکار)", [["splunk", "Splunk"], ["abuse", "AbuseIPDB"], ["fortigate", "FortiGate (بلاک)"], ["redmine", "Redmine (تیکت)"], ["dns", "DNS"], ["scan", "اسکن شبکه"], ["intel", "بررسی تکمیلی"]],
     "کارهای زمان‌بندی‌شده‌ی همین ابزارها اجرا نمی‌شوند"],
-  ["dev", "ارتباط با دستگاه‌ها", [["ssh", "دستگاه‌ها و اجرای دستور (SSH/Telnet)"], ["ssh.backup", "پشتیبان کانفیگ", 1], ["term", "ترمینال"], ["term.xfer", "انتقال فایل (SFTP/FTP)", 1],
+  ["dev", "ارتباط با دستگاه‌ها", [["ssh", "دستگاه‌ها و اجرای دستور (SSH/Telnet)"], ["ssh.backup", "پشتیبان کانفیگ", 1], ["ssh.fbackup", "پشتیبان پوشه‌ی لینوکس", 1], ["term", "ترمینال"], ["term.xfer", "انتقال فایل (SFTP/FTP)", 1],
     ["term.tftp", "سرور TFTP", 1], ["term.serial", "کنسول سریال (فقط دسکتاپ)", 1], ["nettools", "ابزارهای شبکه"], ["apitool", "ابزار API"]],
     "نشست‌های ترمینال و انتقال فایل بسته، سرور TFTP قطع و پشتیبان‌گیری زمان‌بندی‌شده انجام نمی‌شود"],
   ["monitor", "مانیتورینگ", [["monitor.events", "دریافت Trap و Syslog", 1], ["monitor.maps", "نقشه‌ها", 1], ["monitor.dash", "داشبوردها", 1], ["monitor.topo", "نقشه‌ی خودکار (LLDP)", 1], ["monitor.noc", "نمای NOC", 1],
@@ -508,6 +508,7 @@ function applyBuild(b) {
   if (!b || buildDone) return;
   buildDone = true;
   ["sec", "dev", "monitor", "asset", "offline"].forEach((m) => document.body.classList.toggle("nb-" + m, !b.modules.includes(m)));
+  document.body.classList.toggle("nb-full", !b.full);        // 1.58: «کارهای من» فقط در نسخه‌ی کامل
   if (!b.modules.includes("sec")) { S.runTab = "offline"; S.autoTab = "backup"; $(`#nav button[data-page="auto"]`).classList.add("adm-only"); ST.tab = b.modules.includes("monitor") ? "monitor" : ST.tab; }
 }
 function applyRole(r) {
@@ -1265,7 +1266,7 @@ function renderResults(run) {
     const cols = d.columns.filter((c) => d.rows.some((r) => r[c] !== "" && r[c] !== undefined && r[c] !== null));
     body.innerHTML = (d.gone && d.gone.length ? `<p class="hint warn">نسبت به اجرای قبلی دیده نشد: <span class="ltr">${esc(d.gone.join(", "))}</span></p>` : "")
       + (d.total > d.rows.length ? `<p class="hint">${num(d.rows.length)} ردیف اول از ${num(d.total)} نمایش داده شده است؛ همه در «خروجی فایل‌ها».</p>` : "")
-      + (d.rows.length ? `<div class="table-wrap inner"><table class="grid"><thead><tr>${cols.map((c) => `<th class="nosort ltr">${esc(c)}</th>`).join("")}</tr></thead><tbody>
+      + (d.rows.length ? `<div class="table-wrap inner"><table class="grid grid-ltr" dir="ltr"><thead><tr>${cols.map((c) => `<th class="nosort ltr">${esc(c)}</th>`).join("")}</tr></thead><tbody>
       ${d.rows.map((r) => `<tr>${cols.map((c) => `<td class="ltr wrap">${c === "new" ? (r.new ? `<span class="tag warn">تازه</span>` : "") : esc(r[c])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
         : `<div class="empty">هاست روشنی پیدا نشد.</div>`);
   }
@@ -1274,7 +1275,7 @@ function renderResults(run) {
     if (!d) { body.innerHTML = `<div class="empty">نتیجه‌ای نیست.</div>`; return; }
     const cols = d.columns.filter((c) => c !== "DNS_Server" && d.rows.some((r) => r[c] !== "" && r[c] !== undefined));
     body.innerHTML = (d.total > d.rows.length ? `<p class="hint">${num(d.rows.length)} ردیف اول از ${num(d.total)} نمایش داده شده است؛ همه در «خروجی فایل‌ها».</p>` : "")
-      + `<div class="table-wrap inner"><table class="grid"><thead><tr>${cols.map((c) => `<th class="nosort ltr">${esc(c)}</th>`).join("")}</tr></thead><tbody>
+      + `<div class="table-wrap inner"><table class="grid grid-ltr" dir="ltr"><thead><tr>${cols.map((c) => `<th class="nosort ltr">${esc(c)}</th>`).join("")}</tr></thead><tbody>
       ${d.rows.map((r) => `<tr>${cols.map((c) => `<td class="ltr wrap">${c === "Status" ? `<span class="tag ${["PTR_FOUND", "RESOLVED"].includes(r[c]) ? "ok" : ["TIMEOUT", "ERROR"].includes(r[c]) ? "warn" : "mute"}">${esc(r[c])}</span>` : esc(r[c])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
   }
   else if (S.resultTab === "fw" && fwa) {
@@ -1353,7 +1354,7 @@ function renderAuto() {
 }
 /* ===== زمان‌بندی SSH ===== */
 const WDAYS = [[5, "شنبه"], [6, "یکشنبه"], [0, "دوشنبه"], [1, "سه‌شنبه"], [2, "چهارشنبه"], [3, "پنجشنبه"], [4, "جمعه"]];   // شماره‌ها مثل Python: دوشنبه=0
-const SS = { list: [], fgu: {}, devs: [], scripts: [] };
+const SS = { list: [], fgu: {}, devs: [], scripts: [], fb: [] };
 function schedDays(d) { return !d || !d.length || d.length === 7 ? "هر روز" : WDAYS.filter(([n]) => d.includes(n)).map(([, t]) => t).join("، "); }
 function nextSched(x) {
   if (!x.enabled) return "غیرفعال";
@@ -1367,10 +1368,10 @@ function nextSched(x) {
 }
 async function renderSshSched(body) {
   body.innerHTML = `<p class="hint">در حال بارگذاری…</p>`;
-  const [a, b] = await Promise.all([api("ssh_sched_list"), api("ssh_list")]);
+  const [a, b, f] = await Promise.all([api("ssh_sched_list"), api("ssh_list"), hasB("dev") && shown("ssh.fbackup") ? api("fbk_list") : Promise.resolve({ ok: false })]);
   if (S.page !== "auto" || S.autoTab !== "sshsched") return;      // در این فاصله تب عوض شد
   if (!a.ok || !b.ok) { body.innerHTML = `<p class="hint warn">${esc((a.ok ? b : a).error)}</p>`; return; }
-  Object.assign(SS, { list: a.schedules, fgu: a.fgu_current, devs: b.devices, scripts: b.scripts });
+  Object.assign(SS, { list: a.schedules, fgu: a.fgu_current, devs: b.devices, scripts: b.scripts, fb: f.ok ? f.jobs : [] });
   const master = S.settings.automation.master;
   body.innerHTML = `<div class="form"><div class="row" style="justify-content:space-between"><b>زمان‌بندی اجرای اسکریپت و به‌روزرسانی FortiGate</b>
       <button class="btn primary" id="ssNew">زمان‌بندی جدید</button></div>
@@ -1379,7 +1380,7 @@ async function renderSshSched(body) {
     ${SS.list.length ? `<div class="table-wrap" style="margin-top:12px"><table class="grid"><thead><tr>${["فعال", "نام", "نوع", "زمان", "دستگاه‌ها", "آخرین اجرا", ""].map((t) => `<th class="nosort">${t}</th>`).join("")}</tr></thead><tbody>
       ${SS.list.map((x) => `<tr><td><label class="switch"><input type="checkbox" data-sstog="${esc(x.id)}" ${x.enabled ? "checked" : ""}><span class="track"><span class="thumb"></span></span></label></td>
         <td><b>${esc(x.name)}</b><div class="muted" style="font-size:12px">${esc(nextSched(x))}</div></td>
-        <td>${x.kind === "fgupdate" ? "به‌روزرسانی FortiGate" : "اسکریپت: " + esc((SS.scripts.find((c) => c.id === x.script_id) || { name: "(حذف شده)" }).name)}</td>
+        <td>${x.kind === "fgupdate" ? "به‌روزرسانی FortiGate" : x.kind === "fbackup" ? "پشتیبان پوشه: " + esc((SS.fb.find((c) => c.id === x.fb_id) || { name: "(حذف شده)" }).name) : "اسکریپت: " + esc((SS.scripts.find((c) => c.id === x.script_id) || { name: "(حذف شده)" }).name)}</td>
         <td><span class="ltr">${esc(x.time)}</span> — ${esc(schedDays(x.days))}</td>
         <td>${num(x.device_ids.length)}</td>
         <td>${x.last_at ? `${fmtDate(x.last_at)}<div class="muted" style="font-size:12px">${esc(x.last_message || "")}</div>` : "—"}</td>
@@ -1407,7 +1408,9 @@ function editSshSched(x) {
   const devHtml = (kind) => devList(kind).length ? devList(kind).map((d) => `<label class="chk" style="display:flex;gap:8px"><input type="checkbox" class="ssDev" value="${d.id}" ${sel.has(d.id) ? "checked" : ""}>
       <span>${esc(d.name || d.host)} <span class="muted ltr">${esc(d.host)}</span> <span class="tag mute">${esc(d.device_type)}</span>${d.grp ? ` <span class="tag info">${esc(d.grp)}</span>` : ""}</span></label>`).join("")
     : `<p class="hint">${kind === "fgupdate" ? "هیچ دستگاه FortiGate (fortinet) در «SSH ← دستگاه‌ها» نیست." : "هنوز دستگاهی در «SSH ← دستگاه‌ها» تعریف نشده است."}</p>`;
-  const kindPart = (kind) => kind === "fgupdate"
+  const kindPart = (kind) => kind === "fbackup"
+    ? `<label class="field"><span>کار پشتیبان پوشه</span><select id="ssFb">${SS.fb.length ? SS.fb.map((c) => `<option value="${esc(c.id)}" ${c.id === x.fb_id ? "selected" : ""}>${esc(c.name)}</option>`).join("") : `<option value="">— اول در «ارتباط با دستگاه‌ها ← پشتیبان پوشه» کار بسازید —</option>`}</select></label>`
+    : kind === "fgupdate"
     ? `<div class="field wide"><span>تنظیمات به‌روزرسانی</span><div class="hint">از تب «SSH ← به‌روزرسانی FortiGate» برداشته می‌شود و هنگام ذخیره‌ی این زمان‌بندی ثابت می‌ماند:
         <div class="ltr" style="margin-top:4px">${fg.source === "remote" ? "TFTP دیگر: " + esc(fg.tftp_ip || "—") : "پوشه: " + esc(fg.folder || "—")}</div>
         <div>پکیج‌ها: ${fg.package_names && fg.package_names.length ? esc(fg.package_names.join("، ")) : "<b>انتخاب نشده</b>"}</div></div></div>`
@@ -1417,7 +1420,7 @@ function editSshSched(x) {
   openModal({ title: isNew ? "زمان‌بندی جدید" : `ویرایش «${x.name}»`, wide: true,
     body: `<div class="form-grid">
       <label class="field"><span>نام</span><input type="text" id="ssName" value="${esc(x.name)}" autofocus></label>
-      <label class="field"><span>نوع کار</span><select id="ssKind"><option value="script" ${x.kind === "script" ? "selected" : ""}>اجرای اسکریپت</option><option value="fgupdate" ${x.kind === "fgupdate" ? "selected" : ""}>به‌روزرسانی آفلاین FortiGate</option></select></label>
+      <label class="field"><span>نوع کار</span><select id="ssKind"><option value="script" ${x.kind === "script" ? "selected" : ""}>اجرای اسکریپت</option><option value="fgupdate" ${x.kind === "fgupdate" ? "selected" : ""}>به‌روزرسانی آفلاین FortiGate</option>${SS.fb.length || x.kind === "fbackup" ? `<option value="fbackup" ${x.kind === "fbackup" ? "selected" : ""}>پشتیبان پوشه‌ی لینوکس</option>` : ""}</select></label>
       <label class="field"><span>ساعت اجرا</span><input type="time" id="ssTime" value="${esc(x.time)}"></label>
       <div class="field wide"><span>روزها (هیچ‌کدام = هر روز)</span><div class="row" style="flex-wrap:wrap;gap:14px">${WDAYS.map(([n, t]) => `<label class="chk"><input type="checkbox" class="ssDay" value="${n}" ${x.days.includes(n) ? "checked" : ""}>${t}</label>`).join("")}</div></div>
       <div id="ssKindPart" style="display:contents">${kindPart(x.kind)}</div>
@@ -1426,13 +1429,16 @@ function editSshSched(x) {
     </div>`,
     foot: `<button class="btn ghost" data-x="0">انصراف</button><button class="btn primary" data-x="1">ذخیره</button>`,
     onOpen: (m, close) => {
-      $("#ssKind", m).onchange = (e) => { $("#ssKindPart", m).innerHTML = kindPart(e.target.value); $("#ssDevs", m).innerHTML = devHtml(e.target.value); };
+      const devVis = (k) => { $("#ssDevs", m).closest(".field").hidden = k === "fbackup"; };
+      devVis(x.kind);
+      $("#ssKind", m).onchange = (e) => { $("#ssKindPart", m).innerHTML = kindPart(e.target.value); $("#ssDevs", m).innerHTML = devHtml(e.target.value); devVis(e.target.value); };
       $("[data-x='0']", m).onclick = () => close();
       $("[data-x='1']", m).onclick = (e) => withSpin(e.currentTarget, async () => {
         const kind = $("#ssKind", m).value;
         const payload = { id: isNew ? "" : x.id, name: $("#ssName", m).value, kind, time: $("#ssTime", m).value,
           days: $$(".ssDay", m).filter((c) => c.checked).map((c) => Number(c.value)),
           device_ids: $$(".ssDev", m).filter((c) => c.checked).map((c) => Number(c.value)), enabled: $("#ssOn", m).checked };
+        if (kind === "fbackup") payload.fb_id = $("#ssFb", m).value;
         if (kind === "script") { payload.script_id = Number($("#ssScript", m).value || 0); payload.options = { concurrency: Number($("#ssConc", m).value || 5), timeout: Number($("#ssTo", m).value || 120) }; }
         const r = await api("ssh_sched_save", payload);
         if (!r.ok) return toast(r.error, "error");
@@ -3923,7 +3929,7 @@ function renderSsh() {
   }
   $$("#sshTabs button").forEach((b) => b.classList.toggle("on", b.dataset.t === SSH.tab));
   if (SSH.tab !== "term") termHide();
-  ({ devices: sshDevices, creds: sshCreds, run: sshRun, term: sshTerm, xfer: sshXfer, net: sshNet, backups: sshBackups, fgu: sshFgu, jobs: sshJobs, api: sshApi })[SSH.tab]();
+  ({ devices: sshDevices, creds: sshCreds, run: sshRun, term: sshTerm, xfer: sshXfer, net: sshNet, backups: sshBackups, fbackup: sshFbackup, fgu: sshFgu, jobs: sshJobs, api: sshApi })[SSH.tab]();
 }
 $("#sshTabs").addEventListener("click", (e) => { const b = e.target.closest("button[data-t]"); if (b) { SSH.tab = b.dataset.t; renderSsh(); } });
 function typeOptions(cur, withAny = false) {
@@ -4259,12 +4265,14 @@ function renderJob() {
   const done = j.results.filter((r) => !["pending", "running"].includes(r.status)).length;
   box.innerHTML = `<div class="panel"><div class="panel-head"><h3>${esc(j.script_name)} ${j.dry ? `<span class="tag warn">آزمایشی</span>` : ""} ${j.kind === "test" ? `<span class="tag info">تست اتصال</span>` : ""}</h3>
       <span class="muted">${num(done)} از ${num(j.total)} — ${num(j.ok)} موفق، ${num(j.failed)} ناموفق${j.status === "running" ? "" : j.status === "cancelled" ? " — متوقف شد" : " — تمام شد"}</span>
-      ${j.status !== "running" && j.kind !== "backup" ? `<button class="btn sm" id="jbExport">خروجی متنی همه</button>` : ""}</div>
+      ${j.status !== "running" && j.kind !== "backup" ? `<button class="btn sm" id="jbExport">خروجی متنی همه</button>` : ""}
+      ${j.status !== "running" && j.kind === "backup" && j.ok ? `<button class="btn sm primary" id="jbZip">دانلود همین‌ها (zip)</button>` : ""}</div>
     <div class="progress"><i style="width:${Math.round((100 * done) / Math.max(1, j.total))}%"></i></div>
     <div class="table-wrap inner"><table class="grid"><thead><tr>${["دستگاه", "آدرس", "وضعیت", "نتیجه", ""].map((t) => `<th class="nosort">${t}</th>`).join("")}</tr></thead><tbody>
     ${j.results.map((r) => `<tr><td class="tech">${esc(r.name)}</td><td class="ltr">${esc(r.host)}</td><td>${stTag(r.status)}</td><td class="wrap tech">${esc(r.message || "")}</td>
       <td>${r.out_file ? `<button class="btn sm" data-out="${esc(j.id)}|${r.device_id}|${esc(r.name)}">خروجی</button>` : ""}</td></tr>`).join("")}</tbody></table></div></div>`;
   const ex = $("#jbExport", box); if (ex) ex.onclick = async () => { const r = await api("ssh_export_output", j.id); if (!r.ok) return toast(r.error, "error"); if (!r.cancelled) toast("ذخیره شد: " + r.path, "ok"); };
+  const zb = $("#jbZip", box); if (zb) zb.onclick = (e) => withSpin(e.currentTarget, () => bkZip(j.results.filter((x) => x.status === "ok").map((x) => x.device_id)));
 }
 /** نمایش متن بزرگ رمزشده (خروجی SSH، نسخه‌ی کانفیگ) با بارگذاری تکه‌تکه. */
 function openTextModal(title, kind, a, b) {
@@ -4322,66 +4330,173 @@ setInterval(() => {
   if (busy || shows || (S.page === "ssh" && ++sshTick % 10 === 0)) pollSsh();
 }, 1000);
 
-/* ---------- config backups ---------- */
+/* ---------- config backups (1.58: جدول دستگاه‌ها + نوار عمل گروهی + پنل نسخه‌ها؛ بدون پرش اسکرول) ---------- */
+const BK_COLS = [["name", "نام"], ["host", "IP"], ["device_type", "نوع"], ["backup_on", "پشتیبان"], ["versions", "نسخه‌ها"], ["backup_at", "آخرین پشتیبان"], ["backup_status", "نتیجه"]];
+function bkState() {
+  const b = SSH.bk;
+  if (!b.sel) Object.assign(b, { sel: new Set(), q: "", f: "all", sort: { k: "name", d: 1 }, scroll: 0, last: null });
+  return b;
+}
+function bkRows() {
+  const b = bkState(), q = b.q.trim().toLowerCase();
+  let rows = (b.devs || []).filter((d) => {
+    if (b.f === "on" && !d.backup_on) return false;
+    if (b.f === "off" && d.backup_on) return false;
+    if (b.f === "err" && d.backup_status !== "error") return false;
+    if (b.f === "none" && d.versions) return false;
+    return !q || `${d.name} ${d.host} ${typeName(d.device_type)} ${d.backup_message || ""}`.toLowerCase().includes(q);
+  });
+  const { k, d } = b.sort;
+  const key = (x) => k === "device_type" ? typeName(x.device_type) : k === "backup_on" ? (x.backup_on ? 1 : 0) : x[k] ?? "";
+  rows.sort((x, y) => { const a = key(x), c = key(y); return (typeof a === "number" && typeof c === "number" ? a - c : String(a).localeCompare(String(c), undefined, { numeric: true })) * d; });
+  return rows;
+}
+function bkRowHtml(d) {
+  const b = bkState(), on = b.sel.has(d.id);
+  return `<tr data-bk="${d.id}" class="${on ? "sel" : ""} ${d.id === b.dev ? "kcur" : ""}" style="cursor:pointer">
+    <td class="chk"><input type="checkbox" class="bkSel" value="${d.id}" ${on ? "checked" : ""}></td>
+    <td class="tech">${esc(d.name)}</td><td class="ltr">${esc(d.host)}</td><td>${esc(typeName(d.device_type))}</td>
+    <td>${d.backup_on ? `<span class="tag ok">روشن</span>` : `<span class="tag mute">خاموش</span>`}</td>
+    <td class="num">${num(d.versions || 0)}</td><td class="ltr nowrap">${d.backup_at ? fmtDate(d.backup_at) : "—"}</td>
+    <td class="wrap w-md">${d.backup_status ? `${stTag(d.backup_status)} <span class="tech">${esc(d.backup_message || "")}</span>` : "—"}</td></tr>`;
+}
 async function sshBackups() {
-  $("#sshActions").innerHTML = `<button class="btn" id="bkLatest">دانلود آخرین نسخه‌ها…</button><button class="btn primary" id="bkNow" data-need-run="ssh">پشتیبان‌گیری الان</button>`;
+  const b = bkState();
+  const sc = $("#bkScroll"); if (sc) b.scroll = sc.scrollTop;
+  $("#sshActions").innerHTML = `<button class="btn" id="bkLatest">دانلود آخرین نسخه‌ها…</button><button class="btn primary" id="bkNow" data-need-run="ssh">پشتیبان‌گیری همه</button>`;
   const r = await api("backup_overview"); if (SSH.tab !== "backups" || S.page !== "ssh") return; if (!r.ok) return toast(r.error, "error");
-  const devs = r.devices, auto = (S.settings && S.settings.automation && S.settings.automation.backup) || {};
-  if (SSH.bk.dev && !devs.some((d) => d.id === SSH.bk.dev)) SSH.bk.dev = null;
-  if (!SSH.bk.dev) { const f = devs.find((d) => d.backup_on && d.versions) || devs.find((d) => d.backup_on); SSH.bk.dev = f ? f.id : null; }
-  const cur = devs.find((d) => d.id === SSH.bk.dev);
-  const vr = cur ? await api("backup_versions", cur.id) : { ok: true, versions: [] };
-  if (SSH.tab !== "backups" || S.page !== "ssh") return;
-  const vs = (vr.ok && vr.versions) || [];
-  SSH.bk.pick = SSH.bk.pick.filter((id) => vs.some((v) => v.id === id));
-  $("#sshBody").innerHTML = `<p class="hint">زمان‌بندی: ${auto.enabled && S.settings.automation.master ? `هر روز ساعت <b class="ltr">${esc(auto.time || "02:00")}</b>` : "خاموش"} — تنظیم در «کارهای خودکار ← پشتیبان کانفیگ». نسخه‌ها رمزشده ذخیره می‌شوند و نسخه‌ی تکراری ذخیره نمی‌شود.</p>
+  const devs = (b.devs = r.devices), auto = (S.settings && S.settings.automation && S.settings.automation.backup) || {};
+  const ids = new Set(devs.map((d) => d.id));
+  b.sel = new Set([...b.sel].filter((i) => ids.has(i)));
+  if (b.dev && !ids.has(b.dev)) b.dev = null;
+  if (!b.dev) { const f = devs.find((d) => d.backup_on && d.versions) || devs.find((d) => d.backup_on); b.dev = f ? f.id : null; }
+  const adm = isAdmin();
+  $("#sshBody").innerHTML = `<p class="hint">زمان‌بندی: ${auto.enabled && S.settings.automation.master ? `هر روز ساعت <b class="ltr">${esc(auto.time || "02:00")}</b>` : "خاموش"} — تنظیم در «کارهای خودکار ← پشتیبان‌گیری». با کلیک روی هر ردیف، نسخه‌های آن دستگاه در پنل کنار باز می‌شود.</p>
     <div id="bkJob"></div>
-    <div class="split"><div class="list-pane">${devs.length ? devs.map((d) => `<div class="list-item ${d.id === SSH.bk.dev ? "on" : ""}" data-bd="${d.id}" style="display:flex;gap:8px;align-items:center">
-        ${isAdmin() ? `<input type="checkbox" class="bkOn" value="${d.id}" ${d.backup_on ? "checked" : ""} title="پشتیبان‌گیری کانفیگ">` : ""}
-        <span style="flex:1;min-width:0"><span class="tech">${esc(d.name)}</span><small><span>${esc(typeName(d.device_type))}</span> · <span>${num(d.versions)} نسخه</span>${d.backup_status ? ` · <span>${esc(d.backup_message || "")}</span>` : ""}</small></span></div>`).join("")
-      : `<div class="empty">هنوز دستگاهی اضافه نشده است.</div>`}</div>
-      <div>${cur ? `<div class="panel"><div class="panel-head"><h3>${esc(cur.name)} <span class="muted ltr">${esc(cur.host)}</span></h3>
-          <div class="row"><button class="btn sm" id="bkCmp" ${SSH.bk.pick.length === 2 ? "" : "disabled"}>مقایسه‌ی دو نسخه‌ی انتخاب‌شده</button>
-            <button class="btn sm danger-ghost adm-only" id="bkDelSel" ${SSH.bk.pick.length ? "" : "disabled"}>حذف انتخاب‌شده‌ها (${num(SSH.bk.pick.length)})</button></div></div>
-        ${cur.backup_status ? `<p class="hint">آخرین پشتیبان‌گیری: ${stTag(cur.backup_status)} ${fmtDate(cur.backup_at)} — <span class="tech">${esc(cur.backup_message || "")}</span></p>` : ""}
-        <div class="table-wrap inner"><table class="grid"><thead><tr><th class="chk nosort"></th>${["زمان", "خطوط", "تغییر", "حجم", ""].map((t) => `<th class="nosort">${t}</th>`).join("")}</tr></thead><tbody>
-        ${vs.length ? vs.map((v, i) => `<tr><td class="chk"><input type="checkbox" class="bkPick" value="${v.id}" ${SSH.bk.pick.includes(v.id) ? "checked" : ""}></td>
-          <td class="ltr">${fmtDate(v.ts)}</td><td class="num">${num(v.lines)}</td>
-          <td>${v.first ? `<span class="tag mute">اولین نسخه</span>` : `<span class="tag ok">+${num(v.added)}</span> <span class="tag err">−${num(v.removed)}</span>`}</td>
-          <td class="num ltr">${(v.size / 1024).toFixed(1)} KB</td>
-          <td><div class="row" style="gap:4px"><button class="btn sm" data-bv="${v.id}">نمایش</button>${vs[i + 1] ? `<button class="btn sm" data-bdf="${vs[i + 1].id}|${v.id}">تفاوت با قبلی</button>` : ""}<button class="btn sm ghost" data-bx="${v.id}">ذخیره‌ی فایل</button><button class="btn sm danger-ghost adm-only" data-bdel="${v.id}">حذف</button></div></td></tr>`).join("")
-          : `<tr><td colspan="6"><div class="empty">${cur.backup_on ? "هنوز نسخه‌ای ذخیره نشده است. «پشتیبان‌گیری الان» را بزنید." : "پشتیبان‌گیری برای این دستگاه خاموش است."}</div></td></tr>`}</tbody></table></div></div>`
-      : `<div class="panel"><div class="empty">یک دستگاه انتخاب کنید.</div></div>`}
-      ${isAdmin() ? `<details class="form" style="margin-top:12px"><summary style="cursor:pointer"><b>تنظیمات پشتیبان</b></summary>${backupSettingsForm(r)}</details>` : ""}</div></div>`;
+    ${devs.length ? `<div class="bk-wrap"><div class="bk-main">
+      <div class="row bk-filters"><input type="search" id="bkQ" placeholder="جستجوی نام، آدرس، نوع یا نتیجه…" value="${esc(b.q)}">
+        <select id="bkF">${[["all", "همه"], ["on", "پشتیبان روشن"], ["off", "پشتیبان خاموش"], ["err", "آخرین پشتیبان ناموفق"], ["none", "بدون نسخه"]].map(([v, t]) => `<option value="${v}" ${b.f === v ? "selected" : ""}>${t}</option>`).join("")}</select>
+        <span class="muted" id="bkCount"></span></div>
+      <div class="bk-bar" id="bkBar"><b id="bkSelN"></b>
+        <button class="btn sm primary" id="bkGoSel" data-need-run="ssh">پشتیبان‌گیری الان</button>
+        <button class="btn sm" id="bkZipSel">دانلود آخرین نسخه‌ها (zip)</button>
+        ${adm ? `<button class="btn sm" id="bkOnSel">پشتیبان روشن</button><button class="btn sm" id="bkOffSel">پشتیبان خاموش</button>` : ""}
+        <button class="btn sm ghost" id="bkClr" style="margin-inline-start:auto">لغو انتخاب</button></div>
+      <div class="table-wrap inner bk-scroll" id="bkScroll"><table class="grid" data-own-sort><thead><tr><th class="chk nosort"><input type="checkbox" id="bkAll" title="همه‌ی ردیف‌های فیلترشده"></th>
+        ${BK_COLS.map(([k, t]) => `<th class="nosort bk-sort" data-k="${k}">${t}<span class="sort-ind" data-ind="${k}"></span></th>`).join("")}</tr></thead><tbody id="bkBody"></tbody></table></div>
+      <p class="hint">Shift+کلیک روی تیک برای انتخاب بازه؛ Ctrl+A روی جدول برای همه‌ی ردیف‌های فیلترشده.</p></div>
+      <div class="bk-side" id="bkPanel"></div></div>` : `<div class="empty">هنوز دستگاهی اضافه نشده است.</div>`}
+    ${adm ? `<details class="form" style="margin-top:12px"><summary style="cursor:pointer"><b>تنظیمات پشتیبان</b></summary>${backupSettingsForm(r)}</details>` : ""}`;
   renderJob();
   $("#bkLatest").onclick = () => backupLatestDialog(devs);
   $("#bkNow").onclick = async () => { const x = await api("backup_now"); if (!x.ok) return toast(x.error, "error"); toast("پشتیبان‌گیری شروع شد", "ok"); SSH.jobSig = ""; pollSsh(true); };
-  $$("[data-bd]").forEach((x) => (x.onclick = (e) => { if (e.target.classList.contains("bkOn")) return; SSH.bk.dev = Number(x.dataset.bd); SSH.bk.pick = []; sshBackups(); }));
-  $$(".bkOn").forEach((c) => (c.onchange = async () => { const x = await api("ssh_set_backup", [Number(c.value)], c.checked); if (!x.ok) { c.checked = !c.checked; return toast(x.error, "error"); } await loadSsh(); }));
-  $$(".bkPick").forEach((c) => (c.onchange = () => {
+  wireBackupSettings();
+  if (!devs.length) return;
+  const body = $("#bkBody"), scroll = $("#bkScroll");
+  const draw = () => {
+    const rows = bkRows(); b.shown = rows.map((d) => d.id);
+    body.innerHTML = rows.length ? rows.map(bkRowHtml).join("") : `<tr><td colspan="8"><div class="empty">موردی با این جستجو یا فیلتر نیست.</div></td></tr>`;
+    $$("[data-ind]").forEach((x) => (x.textContent = x.dataset.ind === b.sort.k ? (b.sort.d > 0 ? " ▲" : " ▼") : ""));
+    $("#bkCount").textContent = I18N.t(`${num(rows.length)} از ${num(devs.length)} دستگاه`);
+    selUpd();
+  };
+  const selUpd = () => {
+    const n = b.sel.size, bar = $("#bkBar");
+    bar.classList.toggle("on", n > 0);
+    $("#bkSelN").textContent = n ? I18N.t(`${num(n)} انتخاب‌شده`) : I18N.t("برای کار گروهی دستگاه‌ها را تیک بزنید");
+    ["bkGoSel", "bkZipSel", "bkOnSel", "bkOffSel", "bkClr"].forEach((id) => { const x = $("#" + id); if (x) x.disabled = !n; });
+    const shown = b.shown || []; $("#bkAll").checked = shown.length > 0 && shown.every((i) => b.sel.has(i));
+  };
+  const setSel = (id, on) => { on ? b.sel.add(id) : b.sel.delete(id); const tr = $(`tr[data-bk="${id}"]`, body); if (tr) { tr.classList.toggle("sel", on); $(".bkSel", tr).checked = on; } };
+  body.onclick = (e) => {
+    const tr = e.target.closest("tr[data-bk]"); if (!tr) return;
+    const id = Number(tr.dataset.bk);
+    if (e.target.classList.contains("bkSel")) {
+      const on = e.target.checked;
+      if (e.shiftKey && b.last !== null && b.shown) {           // بازه
+        const i = b.shown.indexOf(b.last), j = b.shown.indexOf(id);
+        if (i >= 0 && j >= 0) b.shown.slice(Math.min(i, j), Math.max(i, j) + 1).forEach((x) => setSel(x, on));
+      } else setSel(id, on);
+      b.last = id; return selUpd();
+    }
+    if (b.dev !== id) { b.dev = id; b.pick = []; $$("tr.kcur", body).forEach((x) => x.classList.remove("kcur")); tr.classList.add("kcur"); bkPanel(); }
+  };
+  scroll.tabIndex = 0;
+  scroll.onkeydown = (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { e.preventDefault(); (b.shown || []).forEach((i) => setSel(i, true)); selUpd(); } };
+  $("#bkAll").onchange = (e) => { (b.shown || []).forEach((i) => setSel(i, e.target.checked)); selUpd(); };
+  $$(".bk-sort").forEach((th) => (th.onclick = () => { const k = th.dataset.k; b.sort = { k, d: b.sort.k === k ? -b.sort.d : 1 }; draw(); }));
+  let qt = 0; $("#bkQ").oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { b.q = e.target.value; draw(); }, 120); };
+  $("#bkF").onchange = (e) => { b.f = e.target.value; draw(); };
+  $("#bkClr").onclick = () => { [...b.sel].forEach((i) => setSel(i, false)); selUpd(); };
+  $("#bkGoSel").onclick = (e) => withSpin(e.currentTarget, async () => {
+    const x = await api("backup_now", [...b.sel]); if (!x.ok) return toast(x.error, "error");
+    toast(I18N.t(`پشتیبان‌گیری ${num(b.sel.size)} دستگاه شروع شد`), "ok"); SSH.jobSig = ""; pollSsh(true);
+  });
+  $("#bkZipSel").onclick = (e) => withSpin(e.currentTarget, () => bkZip([...b.sel]));
+  const flag = (on) => async (e) => withSpin(e.currentTarget, async () => {
+    const ids = [...b.sel], x = await api("ssh_set_backup", ids, on); if (!x.ok) return toast(x.error, "error");
+    devs.forEach((d) => { if (b.sel.has(d.id)) d.backup_on = on; });
+    toast(I18N.t(`پشتیبان ${num(ids.length)} دستگاه ${on ? "روشن" : "خاموش"} شد`), "ok"); b.scroll = scroll.scrollTop; draw(); scroll.scrollTop = b.scroll; bkPanel();
+  });
+  if ($("#bkOnSel")) { $("#bkOnSel").onclick = flag(true); $("#bkOffSel").onclick = flag(false); }
+  draw(); scroll.scrollTop = b.scroll || 0;
+  bkPanel();
+}
+async function bkZip(ids) {
+  const r = await api("backup_export_latest", ids); if (!r.ok) return toast(r.error, "error");
+  if (r.cancelled) return;
+  toast(`آخرین نسخه‌ی ${num(r.count)} دستگاه ذخیره شد: ${r.path || ""}`, "ok");
+  if (r.skipped && r.skipped.length) toast(`${num(r.skipped.length)} دستگاه نسخه نداشت`, "warn");
+}
+/** پنل نسخه‌های دستگاه انتخاب‌شده (فقط همین پنل دوباره ساخته می‌شود) */
+async function bkPanel() {
+  const b = bkState(), box = $("#bkPanel"); if (!box) return;
+  const cur = (b.devs || []).find((d) => d.id === b.dev);
+  if (!cur) { box.innerHTML = `<div class="panel"><div class="empty">روی یک دستگاه کلیک کنید تا نسخه‌هایش اینجا بیاید.</div></div>`; return; }
+  const vr = await api("backup_versions", cur.id);
+  if (b.dev !== cur.id || !$("#bkPanel")) return;
+  const vs = (vr.ok && vr.versions) || [];
+  b.pick = (b.pick || []).filter((id) => vs.some((v) => v.id === id));
+  box.innerHTML = `<div class="panel"><div class="panel-head"><h3><span class="tech">${esc(cur.name)}</span> <span class="muted ltr">${esc(cur.host)}</span></h3></div>
+    <p class="hint">${num(vs.length)} نسخه${cur.backup_status ? ` — آخرین پشتیبان‌گیری: ${stTag(cur.backup_status)} ${fmtDate(cur.backup_at)}` : ""}${cur.backup_on ? "" : ` — <span class="tag mute">پشتیبان خاموش</span>`}</p>
+    <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      <button class="btn sm primary" id="bkOne" data-need-run="ssh">پشتیبان‌گیری همین دستگاه</button>
+      <button class="btn sm" id="bkCmp" ${b.pick.length === 2 ? "" : "disabled"}>مقایسه‌ی دو نسخه</button>
+      <button class="btn sm danger-ghost adm-only" id="bkDelSel" ${b.pick.length ? "" : "disabled"}>حذف انتخاب‌شده‌ها (${num(b.pick.length)})</button></div>
+    <div class="table-wrap inner bk-vers"><table class="grid"><thead><tr><th class="chk nosort"></th>${["زمان", "خطوط", "تغییر", "حجم", ""].map((t) => `<th class="nosort">${t}</th>`).join("")}</tr></thead><tbody>
+    ${vs.length ? vs.map((v, i) => `<tr><td class="chk"><input type="checkbox" class="bkPick" value="${v.id}" ${b.pick.includes(v.id) ? "checked" : ""}></td>
+      <td class="ltr nowrap">${fmtDate(v.ts)}</td><td class="num">${num(v.lines)}</td>
+      <td class="nowrap">${v.first ? `<span class="tag mute">اولین نسخه</span>` : `<span class="tag ok">+${num(v.added)}</span> <span class="tag err">−${num(v.removed)}</span>`}</td>
+      <td class="num ltr nowrap">${(v.size / 1024).toFixed(1)} KB</td>
+      <td><div class="row" style="gap:4px;flex-wrap:wrap"><button class="btn sm" data-bv="${v.id}">نمایش</button>${vs[i + 1] ? `<button class="btn sm" data-bdf="${vs[i + 1].id}|${v.id}">تفاوت با قبلی</button>` : ""}<button class="btn sm ghost" data-bx="${v.id}">دانلود</button><button class="btn sm danger-ghost adm-only" data-bdel="${v.id}" title="حذف این نسخه">✕</button></div></td></tr>`).join("")
+      : `<tr><td colspan="6"><div class="empty">${cur.backup_on ? "هنوز نسخه‌ای ذخیره نشده است. «پشتیبان‌گیری همین دستگاه» را بزنید." : "پشتیبان‌گیری برای این دستگاه خاموش است."}</div></td></tr>`}
+    </tbody></table></div></div>`;
+  $("#bkOne", box).onclick = async () => { const x = await api("backup_now", [cur.id]); if (!x.ok) return toast(x.error, "error"); toast("پشتیبان‌گیری شروع شد", "ok"); SSH.jobSig = ""; pollSsh(true); };
+  $$(".bkPick", box).forEach((c) => (c.onchange = () => {
     const id = Number(c.value);
-    SSH.bk.pick = c.checked ? [...SSH.bk.pick.filter((x) => x !== id), id] : SSH.bk.pick.filter((x) => x !== id);
-    $("#bkCmp").disabled = SSH.bk.pick.length !== 2;
-    const bd2 = $("#bkDelSel"); bd2.disabled = !SSH.bk.pick.length; bd2.textContent = I18N.t(`حذف انتخاب‌شده‌ها (${num(SSH.bk.pick.length)})`);
+    b.pick = c.checked ? [...b.pick.filter((x) => x !== id), id] : b.pick.filter((x) => x !== id);
+    $("#bkCmp", box).disabled = b.pick.length !== 2;
+    const bd2 = $("#bkDelSel", box); bd2.disabled = !b.pick.length; bd2.textContent = I18N.t(`حذف انتخاب‌شده‌ها (${num(b.pick.length)})`);
   }));
-  const cmp = $("#bkCmp"); if (cmp) cmp.onclick = () => { const [a, b2] = [...SSH.bk.pick].sort((x, y) => x - y); showDiff(a, b2); };
-  $$("[data-bv]").forEach((x) => (x.onclick = () => {
+  $("#bkCmp", box).onclick = () => { const [a, b2] = [...b.pick].sort((x, y) => x - y); showDiff(a, b2); };
+  $$("[data-bv]", box).forEach((x) => (x.onclick = () => {
     const v = vs.find((y) => y.id === Number(x.dataset.bv));
     openTextModal(`${cur.name} — ${fmtDate(v && v.ts)}`, "backup", Number(x.dataset.bv));
   }));
-  $$("[data-bdel]").forEach((x) => (x.onclick = () => deleteVersions([Number(x.dataset.bdel)])));
-  const bd = $("#bkDelSel"); if (bd) bd.onclick = () => deleteVersions([...SSH.bk.pick]);
+  $$("[data-bdel]", box).forEach((x) => (x.onclick = () => deleteVersions([Number(x.dataset.bdel)])));
+  $("#bkDelSel", box).onclick = () => deleteVersions([...b.pick]);
   async function deleteVersions(ids) {
     if (!ids.length) return;
     const ok = await confirm2({ title: "حذف نسخه‌ی پشتیبان", danger: true, confirm: `حذف ${num(ids.length)} نسخه`,
       body: `<p>${num(ids.length)} نسخه از پشتیبان‌های «${esc(cur.name)}» برای همیشه حذف می‌شود. فایل رمزشده پیش از حذف بازنویسی می‌شود.</p>` });
     if (!ok) return;
     const r = await api("backup_delete", ids); if (!r.ok) return toast(r.error, "error");
-    SSH.bk.pick = SSH.bk.pick.filter((i) => !ids.includes(i)); toast(`${num(r.deleted)} نسخه حذف شد`, "ok"); sshBackups();
+    b.pick = b.pick.filter((i) => !ids.includes(i)); toast(`${num(r.deleted)} نسخه حذف شد`, "ok");
+    cur.versions = Math.max(0, (cur.versions || 0) - (r.deleted || 0)); const tr = $(`#bkBody tr[data-bk="${cur.id}"]`); if (tr) tr.outerHTML = bkRowHtml(cur);
+    bkPanel();
   }
-  $$("[data-bdf]").forEach((x) => (x.onclick = () => { const [a, b2] = x.dataset.bdf.split("|").map(Number); showDiff(a, b2); }));
-  $$("[data-bx]").forEach((x) => (x.onclick = async () => { const v = await api("backup_export", Number(x.dataset.bx)); if (!v.ok) return toast(v.error, "error"); if (!v.cancelled) toast("ذخیره شد: " + v.path, "ok"); }));
-  wireBackupSettings();
+  $$("[data-bdf]", box).forEach((x) => (x.onclick = () => { const [a, b2] = x.dataset.bdf.split("|").map(Number); showDiff(a, b2); }));
+  $$("[data-bx]", box).forEach((x) => (x.onclick = async () => { const v = await api("backup_export", Number(x.dataset.bx)); if (!v.ok) return toast(v.error, "error"); if (!v.cancelled) toast("ذخیره شد: " + v.path, "ok"); }));
 }
 /** 1.27.10: آخرین نسخه‌ی پشتیبان چند دستگاه با هم، در یک فایل zip */
 function backupLatestDialog(devs) {

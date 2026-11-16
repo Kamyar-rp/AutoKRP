@@ -595,6 +595,12 @@ class Settings:
                     j.update(fields)
             self.save()
 
+    def set_fbackup_jobs(self, items: list):
+        """1.58: کارهای پشتیبان پوشه‌ی لینوکس"""
+        with self._lock:
+            self.data["fbackup_jobs"] = copy.deepcopy(items)
+            self.save()
+
     def update_ssh_schedule(self, sid: str, **fields):
         with self._lock:
             for s in self.data.get("ssh_schedules") or []:
@@ -707,6 +713,7 @@ class Settings:
             patch.pop("secrets", None)
             patch.pop("has_password", None)
             patch.pop("ssh_schedules", None)
+            patch.pop("fbackup_jobs", None)   # 1.58: فقط از fbk_save (مسیر مقصد اعتبارسنجی می‌شود)
             patch.pop("jobs", None)
             patch.pop("users", None)
             patch.pop("server", None)

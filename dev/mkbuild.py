@@ -42,7 +42,7 @@ ENGINES = {
     "sec": ["pipeline", "connectors/abuseipdb", "connectors/demo", "connectors/fortigate",
             "connectors/redmine", "connectors/splunk", "importer", "intel", "splq", "dnstool", "fgtask", "fgtask_child", "banrules",
             "jobs", "netscan"],
-    "dev": ["ssh", "sshtemplate", "telnet", "term", "xfer", "tftp", "nettools", "apitool", "backup", "jobs"],
+    "dev": ["ssh", "sshtemplate", "telnet", "term", "xfer", "tftp", "nettools", "apitool", "backup", "jobs", "textedit", "fbackup"],
     "monitor": ["monitor", "snmp", "snmppool", "snmpworker", "monviews", "devevents", "topology", "tsdb", "netscan", "icmp", "mibs",
                 "dashboards", "netmap", "mapdisc", "devprof", "nettools"],
     # assets are filled by SNMP and SSH scans: the engines stay, the Monitoring / Device access pages do not
@@ -228,6 +228,8 @@ def stage(mods, mode, out):
     # 4) UI scripts
     ui = os.path.join(out, "ui")
     gone = [f for f, need in UI.items() if not any(m in mods for m in need)]
+    if tuple(mods) != ALL:
+        gone.append("todo.js")                     # 1.58: «کارهای من» و پیام‌ها فقط در نسخه‌ی کامل
     for f in gone:
         _rm(os.path.join(ui, f))
     for m in ALL:
@@ -265,7 +267,7 @@ def pyi_args(mods, mode, name, stage_dir):
     if os.path.exists(os.path.join(stage_dir, "assets", "app.ico")):
         a += ["--icon", os.path.join("assets", "app.ico")]
     for m in ("dbpg", "fgtask_child", "snmpworker", "snmppool", "tsdb", "icmp", "monviews", "netmap", "terms", "apitool", "cfgpack",
-              "dashboards", "mapdisc", "auditlog", "todo", "clientgate", "absent", "buildcfg"):
+              "dashboards", "mapdisc", "auditlog", "todo", "clientgate", "absent", "buildcfg", "textedit", "fbackup"):
         a += ["--hidden-import", "autokrp." + m]            # stubs included: tiny and harmless
     if "snmp" in keep:
         a += ["--add-data", os.path.join("assets", "mibs") + SEP + os.path.join("assets", "mibs"),

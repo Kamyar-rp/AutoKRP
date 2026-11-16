@@ -16,6 +16,12 @@ CONNS = ["splunk", "abuseipdb", "fortigate", "redmine"]
 ASSET_SCAN_WINDOW = 15 * 60      # اسکن دارایی فقط تا ۱۵ دقیقه بعد از ساعت تعیین‌شده؛ بعد از آن جبرانی اجرا نمی‌شود
 
 
+
+def _full_build():
+    """1.58: یادآوری ایمیلی «کارهای من» فقط در نسخه‌ی کامل (در بیلد ماژولار این بخش نیست)."""
+    from . import buildcfg
+    return buildcfg.full()
+
 class Worker:
     def __init__(self, settings, store, demo=False):
         self.settings = settings
@@ -166,7 +172,7 @@ class Worker:
                 if now >= next_sched:
                     self._scheduler_tick()
                     next_sched = now + 20
-                if now >= self._next_todo:
+                if now >= self._next_todo and _full_build():
                     self._next_todo = now + 30
                     self._todo_tick()
                 if now >= self._next_flush:
@@ -393,7 +399,7 @@ class Worker:
                         self.emit("error", f"اسکن روزانه‌ی دارایی شروع نشد: {e}", "schedule")
 
         for sch in self.settings.get("ssh_schedules", default=[]) or []:
-            if sch.get("enabled"):
+            if sch.get("enabled") and (sch.get("kind") != "fbackup" or "ssh.fbackup" in on):
                 try:
                     self._ssh_schedule_tick(sch, now, max_age)
                 except Exception as e:
@@ -441,13 +447,25 @@ class Worker:
             self.settings.update_ssh_schedule(sch["id"], last_at=time.time(), last_status="skipped",
                                               last_message="رد شد؛ بیش از حداکثر قدمت گذشته بود")
             return
-        if (self.ssh.current and self.ssh.current.get("status") == "running") or \
-                (self.fgu.current and self.fgu.current.get("status") == "running"):
+        fb = sch.get("kind") == "fbackup"
+        if not fb and ((self.ssh.current and self.ssh.current.get("status") == "running") or
+                       (self.fgu.current and self.fgu.current.get("status") == "running")):
             return   # کار SSH دیگری در جریان است؛ در دور بعدی دوباره تلاش می‌شود
+        if fb and str(sch.get("fb_id")) in (self.fbackup.status() if getattr(self, "fbackup", None) else {}):
+            return   # 1.58: اجرای قبلی همین پشتیبان هنوز تمام نشده
         self.store.mark_processed(key, "started")
         ids = [int(i) for i in sch.get("device_ids") or []]
         try:
-            if sch.get("kind") == "fgupdate":
+            if fb:
+                if not getattr(self, "fbackup", None):
+                    raise RuntimeError("پشتیبان پوشه در این حالت در دسترس نیست")
+                from .fbackup import FbError
+                try:
+                    self.fbackup.start(str(sch.get("fb_id")), "", "schedule")
+                except FbError as e:
+                    raise RuntimeError(str(e))
+                job = {"id": "fbackup"}
+            elif sch.get("kind") == "fgupdate":
                 job = self.fgu.start(ids, dict(sch.get("fgu") or {}))
             else:
                 sc = self.store.ssh_script(int(sch.get("script_id") or 0))

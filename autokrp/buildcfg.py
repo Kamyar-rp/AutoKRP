@@ -28,5 +28,10 @@ def has(*sections):
     return any(s in MODULES for s in sections)
 
 
+def full():
+    """نسخه‌ی کامل (همه‌ی ماژول‌ها). «کارهای من» و پیام‌ها فقط در نسخه‌ی کامل هستند (1.58، خواسته‌ی کاربر)."""
+    return tuple(MODULES) == ALL_MODULES
+
+
 def info():
     return {"modules": list(MODULES), "all": list(ALL_MODULES), "mode": MODE, "edition": EDITION, "full": tuple(MODULES) == ALL_MODULES and MODE == "both"}

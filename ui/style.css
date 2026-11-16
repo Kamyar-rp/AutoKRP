@@ -1292,3 +1292,58 @@ body.noc-on .side-edge, .db-wrap:fullscreen ~ .side-edge { display: none; }
 /* 1.56 بیلد ماژولار: body.nb-<ماژول> = این ماژول در این بیلد نیست؛ data-b="a|b" = فقط وقتی هیچ‌کدام نیستند پنهان */
 body.nb-sec [data-b="sec"], body.nb-dev [data-b="dev"], body.nb-monitor [data-b="monitor"], body.nb-asset [data-b="asset"], body.nb-offline [data-b="offline"],
 body.nb-sec.nb-dev [data-b="sec|dev"], body.nb-sec.nb-monitor [data-b="sec|monitor"], body.nb-sec.nb-offline [data-b="sec|offline"] { display: none !important; }
+
+/* 1.58: جدول خروجی ابزارها با ستون‌های انگلیسی (اسکن شبکه، DNS، …) در منوی فارسی هم چپ‌به‌راست و چپ‌چین */
+.grid.grid-ltr th, .grid.grid-ltr td, html[dir="rtl"] .grid.grid-ltr td.wrap { text-align: left !important; direction: ltr; }
+body.nb-full [data-b="full"] { display: none !important; }
+
+/* 1.58 پشتیبان کانفیگ */
+.bk-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 34%); gap: 14px; align-items: start; }
+.bk-filters { gap: 8px; margin-bottom: 8px; align-items: center; } .bk-filters input[type=search] { flex: 1; min-width: 160px; } .bk-filters select { width: auto; }
+.bk-bar { position: sticky; top: 0; z-index: 2; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 7px 10px; margin-bottom: 8px; border: 1px solid var(--line2); border-radius: 10px; background: var(--panel); }
+.bk-bar.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.bk-scroll { max-height: calc(100vh - 330px); min-height: 220px; overflow: auto; outline: none; }
+.bk-scroll thead th { position: sticky; top: 0; z-index: 1; }
+.bk-sort { cursor: pointer; user-select: none; } .bk-sort:hover { color: var(--text); }
+#bkBody tr.sel td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+#bkBody tr.kcur td:first-child { box-shadow: inset 3px 0 0 var(--accent); } html[dir="rtl"] #bkBody tr.kcur td:first-child { box-shadow: inset -3px 0 0 var(--accent); }
+.bk-side { position: sticky; top: 8px; } .bk-vers { max-height: calc(100vh - 300px); overflow: auto; }
+@media (max-width: 1180px) { .bk-wrap { grid-template-columns: 1fr; } .bk-side { position: static; } }
+
+/* ---- ویرایشگر متن (1.58) */
+.modal.te-modal { width: min(1400px, 96vw); height: 90vh; max-height: 90vh; }
+.te-modal .m-body { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; overflow: hidden; }
+.te-top, .te-find, .te-stat { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.te-top select.sm { width: auto; padding: 4px 6px; font-size: 12px; }
+.te-path { font-family: var(--mono, ui-monospace, Consolas, monospace); font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
+.te-sp { flex: 1; }
+.te-find { padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel2); }
+.te-find input[type=search], .te-find input[type=text] { width: 220px; padding: 4px 8px; }
+.te-note { padding: 6px 10px; border-radius: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.te-note.warn { background: var(--warn-soft); }
+.te-vers { max-height: 180px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
+.te-ed { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; text-align: left; }
+.te-ed .CodeMirror { height: 100%; font-family: var(--mono, ui-monospace, Consolas, "Courier New", monospace); font-size: 13px; line-height: 1.45; }
+.te-stat { font-size: 12px; color: var(--muted); font-family: var(--mono, ui-monospace, Consolas, monospace); gap: 16px; }
+.te-stat #teGo { cursor: pointer; text-decoration: underline dotted; }
+.te-stat #teGoIn { width: 90px; padding: 2px 6px; font-size: 12px; }
+.te-stat #teMod { color: var(--warn); }
+.te-keep { margin: 0; }
+.cm-s-akrp.CodeMirror { background: var(--panel); color: var(--text); }
+.cm-s-akrp .CodeMirror-gutters { background: var(--panel2); border-right: 1px solid var(--line); }
+.cm-s-akrp .CodeMirror-linenumber { color: var(--faint); }
+.cm-s-akrp .CodeMirror-cursor { border-left: 2px solid var(--accent); }
+.cm-s-akrp .CodeMirror-activeline-background { background: var(--accent-soft); opacity: .45; }
+.cm-s-akrp .CodeMirror-selected, .cm-s-akrp .CodeMirror-focused .CodeMirror-selected { background: var(--info-soft); }
+.cm-s-akrp .CodeMirror-matchingbracket { color: var(--ok) !important; font-weight: 700; }
+.cm-s-akrp .te-hit { background: var(--warn-soft); outline: 1px solid var(--warn); }
+.cm-s-akrp .cm-comment { color: var(--faint); font-style: italic; }
+.cm-s-akrp .cm-keyword, .cm-s-akrp .cm-builtin { color: #c678dd; }
+.cm-s-akrp .cm-string, .cm-s-akrp .cm-string-2 { color: #50a14f; }
+.cm-s-akrp .cm-number, .cm-s-akrp .cm-atom { color: #d19a66; }
+.cm-s-akrp .cm-def, .cm-s-akrp .cm-property, .cm-s-akrp .cm-attribute { color: #4f8fe6; }
+.cm-s-akrp .cm-variable-2, .cm-s-akrp .cm-variable-3, .cm-s-akrp .cm-type { color: #0ea5a4; }
+.cm-s-akrp .cm-tag, .cm-s-akrp .cm-header { color: #e06c75; }
+.cm-s-akrp .cm-meta, .cm-s-akrp .cm-qualifier { color: #b8860b; }
+.cm-s-akrp .cm-operator { color: var(--text); }
+.cm-s-akrp .cm-positive { color: var(--ok); } .cm-s-akrp .cm-negative { color: var(--err); }

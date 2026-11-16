@@ -33,8 +33,9 @@ A typical SOC chore: take the source IPs from IDS alerts, check them on AbuseIPD
 
 **Device access (SSH, Telnet, console cable)**
 - Script library with variables from the previous tool's output; run on many devices at once; the last command's output can be passed on as CSV.
-- Scheduled config backups with version diff and "download latest of selected devices" as a zip.
-- Live terminal in tabs over SSH, Telnet or a USB/serial console cable (COM port, desktop mode only, with Break), MultiExec, saved command buttons, search in the terminal text (Ctrl+Shift+F) and saving the whole session log; WinSCP-style file transfer (SFTP, SCP, FTP/FTPS, temporary TFTP server).
+- Scheduled config backups with version diff and "download latest of selected devices" as a zip; search, filter and bulk actions for many devices.
+- Linux folder backup jobs: folders or files of a Linux server streamed over SSH as `tar.gz` (optional sudo, exclusions, keep the last N, scheduled); a single file or archive is saved as it is.
+- Live terminal in tabs over SSH, Telnet or a USB/serial console cable (COM port, desktop mode only, with Break), MultiExec, saved command buttons, search in the terminal text (Ctrl+Shift+F) and saving the whole session log; WinSCP-style file transfer (SFTP, SCP, FTP/FTPS, temporary TFTP server) with a built-in text editor (syntax highlighting, find & replace, conflict check, optional previous versions).
 - Telnet devices for runs and config backups (Cisco and other network devices supported by netmiko).
 - Network tools: find where an IP/MAC is connected (switch and port, via SNMP ARP/MAC tables), traceroute, IP owner lookup (RDAP), MAC vendor lookup (IEEE).
 - **API tool**: saved connections (base URL + Basic, Bearer or API-key auth; secrets in the encrypted store), GET/POST/PUT/PATCH/DELETE with parameters, headers and body, formatted JSON responses (copy or save), saved requests and a request log in the database (who, when, what; secrets masked).
@@ -126,7 +127,7 @@ build.bat sec+dev client portable   &rem security + device access, client only, 
 | Section | Contains |
 |---|---|
 | `sec` | Splunk, AbuseIPDB, FortiGate, Redmine, DNS, scan, extra check, Tools / Addresses / Automation pages, security dashboard and statistics |
-| `dev` | SSH/Telnet devices and commands, config backup, terminal, file transfer, TFTP, serial console, network tools, API tool |
+| `dev` | SSH/Telnet devices and commands, config backup, Linux folder backup, terminal, file transfer, TFTP, serial console, network tools, API tool |
 | `monitor` | Monitoring targets, SNMP, traps and syslog, maps, dashboards, NOC view, live check |
 | `asset` | Assets and asset scan (keeps the SSH and SNMP engines it needs, not their pages) |
 | `offline` | Offline tools and FortiGate offline update |

@@ -222,6 +222,12 @@ class Api:
         self._xfer.on_history = self._xfer_history
         self._hidden = False           # دسکتاپ: پنجره بسته و برنامه در پس‌زمینه
         self._quitting = False
+        self._fb = None
+        from . import buildcfg
+        if worker is not None and buildcfg.has("dev"):
+            from .fbackup import FolderBackup          # 1.58: پشتیبان پوشه‌ی لینوکس (زمان‌بندی در worker)
+            self._fb = FolderBackup(settings, store, worker.ssh, self._term.hostkeys, emit=worker.emit)
+            worker.fbackup = self._fb
         if worker is not None and getattr(worker, "monitor", None):
             worker.monitor.on_alert = self._mon_alert
         if vault is not None and vault.users_enabled() and vault.unlocked():
@@ -1620,7 +1626,7 @@ class Api:
         """همان بررسی‌های «ذخیره‌ی تنظیمات»؛ هیچ رازی وارد نمی‌شود. خطا = ConnectorError."""
         patch = dict(patch)
         # 1.27.7: همان کلیدهایی که «ذخیره‌ی تنظیمات» هم نمی‌پذیرد (ad و events فقط از متدهای خودشان با اعتبارسنجی)
-        for k in ("security", "secrets", "has_password", "users", "server", "ui_users", "jobs", "ssh_schedules", "ad", "events", "access"):
+        for k in ("security", "secrets", "has_password", "users", "server", "ui_users", "jobs", "ssh_schedules", "fbackup_jobs", "ad", "events", "access"):
             patch.pop(k, None)
         from .settings import SECRET_KEYS
         for c, keys in SECRET_KEYS.items():          # هیچ رازی از فایل وارد نمی‌شود (notify هم)
@@ -2987,6 +2993,60 @@ class Api:
             raise ConnectorError("در حالت دسکتاپ فایل را به پنل «این کامپیوتر» بکشید.")
         r = self._xc(self._xfer.get_begin, self._uname(), cid, rpath)
         return {"url": "/xfer/" + r["token"], "job": r["job"]}
+
+    # ---- ویرایشگر متن (1.58)
+    def _tedit(self):
+        from . import textedit
+        if not getattr(self, "_tevers", None):
+            self._tevers = textedit.Versions(self._vault)
+        return textedit
+
+    @_safe
+    def xfer_read_text(self, cid, path):
+        te = self._tedit()
+        c = self._xc(self._xfer.get, cid, self._uname())
+        try:
+            r = self._xc(te.read, c, str(path or ""))
+        except te.EditError as e:
+            raise ConnectorError(str(e))
+        r["versions"] = len(self._tevers.list(self._uname(), te.conn_key(c), r["path"]))
+        return r
+
+    @_safe
+    def xfer_write_text(self, cid, path, text, enc="utf-8", eol="LF", expect_hash=None, keep_prev=False, force=False):
+        te = self._tedit()
+        c = self._xc(self._xfer.get, cid, self._uname())
+        path = str(path or "")
+        try:
+            r, old, _new = self._xc(te.write, c, path, str(text or ""), str(enc or "utf-8"), str(eol or "LF"),
+                                    expect_hash, bool(force))
+        except te.EditError as e:
+            raise ConnectorError(str(e))
+        if r.get("conflict"):
+            return r
+        if keep_prev and old is not None:
+            try:
+                self._tevers.add(self._uname(), te.conn_key(c), path, old, c.title)
+            except Exception:
+                log.exception("edit version")
+        self._store.add_history("transfer", c.title, "ok", f"ویرایش و ذخیره‌ی فایل {path}", "", path, user=self._uname())
+        r["versions"] = len(self._tevers.list(self._uname(), te.conn_key(c), path))
+        return r
+
+    @_safe
+    def xfer_text_versions(self, cid, path):
+        te = self._tedit()
+        c = self._xc(self._xfer.get, cid, self._uname())
+        return {"versions": self._tevers.list(self._uname(), te.conn_key(c), str(path or ""))}
+
+    @_safe
+    def xfer_text_version(self, cid, path, vid):
+        te = self._tedit()
+        c = self._xc(self._xfer.get, cid, self._uname())
+        try:
+            return {"text": self._tevers.get(self._uname(), te.conn_key(c), str(path or ""), str(vid))}
+        except te.EditError as e:
+            raise ConnectorError(str(e))
 
     @_safe
     def xfer_local(self, cid, direction, items, target_dir, overwrite=False):
@@ -5908,18 +5968,26 @@ class Api:
         name = str(sch.get("name") or "").strip()[:80]
         if not name:
             raise ConnectorError("نام زمان‌بندی را وارد کنید.")
-        kind = sch.get("kind") if sch.get("kind") in ("script", "fgupdate") else "script"
+        kind = sch.get("kind") if sch.get("kind") in ("script", "fgupdate", "fbackup") else "script"
         t = str(sch.get("time") or "")
         if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t):
             raise ConnectorError("ساعت اجرا معتبر نیست.")
         days = sorted({int(d) for d in sch.get("days") or [] if str(d).isdigit() and 0 <= int(d) <= 6})
         devs = {d["id"]: d for d in self._store.ssh_devices() if not d.get("owner")}   # زمان‌بندی فقط دستگاه‌های مشترک
+        fbj = None
+        if kind == "fbackup":
+            fbj = next((x for x in (self._settings.get("fbackup_jobs", default=[]) or []) if x.get("id") == sch.get("fb_id")), None)
+            if not fbj:
+                raise ConnectorError("یک کار پشتیبان پوشه انتخاب کنید.")
+            sch["device_ids"] = [fbj["device_id"]]
         ids = [int(i) for i in sch.get("device_ids") or [] if int(i) in devs]
         if not ids:
             raise ConnectorError("حداقل یک دستگاه انتخاب کنید.")
         out = {"id": (old or {}).get("id") or pysecrets.token_hex(4), "name": name, "kind": kind, "time": t,
                "days": days, "device_ids": ids, "enabled": bool(sch.get("enabled", True))}
-        if kind == "script":
+        if kind == "fbackup":
+            out["fb_id"] = fbj["id"]
+        elif kind == "script":
             sid = int(sch.get("script_id") or 0)
             if not self._store.ssh_script(sid):
                 raise ConnectorError("یک اسکریپت ذخیره‌شده انتخاب کنید.")
@@ -5947,6 +6015,85 @@ class Api:
         items = [out if x.get("id") == out["id"] else x for x in items] if old else items + [out]
         self._settings.set_ssh_schedules(items)
         return {"schedules": items}
+
+    # ------------------------------------------------------------ 1.58: پشتیبان پوشه‌ی لینوکس
+    def _fbk(self):
+        if not self._fb:
+            raise ConnectorError("پشتیبان پوشه در این حالت در دسترس نیست.")
+        return self._fb
+
+    def _fbk_call(self, fn, *a):
+        from .fbackup import FbError
+        from .term import TermError
+        try:
+            return fn(*a)
+        except (FbError, TermError) as e:
+            raise ConnectorError(str(e))
+
+    @_safe
+    def fbk_list(self):
+        fb = self._fbk()
+        devs = [{"id": d["id"], "name": d.get("name") or d["host"], "host": d["host"]} for d in self._store.ssh_devices()
+                if not d.get("owner") and d.get("device_type") == "linux" and d.get("protocol") != "telnet"]
+        return {"jobs": fb.jobs(), "running": fb.status(), "devices": devs, "desktop": not paths.is_server(),
+                "master": bool(self._settings.get("automation", "master", default=False))}
+
+    @_safe
+    def fbk_save(self, job):
+        from .fbackup import normalize
+        fb = self._fbk()
+        job = dict(job or {})
+        items = fb.jobs()
+        old = next((x for x in items if x.get("id") == job.get("id")), None) if job.get("id") else None
+        if job.get("id") and not old:
+            raise ConnectorError("کار پشتیبان پیدا نشد.")
+        out = self._fbk_call(normalize, job, old, [d for d in self._store.ssh_devices() if not d.get("owner")])
+        if any(x.get("name", "").strip().lower() == out["name"].lower() and x.get("id") != out["id"] for x in items):
+            raise ConnectorError("کار دیگری با همین نام هست.")
+        items = [out if x.get("id") == out["id"] else x for x in items] if old else items + [out]
+        self._settings.set_fbackup_jobs(items)
+        self._store.add_history("ssh", out["name"], "ok", "ذخیره‌ی کار پشتیبان پوشه")
+        return {"job": out}
+
+    @_safe
+    def fbk_delete(self, jid):
+        fb = self._fbk()
+        if jid in fb.status():
+            raise ConnectorError("این کار در حال اجراست؛ اول متوقفش کنید.")
+        j = self._fbk_call(fb.job, jid)
+        self._settings.set_fbackup_jobs([x for x in fb.jobs() if x.get("id") != jid])
+        # زمان‌بندی‌های همین کار هم حذف می‌شوند
+        self._settings.set_ssh_schedules([x for x in self._settings.get("ssh_schedules", default=[]) or []
+                                          if not (x.get("kind") == "fbackup" and x.get("fb_id") == jid)])
+        self._store.add_history("ssh", j["name"], "ok", "حذف کار پشتیبان پوشه (فایل‌های پشتیبان روی دیسک می‌مانند)")
+        return {}
+
+    @_safe
+    def fbk_run(self, jid):
+        if not self._vault.unlocked():
+            raise VaultError("برنامه قفل است.")
+        return self._fbk_call(self._fbk().start, str(jid), self._uname(), "manual")
+
+    @_safe
+    def fbk_cancel(self, jid):
+        self._fbk_call(self._fbk().cancel, str(jid))
+        return {}
+
+    @_safe
+    def fbk_test(self, job):
+        """بررسی پیش از ذخیره: اتصال، نوع هر مسیر، وجود tar، sudo."""
+        from .fbackup import normalize
+        j = self._fbk_call(normalize, {**dict(job or {}), "dest": "/x"}, None,
+                           [d for d in self._store.ssh_devices() if not d.get("owner")])
+        return self._fbk_call(self._fbk().test, j)
+
+    @_safe
+    def fbk_pick_dir(self):
+        if paths.is_server():
+            raise ConnectorError("در حالت سرور مسیر پوشه‌ی روی سرور را بنویسید.")
+        import webview
+        res = self._window.create_file_dialog(webview.FOLDER_DIALOG)
+        return {"path": (res[0] if isinstance(res, (list, tuple)) else res) if res else ""}
 
     @_safe
     def ssh_sched_toggle(self, sid, on):

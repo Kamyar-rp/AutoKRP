@@ -7,6 +7,7 @@ AutoKRP itself is licensed under the [MIT License](LICENSE). It bundles or depen
 |---|---|---|
 | Vazirmatn font | `ui/fonts/` | SIL Open Font License 1.1 (`ui/fonts/OFL.txt`) |
 | xterm.js, addon-fit and addon-search (0.16.0) | `ui/vendor/` | MIT (`ui/vendor/xterm-LICENSE.txt`) |
+| CodeMirror 5.65.18 (core, search cursor, bracket matching, active line, simple mode and language modes) | `ui/vendor/codemirror.js`, `codemirror.css` | MIT (`ui/vendor/codemirror-LICENSE.txt`) |
 | IANA port registry data via npm `port-numbers` | `ui/ports_iana.js` | BSD-2-Clause (notice kept in the file) |
 | IEEE MAC vendor registry (MA-L and IAB), from the `netaddr` package data | `autokrp/oui.dat` | Public IEEE Registration Authority data; netaddr is BSD-3-Clause |
 | MIB files | `assets/mibs/src/` | Copyright of their respective vendors/authors; redistributed for SNMP interoperability |

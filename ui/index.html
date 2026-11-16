@@ -43,7 +43,7 @@
     </div>
     <nav class="nav" id="nav">
       <button data-page="dashboard" class="active" data-b="sec"><svg><use href="#i-dash"/></svg>داشبورد</button>
-      <button data-page="todo"><svg><use href="#i-todo"/></svg>کارهای من<span class="nav-count warn" id="navTodo" hidden></span></button>
+      <button data-page="todo" data-b="full"><svg><use href="#i-todo"/></svg>کارهای من<span class="nav-count warn" id="navTodo" hidden></span></button>
       <button data-page="run" data-b="sec|offline"><svg><use href="#i-run"/></svg>ابزارها<span class="nav-dot" id="navRunDot" hidden></span></button>
       <button data-page="auto" data-b="sec|dev"><svg><use href="#i-auto"/></svg>کارهای خودکار</button>
       <button data-page="ips" data-b="sec"><svg><use href="#i-ip"/></svg>آدرس‌ها<span class="nav-count" id="navReview" hidden></span></button>
@@ -240,6 +240,7 @@
         <button data-t="net" class="no-ro" data-need-tool="nettools">ابزارهای شبکه</button>
         <button data-t="api" data-need-tool="apitool">API</button>
         <button data-t="backups" data-need-tool="ssh.backup">پشتیبان کانفیگ</button>
+        <button data-t="fbackup" class="adm-only" data-need-tool="ssh.fbackup" data-need-run="ssh">پشتیبان پوشه</button>
         <button data-t="fgu" class="adm-only" data-need-tool="offline" data-need-run="offline">به‌روزرسانی FortiGate</button>
         <button data-t="jobs" data-need-tool="ssh">سابقه</button>
       </div>

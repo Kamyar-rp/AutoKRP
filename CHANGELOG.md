@@ -2,6 +2,36 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.58.1] — 2026-11-16
+
+### Fixed
+- **Linux folder backup could save a truncated `.tar.gz`** ("Unexpected end of archive" in WinRAR/7-Zip). OpenSSH can report that `tar` has finished before the last part of its output has arrived, and the download stopped at that point. The app now reads until the server closes the stream.
+- Every archive is now checked as a complete gzip file before it is saved, and a single file is checked against its size on the server. An incomplete or broken download is not saved and the run is reported as failed.
+
+## [1.58.0] — 2026-11-16
+
+### Added
+- **Text editor in file transfer.** Double-click a text file on the remote side (or select it and press "Edit") to open it in an editor like Notepad++: line numbers, syntax highlighting (shell, nginx, YAML, INI, JSON, XML/HTML, Python, SQL, TOML, Dockerfile, and more), find & replace with regular expressions (Ctrl+F / Ctrl+H), go to line (Ctrl+G) and save back to the server (Ctrl+S).
+  - The file's encoding (UTF-8, UTF-8 BOM, Latin-1) and line endings (LF/CRLF) are kept; mixed line endings are reported.
+  - If the file changed on the server since it was opened, saving asks whether to overwrite or reload.
+  - Optional "Keep the previous version inside the app": before each save the current server content is kept encrypted (last 5 versions per file) and can be loaded back into the editor. Off unless you turn it on.
+  - Binary files and files over 5 MB are not opened.
+- **Linux folder backup** (Device access → Folder backup). A job backs up one or more folders or files of a shared Linux device over SSH into a folder you choose, as `<device>/<job>_YYYY-MM-DD_HHMM.tar.gz` (compressed, not encrypted).
+  - `tar` runs on the server and its output streams straight to the destination; nothing is written on the server.
+  - Exclude patterns, an optional sudo mode for files only root can read, and "keep the last N versions".
+  - If a job has a single path and it is a file (for example an existing `.tar.gz`), that file is saved as it is, without being packed again.
+  - If `tar` is missing on the server, files are copied over SFTP and packed by the app.
+  - "Check paths" shows what each path is before saving. Each job keeps the history of its last 20 runs (size, files, duration, warnings).
+  - Schedules: Automation → SSH schedules → type "Linux folder backup".
+  - New access sub-section "Linux folder backup" under Device access (admins).
+
+### Changed
+- **Config backup page reworked for many devices.** Search, filter (backup on/off, failed, no version) and sort the device list. Shift+click selects a range and Ctrl+A selects all filtered rows. A bar that stays on screen offers "Back up now", "Download latest (zip)", backup on/off and "Clear selection" for the selection. Ticking no longer jumps the list back to the top. Clicking a row opens that device's versions in a side panel. After a group backup finishes, "Download these (zip)" saves exactly the devices that were just backed up.
+- "My tasks" (checklists, to-dos, messages) is only part of the full build, not of custom builds.
+
+### Fixed
+- Persian interface: in the network scan and DNS results, the table header and cells were not aligned (header right, data left). Both are left-aligned now.
+
 ## [1.57.0] — 2026-11-15
 
 ### Fixed

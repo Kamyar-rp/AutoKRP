@@ -604,7 +604,7 @@ function xfBindList(box, side) {
     };
     tr.ondblclick = () => {
       if (tr.dataset.dir === "1") { side === "l" ? xfLocalGo(xfJoinL(tr.dataset.n)) : xfRemoteGo(xfJoinR(tr.dataset.n)); }
-      else if (side === "r") xfDownload([tr.dataset.n]);
+      else if (side === "r") { const it = (XF.cur.items || []).find((i) => i.name === tr.dataset.n); if (it && teIsText(it)) xfEdit(it.name); else xfDownload([tr.dataset.n]); }
       else if (XF.cur) xfUploadLocal([tr.dataset.n]);
     };
     tr.ondragstart = (e) => {
@@ -619,7 +619,7 @@ function xfJoinR(n) { const c = (XF.cur && XF.cur.cwd) || "/"; return c.endsWith
 function xfButtons() {
   const b = (id, on) => { const e = $("#" + id); if (e) e.disabled = !on; };
   const rfiles = XF.cur && XF.cur.items ? XF.cur.items.filter((i) => XF.rsel.has(i.name)) : [];
-  b("xrDown", rfiles.some((i) => !i.dir)); b("xrDel", rfiles.length); b("xrRen", rfiles.length === 1);
+  b("xrDown", rfiles.some((i) => !i.dir)); b("xrDel", rfiles.length); b("xrRen", rfiles.length === 1); b("xrEdit", rfiles.length === 1 && !rfiles[0].dir);
   const lf = XF.local.items.filter((i) => XF.local.sel.has(i.name) && !i.dir);
   b("xlUp", lf.length && XF.cur);
 }
@@ -696,7 +696,7 @@ function xfRenderRemote() {
   box.innerHTML = `<div class="xf-head"><b class="ltr">${esc(c.user)}@${esc(c.host)}</b> <span class="tag info">${c.proto.toUpperCase()}</span>
       <div class="xf-path"><button class="iconbtn" id="xrUpDir" title="پوشه‌ی بالاتر">↑</button><button class="iconbtn" id="xrHome" title="پوشه‌ی خانه">⌂</button>
       <input class="ltr" id="xrPath" value="${esc(c.cwd || c.home)}"><button class="iconbtn" id="xrRef" title="تازه کردن">⟳</button></div></div>
-    <div class="xf-act"><button class="btn sm" id="xrDown" disabled>${XF.desktop ? "دانلود به این کامپیوتر" : "دانلود"}</button><button class="btn sm ghost" id="xrMk">پوشه‌ی تازه</button>
+    <div class="xf-act"><button class="btn sm" id="xrDown" disabled>${XF.desktop ? "دانلود به این کامپیوتر" : "دانلود"}</button><button class="btn sm ghost" id="xrEdit" disabled title="باز کردن فایل متنی در ویرایشگر (دوبار کلیک روی فایل متنی)">ویرایش</button><button class="btn sm ghost" id="xrMk">پوشه‌ی تازه</button>
       <button class="btn sm ghost" id="xrRen" disabled>تغییر نام</button><button class="btn sm danger-ghost" id="xrDel" disabled>حذف</button>
       ${XF.desktop ? "" : `<button class="btn sm" id="xrUpB">آپلود…</button><input type="file" id="xrFile" multiple hidden>`}</div>
     <div class="xf-scroll" id="xrList">${c.items ? xfTable(c.items, "r", XF.rsel) : `<div class="empty">در حال خواندن…</div>`}</div>`;
@@ -705,6 +705,7 @@ function xfRenderRemote() {
   $("#xrRef").onclick = () => xfRemoteGo(c.cwd);
   $("#xrPath").onkeydown = (e) => { if (e.key === "Enter") xfRemoteGo(e.target.value.trim()); };
   $("#xrDown").onclick = () => xfDownload([...XF.rsel]);
+  $("#xrEdit").onclick = () => xfEdit();
   $("#xrMk").onclick = xfMkdir; $("#xrRen").onclick = xfRename; $("#xrDel").onclick = xfDelete;
   if ($("#xrUpB")) { $("#xrUpB").onclick = () => $("#xrFile").click(); $("#xrFile").onchange = (e) => { xfUploadFiles([...e.target.files]); e.target.value = ""; }; }
   if (c.items) xfBindList($("#xrList"), "r"); else xfRemoteGo(c.cwd || c.home);
@@ -1146,3 +1147,322 @@ async function termStatsTick() {
   } finally { t.statsBusy = false; termStatsRender(); }
 }
 setInterval(termStatsTick, STATS_MS);
+
+/* ================================================================ ویرایشگر متن (1.58) — CodeMirror 5، بارگذاری تنبل */
+let _cmReady = null;
+function loadCM() {
+  if (_cmReady) return _cmReady;
+  const add = (tag, attrs) => new Promise((res, rej) => { const e = document.createElement(tag); Object.assign(e, attrs); e.onload = res; e.onerror = () => rej(new Error("load " + (attrs.src || attrs.href))); document.head.appendChild(e); });
+  _cmReady = Promise.all([add("link", { rel: "stylesheet", href: "vendor/codemirror.css" }), add("script", { src: "vendor/codemirror.js" })]);
+  _cmReady.catch(() => { _cmReady = null; });
+  return _cmReady;
+}
+const TE_TEXT = /\.(txt|log|conf|cfg|cnf|ini|env|properties|ya?ml|json|js|mjs|ts|xml|html?|css|sh|bash|zsh|ksh|py|pl|pm|rb|lua|php|go|c|h|cc|cpp|hpp|java|sql|toml|md|csv|tsv|service|timer|socket|rules|list|repo|pem|crt|key|pub|ps1|psm1|bat|cmd|diff|patch|j2|tmpl|tpl|vhost|lst|out|err)$/i;
+const TE_NAMES = /^(dockerfile|makefile|hosts|fstab|crontab|passwd|group|sudoers|resolv\.conf|authorized_keys|known_hosts|\.?bashrc|\.?profile|\.?vimrc|\.gitignore|\.htaccess|readme|license|config|interfaces)$/i;
+function teIsText(it) { return !it.dir && (TE_TEXT.test(it.name) || TE_NAMES.test(it.name) || (!/\.[a-z0-9]{1,5}$/i.test(it.name) && (it.size || 0) < 1048576)); }
+const TE_MODES = [["", "متن ساده"], ["shell", "Shell"], ["nginx", "nginx"], ["yaml", "YAML"], ["properties", "INI / properties"], ["application/json", "JSON"],
+  ["javascript", "JavaScript"], ["xml", "XML"], ["htmlmixed", "HTML"], ["css", "CSS"], ["python", "Python"], ["text/x-sql", "SQL"], ["toml", "TOML"],
+  ["dockerfile", "Dockerfile"], ["diff", "Diff"], ["perl", "Perl"], ["lua", "Lua"], ["powershell", "PowerShell"], ["text/x-csrc", "C"], ["text/x-c++src", "C++"],
+  ["text/x-java", "Java"], ["go", "Go"], ["php", "PHP"], ["markdown", "Markdown"]];
+function teModeFor(name) {
+  const n = String(name).toLowerCase(), ext = n.includes(".") ? n.slice(n.lastIndexOf(".") + 1) : "";
+  if (/nginx|\.vhost$/.test(n)) return "nginx";
+  if (n === "dockerfile" || n.startsWith("dockerfile.")) return "dockerfile";
+  const m = { sh: "shell", bash: "shell", zsh: "shell", ksh: "shell", bashrc: "shell", profile: "shell", yml: "yaml", yaml: "yaml", ini: "properties", conf: "properties",
+    cfg: "properties", cnf: "properties", env: "properties", properties: "properties", service: "properties", timer: "properties", socket: "properties", repo: "properties",
+    json: "application/json", js: "javascript", mjs: "javascript", ts: "javascript", xml: "xml", html: "htmlmixed", htm: "htmlmixed", css: "css", py: "python",
+    sql: "text/x-sql", toml: "toml", diff: "diff", patch: "diff", pl: "perl", pm: "perl", lua: "lua", ps1: "powershell", psm1: "powershell", c: "text/x-csrc",
+    h: "text/x-csrc", cc: "text/x-c++src", cpp: "text/x-c++src", hpp: "text/x-c++src", java: "text/x-java", go: "go", php: "php", md: "markdown" };
+  if (m[ext]) return m[ext];
+  if (/^\.?(bashrc|profile|bash_profile|zshrc)$/.test(n)) return "shell";
+  return "";
+}
+async function xfEdit(name) {
+  const c = XF.cur; if (!c || !c.browse) return;
+  name = name || [...XF.rsel][0]; if (!name) return;
+  const path = xfJoinR(name);
+  try { await loadCM(); } catch (_) { return toast("ویرایشگر بارگذاری نشد.", "error"); }
+  const r = await api("xfer_read_text", c.id, path);
+  if (!r.ok) return toast(r.error, "error");
+  teOpen(c, path, name, r);
+}
+function teOpen(conn, path, name, doc) {
+  let cm = null, st = { hash: doc.hash, enc: doc.enc, eol: doc.eol, versions: doc.versions || 0, saving: false }, clean = 0, marks = [];
+  const modeSel = TE_MODES.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("");
+  const body = `<div class="te-top">
+      <span class="ltr te-path" title="${esc(path)}">${esc(conn.user)}@${esc(conn.host)}:${esc(path)}</span>
+      <span class="te-sp"></span>
+      <select id="teMode" class="sm" title="رنگ‌آمیزی نحو" data-nodirty>${modeSel}</select>
+      <select id="teEnc" class="sm ltr" title="کدگذاری" data-nodirty><option value="utf-8">UTF-8</option><option value="utf-8-sig">UTF-8 BOM</option><option value="latin-1">Latin-1</option></select>
+      <select id="teEol" class="sm ltr" title="پایان خط" data-nodirty><option value="LF">LF (Linux)</option><option value="CRLF">CRLF (Windows)</option></select>
+      <button class="btn sm ghost" id="teFindB" title="Ctrl+F / Ctrl+H">جستجو و جایگزینی</button>
+      <button class="btn sm ghost" id="teVerB">نسخه‌های قبلی <span id="teVerN"></span></button>
+    </div>
+    ${doc.mixed ? `<div class="te-note warn">این فایل پایان خط مخلوط (LF و CRLF) داشت؛ هنگام ذخیره همه با «${esc(doc.eol)}» یکی می‌شوند.</div>` : ""}
+    <div class="te-note warn" id="teConflict" hidden></div>
+    <div class="te-vers" id="teVers" hidden></div>
+    <div class="te-find" id="teFind" hidden data-nodirty>
+      <input type="search" id="teQ" class="ltr" placeholder="جستجو" data-nodirty><input type="text" id="teR" class="ltr" placeholder="جایگزین با" data-nodirty>
+      <label class="chk" title="عبارت باقاعده"><input type="checkbox" id="teRx" data-nodirty>.*</label>
+      <label class="chk" title="حساس به حروف بزرگ و کوچک"><input type="checkbox" id="teCase" data-nodirty>Aa</label>
+      <span class="muted" id="teCnt"></span>
+      <button class="btn sm ghost" id="tePrev" title="Shift+Enter">قبلی</button><button class="btn sm ghost" id="teNext" title="Enter">بعدی</button>
+      <button class="btn sm ghost" id="teRep">جایگزینی</button><button class="btn sm ghost" id="teRepAll">جایگزینی همه</button>
+      <button class="iconbtn" id="teFindX" title="بستن">✕</button>
+    </div>
+    <div class="te-ed" id="teEd" dir="ltr"></div>
+    <div class="te-stat" dir="ltr"><span id="teLC"></span><span id="teLines"></span><span id="teGo">Ctrl+G</span><input id="teGoIn" class="ltr" placeholder="Line" hidden data-nodirty><span id="teMod"></span></div>`;
+  const foot = `<label class="chk te-keep" title="قبل از هر ذخیره، محتوای فعلی سرور رمزشده داخل برنامه نگه داشته می‌شود (۵ نسخه‌ی آخر)"><input type="checkbox" id="teKeep" data-nodirty>نگه داشتن نسخه‌ی قبلی داخل برنامه</label>
+    <span class="te-sp"></span><button class="btn ghost" data-r="0">بستن</button><button class="btn primary" id="teSave">ذخیره (Ctrl+S)</button>`;
+  return openModal({ title: "ویرایش " + name, body, foot, wide: true, onOpen: (m, close) => {
+    m.classList.add("te-modal");
+    const ed = $("#teEd", m);
+    cm = CodeMirror(ed, { value: doc.text, lineNumbers: true, lineWrapping: false, matchBrackets: true, styleActiveLine: true, indentUnit: 2, tabSize: 4,
+      direction: "ltr", mode: teModeFor(name) || null, theme: "akrp", inputStyle: "contenteditable", spellcheck: false, autofocus: true });
+    m._cm = cm;
+    $("#teMode", m).value = teModeFor(name);
+    $("#teEnc", m).value = doc.enc; $("#teEol", m).value = doc.eol;
+    $("#teKeep", m).checked = !!TP.teKeep;
+    clean = cm.changeGeneration(true);
+    const dirty = () => !cm.isClean(clean) || $("#teEnc", m).value !== st.enc || $("#teEol", m).value !== st.eol;
+    const stat = () => {
+      const p = cm.getCursor(), sel = cm.getSelection();
+      $("#teLC", m).textContent = `Ln ${p.line + 1}, Col ${p.ch + 1}` + (sel ? ` (${sel.length} sel)` : "");
+      $("#teLines", m).textContent = `${cm.lineCount()} lines`;
+      const d = dirty(); m._dirty = d;
+      $("#teMod", m).textContent = d ? "● " + I18N.t("ذخیره نشده") : "";
+      $("#teVerN", m).textContent = st.versions ? `(${num(st.versions)})` : "";
+    };
+    cm.on("cursorActivity", stat); cm.on("change", () => { stat(); if (!$("#teFind", m).hidden) teMark(); });
+    $("#teMode", m).onchange = (e) => cm.setOption("mode", e.target.value || null);
+    $("#teEnc", m).onchange = stat; $("#teEol", m).onchange = stat;
+    $("#teKeep", m).onchange = (e) => { TP.teKeep = e.target.checked; saveTP(); };
+    stat();
+    // ---- جستجو و جایگزینی
+    const q = () => {
+      const s = $("#teQ", m).value; if (!s) return null;
+      if ($("#teRx", m).checked) { try { return new RegExp(s, $("#teCase", m).checked ? "g" : "gi"); } catch (_) { return null; } }
+      return $("#teCase", m).checked ? s : new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    };
+    function teMark() {
+      marks.forEach((x) => x.clear()); marks = [];
+      const qq = q(); if (!qq) { $("#teCnt", m).textContent = ""; return; }
+      const cur = cm.getSearchCursor(qq, { line: 0, ch: 0 }); let n = 0;
+      while (cur.findNext()) { if (cur.from().line === cur.to().line && cur.from().ch === cur.to().ch) break; if (n < 2000) marks.push(cm.markText(cur.from(), cur.to(), { className: "te-hit" })); n++; }
+      $("#teCnt", m).textContent = n ? num(n) : I18N.t("پیدا نشد");
+    }
+    const find = (back) => {
+      const qq = q(); if (!qq) return false;
+      let cur = cm.getSearchCursor(qq, back ? cm.getCursor("from") : cm.getCursor("to"));
+      if (!(back ? cur.findPrevious() : cur.findNext())) {
+        cur = cm.getSearchCursor(qq, back ? { line: cm.lastLine() + 1, ch: 0 } : { line: 0, ch: 0 });
+        if (!(back ? cur.findPrevious() : cur.findNext())) return false;
+      }
+      cm.setSelection(cur.from(), cur.to()); cm.scrollIntoView({ from: cur.from(), to: cur.to() }, 60);
+      return true;
+    };
+    const repText = (matched) => {
+      const r = $("#teR", m).value, qq = q();
+      if (qq instanceof RegExp && $("#teRx", m).checked) return matched.replace(new RegExp(qq.source, qq.flags.replace("g", "")), r);
+      return r;
+    };
+    const replaceOne = () => {
+      const qq = q(); if (!qq) return;
+      const sel = cm.getSelection(), c0 = cm.getSearchCursor(qq, cm.getCursor("from"));
+      if (sel && c0.findNext() && c0.from().line === cm.getCursor("from").line && c0.from().ch === cm.getCursor("from").ch) cm.replaceSelection(repText(sel), "end");
+      find(false);
+    };
+    const replaceAll = () => {
+      const qq = q(); if (!qq) return;
+      let n = 0;
+      cm.operation(() => { const cur = cm.getSearchCursor(qq, { line: 0, ch: 0 }); while (cur.findNext()) { const t = cm.getRange(cur.from(), cur.to()); if (!t && !$("#teRx", m).checked) break; cur.replace(repText(t)); n++; if (n > 100000) break; } });
+      toast(n ? `${num(n)} مورد جایگزین شد.` : "موردی پیدا نشد.", n ? "ok" : "info");
+    };
+    const openFind = (rep) => {
+      $("#teFind", m).hidden = false;
+      const s = cm.getSelection(); if (s && !s.includes("\n")) $("#teQ", m).value = s;
+      (rep && $("#teQ", m).value ? $("#teR", m) : $("#teQ", m)).focus(); $("#teQ", m).select(); teMark();
+    };
+    const closeFind = () => { $("#teFind", m).hidden = true; marks.forEach((x) => x.clear()); marks = []; cm.focus(); };
+    $("#teFindB", m).onclick = () => openFind(false);
+    $("#teFindX", m).onclick = closeFind;
+    ["#teQ", "#teRx", "#teCase"].forEach((s) => $(s, m).addEventListener(s === "#teQ" ? "input" : "change", teMark));
+    $("#teNext", m).onclick = () => find(false); $("#tePrev", m).onclick = () => find(true);
+    $("#teRep", m).onclick = replaceOne; $("#teRepAll", m).onclick = replaceAll;
+    $("#teFind", m).addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeFind(); }
+      else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); if (e.target.id === "teR") replaceOne(); else find(e.shiftKey); }
+    });
+    // ---- رفتن به خط
+    const goOpen = () => { const g = $("#teGoIn", m); g.hidden = false; g.value = ""; g.focus(); };
+    $("#teGo", m).onclick = goOpen;
+    $("#teGoIn", m).addEventListener("keydown", (e) => {
+      if (e.key === "Escape" || e.key === "Enter") {
+        e.preventDefault(); e.stopPropagation();
+        const n = parseInt(String(e.target.value).replace(/[\u06F0-\u06F9]/g, (d) => d.charCodeAt(0) - 0x6F0), 10);
+        e.target.hidden = true;
+        if (e.key === "Enter" && n > 0) { const l = Math.min(n, cm.lineCount()) - 1; cm.setCursor({ line: l, ch: 0 }); cm.scrollIntoView({ line: l, ch: 0 }, 120); }
+        cm.focus();
+      }
+    });
+    // ---- ذخیره
+    const save = async (force) => {
+      if (st.saving) return; st.saving = true;
+      const b = $("#teSave", m); b.disabled = true;
+      try {
+        const enc = $("#teEnc", m).value, eol = $("#teEol", m).value, gen = cm.changeGeneration(true);
+        const r = await api("xfer_write_text", conn.id, path, cm.getValue(), enc, eol, st.hash, $("#teKeep", m).checked, !!force);
+        if (!r.ok) return toast(r.error, "error");
+        if (r.conflict) {
+          const n = $("#teConflict", m); n.hidden = false;
+          n.innerHTML = `<span>${esc(r.gone ? I18N.t("فایل روی سرور حذف شده یا خواندنی نیست.") : I18N.t("فایل روی سرور از زمان باز کردن تغییر کرده است."))}</span>
+            <button class="btn sm danger-ghost" id="teForce">${esc(I18N.t("ذخیره‌ی من جایگزین شود"))}</button><button class="btn sm ghost" id="teReload">${esc(I18N.t("بارگذاری دوباره از سرور"))}</button>`;
+          $("#teForce", m).onclick = () => { n.hidden = true; save(true); };
+          $("#teReload", m).onclick = async () => {
+            const x = await api("xfer_read_text", conn.id, path); if (!x.ok) return toast(x.error, "error");
+            n.hidden = true; st.hash = x.hash; cm.setValue(x.text); clean = cm.changeGeneration(true); stat();
+          };
+          return;
+        }
+        st.hash = r.hash; st.enc = enc; st.eol = eol; st.versions = r.versions || 0; clean = gen;
+        $("#teConflict", m).hidden = true; stat();
+        toast(`ذخیره شد: ${path}`, "ok");
+      } finally { st.saving = false; b.disabled = false; }
+    };
+    $("#teSave", m).onclick = () => save(false);
+    $("[data-r='0']", m).onclick = () => { if (dirty()) kbDirtyAsk(m); else close(null); };
+    m.addEventListener("keydown", (e) => {
+      const k = e.key.toLowerCase();
+      if (k === "escape" && e.target.closest && e.target.closest(".te-ed")) {     // CodeMirror خودش Esc را مصرف می‌کند
+        e.preventDefault(); e.stopPropagation();
+        if (!$("#teFind", m).hidden) closeFind(); else if (dirty()) kbDirtyAsk(m); else close(null);
+        return;
+      }
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (k === "s" || k === "\u0633") { e.preventDefault(); e.stopPropagation(); save(false); }
+      else if ((k === "f" || k === "\u0628") && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); openFind(false); }
+      else if (k === "h" || k === "\u0627") { e.preventDefault(); e.stopPropagation(); openFind(true); }
+      else if (k === "g" || k === "\u0644") { e.preventDefault(); e.stopPropagation(); goOpen(); }
+    }, true);
+    // ---- نسخه‌های قبلی
+    $("#teVerB", m).onclick = async () => {
+      const box = $("#teVers", m);
+      if (!box.hidden) { box.hidden = true; return; }
+      const r = await api("xfer_text_versions", conn.id, path); if (!r.ok) return toast(r.error, "error");
+      const v = r.versions || [];
+      box.innerHTML = v.length ? `<div class="hint">${esc(I18N.t("نسخه‌ای که انتخاب کنید در ویرایشگر بار می‌شود (با Ctrl+Z برمی‌گردد) و تا «ذخیره» نزنید روی سرور نمی‌رود."))}</div>
+        <table class="grid nosort"><tbody>${v.map((x) => `<tr><td>${esc(fmtDate(x.ts))}</td><td class="ltr">${esc(fmtBytes(x.size))}</td>
+        <td><button class="btn sm ghost" data-v="${esc(x.id)}">${esc(I18N.t("بارگذاری در ویرایشگر"))}</button></td></tr>`).join("")}</tbody></table>`
+        : `<div class="hint">${esc(I18N.t("هنوز نسخه‌ی قبلی نگه داشته نشده است. گزینه‌ی «نگه داشتن نسخه‌ی قبلی داخل برنامه» را روشن کنید تا از ذخیره‌ی بعدی نگه داشته شود."))}</div>`;
+      box.hidden = false;
+      $$("[data-v]", box).forEach((b) => (b.onclick = async () => {
+        const x = await api("xfer_text_version", conn.id, path, b.dataset.v); if (!x.ok) return toast(x.error, "error");
+        cm.setValue(x.text); box.hidden = true; stat(); cm.focus();
+      }));
+    };
+    setTimeout(() => { cm.refresh(); cm.focus(); }, 30);
+  } });
+}
+
+/* ================================================================ پشتیبان پوشه‌ی لینوکس (1.58) */
+const FBK = { jobs: [], running: {}, devices: [], desktop: true, master: false, timer: null };
+const FBK_ST = { ok: ["ok", "موفق"], warn: ["warn", "با هشدار"], error: ["err", "ناموفق"], cancelled: ["mute", "متوقف شد"] };
+async function sshFbackup() {
+  $("#sshActions").innerHTML = `<button class="btn primary" id="fbNew">کار پشتیبان تازه</button>`;
+  $("#fbNew").onclick = () => fbEdit(null);
+  const r = await api("fbk_list"); if (SSH.tab !== "fbackup" || S.page !== "ssh") return;
+  if (!r.ok) { $("#sshBody").innerHTML = `<p class="hint warn">${esc(r.error)}</p>`; return; }
+  Object.assign(FBK, { jobs: r.jobs, running: r.running, devices: r.devices, desktop: r.desktop, master: r.master });
+  fbRender();
+  fbPoll();
+}
+function fbDev(id) { const d = FBK.devices.find((x) => x.id === id); return d ? d.name : "(حذف شده)"; }
+function fbRender() {
+  const box = $("#sshBody"); if (!box || SSH.tab !== "fbackup") return;
+  const run = FBK.running;
+  box.innerHTML = `<p class="hint">پوشه‌ها یا فایل‌های سرور لینوکس با <span class="ltr">tar.gz</span> از راه SSH مستقیم در پوشه‌ی مقصد ذخیره می‌شوند (بدون فایل موقت روی سرور). اگر فقط یک مسیر باشد و آن مسیر یک فایل باشد (مثلاً خودش آرشیو است)، همان فایل بدون tar دوباره ذخیره می‌شود. زمان‌بندی: «کارهای خودکار ← زمان‌بندی SSH».</p>
+    <div class="table-wrap"><table class="grid"><thead><tr><th>نام</th><th>دستگاه</th><th>مسیرها</th><th>sudo</th><th>نگه‌داری</th><th>آخرین اجرا</th><th class="nosort"></th></tr></thead><tbody>
+    ${FBK.jobs.length ? FBK.jobs.map((j) => {
+      const rr = run[j.id], st = FBK_ST[j.last_status];
+      return `<tr><td><b>${esc(j.name)}</b><div class="muted ltr" style="font-size:12px">${esc(j.dest)}</div></td><td>${esc(fbDev(j.device_id))}</td>
+        <td class="wrap w-md ltr">${j.paths.map(esc).join("<br>")}${j.excludes.length ? `<div class="muted" style="font-size:12px">− ${j.excludes.map(esc).join("، ")}</div>` : ""}</td>
+        <td>${j.sudo ? `<span class="tag warn">sudo</span>` : "—"}</td><td data-sort="${j.keep}">${j.keep ? `${num(j.keep)} نسخه` : "همه"}</td>
+        <td class="wrap w-md" data-sort="${rr ? 9e12 : j.last_at || 0}">${rr ? `<span class="tag info">در حال اجرا</span> <span class="ltr">${esc(fmtBytes(rr.bytes))}</span> · ${num(rr.files)} فایل`
+          : j.last_at ? `${st ? `<span class="tag ${st[0]}">${st[1]}</span>` : ""} ${fmtDate(j.last_at)}<div class="muted" style="font-size:12px">${esc(j.last_message || "")}</div>` : "—"}</td>
+        <td><div class="row" style="gap:6px;flex-wrap:nowrap">${rr ? `<button class="btn sm danger-ghost" data-fbx="${esc(j.id)}">توقف</button>` : `<button class="btn sm" data-fbr="${esc(j.id)}">اجرا</button>`}
+          <button class="btn sm ghost" data-fbh="${esc(j.id)}">سابقه</button><button class="btn sm ghost" data-fbe="${esc(j.id)}">ویرایش</button><button class="btn sm ghost" data-fbd="${esc(j.id)}">حذف</button></div></td></tr>`;
+    }).join("") : `<tr><td colspan="7"><div class="empty">هنوز کار پشتیبان پوشه‌ای نیست. «کار پشتیبان تازه» را بزنید.</div></td></tr>`}</tbody></table></div>`;
+  const J = (id) => FBK.jobs.find((x) => x.id === id);
+  $$("[data-fbr]", box).forEach((b) => (b.onclick = () => withSpin(b, async () => { const r = await api("fbk_run", b.dataset.fbr); if (!r.ok) return toast(r.error, "error"); toast("پشتیبان‌گیری شروع شد", "ok"); await fbRefresh(); })));
+  $$("[data-fbx]", box).forEach((b) => (b.onclick = async () => { const r = await api("fbk_cancel", b.dataset.fbx); if (!r.ok) toast(r.error, "error"); }));
+  $$("[data-fbe]", box).forEach((b) => (b.onclick = () => fbEdit(J(b.dataset.fbe))));
+  $$("[data-fbh]", box).forEach((b) => (b.onclick = () => fbHist(J(b.dataset.fbh))));
+  $$("[data-fbd]", box).forEach((b) => (b.onclick = async () => {
+    const j = J(b.dataset.fbd);
+    if (!(await confirm2({ title: "حذف کار پشتیبان", danger: true, confirm: "حذف", body: `<p>«${esc(j.name)}» و زمان‌بندی‌هایش حذف شود؟ فایل‌های پشتیبانِ ساخته‌شده در پوشه‌ی مقصد می‌مانند.</p>` }))) return;
+    const r = await api("fbk_delete", j.id); if (!r.ok) return toast(r.error, "error");
+    toast("حذف شد", "ok"); fbRefresh();
+  }));
+}
+async function fbRefresh() {
+  const r = await api("fbk_list"); if (!r.ok) return;
+  Object.assign(FBK, { jobs: r.jobs, running: r.running, devices: r.devices });
+  if (!$("#modalBack") || $("#modalBack").hidden) fbRender();
+  fbPoll();
+}
+function fbPoll() {
+  clearTimeout(FBK.timer);
+  if (Object.keys(FBK.running).length && S.page === "ssh" && SSH.tab === "fbackup") FBK.timer = setTimeout(fbRefresh, 2000);
+}
+function fbEdit(j) {
+  const isNew = !j;
+  j = j || { name: "", device_id: (FBK.devices[0] || {}).id, paths: [], excludes: [], sudo: false, dest: "", keep: 7 };
+  if (!FBK.devices.length) return toast("هیچ دستگاه لینوکس مشترکی (SSH) در «دستگاه‌ها» نیست.", "warn");
+  const payload = (m) => ({ id: isNew ? "" : j.id, name: $("#fbName", m).value, device_id: Number($("#fbDev", m).value),
+    paths: $("#fbPaths", m).value.split("\n"), excludes: $("#fbEx", m).value.split("\n"), sudo: $("#fbSudo", m).checked,
+    dest: $("#fbDest", m).value, keep: $("#fbKeep", m).value });
+  openModal({ title: isNew ? "کار پشتیبان پوشه‌ی تازه" : `ویرایش «${j.name}»`, wide: true,
+    body: `<div class="form-grid">
+      <label class="field"><span>نام</span><input type="text" id="fbName" value="${esc(j.name)}" autofocus></label>
+      <label class="field"><span>دستگاه لینوکس</span><select id="fbDev">${FBK.devices.map((d) => `<option value="${d.id}" ${d.id === j.device_id ? "selected" : ""}>${esc(d.name)} — ${esc(d.host)}</option>`).join("")}</select></label>
+      <label class="field wide"><span>مسیرها (هر خط یک مسیر کامل؛ پوشه یا فایل)</span><textarea id="fbPaths" class="ltr" rows="4" placeholder="/etc/nginx&#10;/var/www/site&#10;/opt/app/backup.tar.gz">${esc(j.paths.join("\n"))}</textarea></label>
+      <label class="field wide"><span>استثناها (اختیاری، هر خط یک الگو)</span><textarea id="fbEx" class="ltr" rows="2" placeholder="*.log&#10;node_modules&#10;cache/*">${esc(j.excludes.join("\n"))}</textarea></label>
+      <label class="field wide"><span>پوشه‌ی مقصد ${FBK.desktop ? "(روی همین کامپیوتر)" : "(روی سرور برنامه)"}</span><div class="row" style="gap:6px"><input type="text" id="fbDest" class="ltr" style="flex:1" value="${esc(j.dest)}" placeholder="${FBK.desktop ? "D:\\Backups\\linux" : "/srv/backups"}">${FBK.desktop ? `<button class="btn ghost" id="fbPick" type="button">انتخاب…</button>` : ""}</div>
+        <span class="hint">فایل‌ها در زیرپوشه‌ی نام دستگاه با نام <span class="ltr">کار_YYYY-MM-DD_HHMM.tar.gz</span> ذخیره می‌شوند (فشرده، رمزنگاری‌نشده).</span></label>
+      <label class="field"><span>نگه داشتن نسخه‌های آخر (۰ = همه)</span><input type="number" id="fbKeep" min="0" max="365" value="${esc(j.keep)}"></label>
+      <div class="field"><span>&nbsp;</span><label class="chk"><input type="checkbox" id="fbSudo" ${j.sudo ? "checked" : ""}>با sudo (برای فایل‌هایی که فقط root می‌خواند؛ پسورد همان یوزر دستگاه)</label></div>
+      <div class="field wide" id="fbTestOut" hidden></div>
+    </div>`,
+    foot: `<button class="btn ghost" id="fbTest">بررسی مسیرها</button><span style="flex:1"></span><button class="btn ghost" data-x="0">انصراف</button><button class="btn primary" data-x="1">ذخیره</button>`,
+    onOpen: (m, close) => {
+      if ($("#fbPick", m)) $("#fbPick", m).onclick = async () => { const r = await api("fbk_pick_dir"); if (r.ok && r.path) { $("#fbDest", m).value = r.path; m._dirty = true; } };
+      $("#fbTest", m).onclick = (e) => withSpin(e.currentTarget, async () => {
+        const r = await api("fbk_test", payload(m)), out = $("#fbTestOut", m); out.hidden = false;
+        if (!r.ok) { out.innerHTML = `<p class="hint warn">${esc(r.error)}</p>`; return; }
+        const T = { dir: ["ok", "پوشه"], file: ["info", "فایل (بدون tar)"], missing: ["err", "پیدا نشد"], other: ["warn", "نوع دیگر"] };
+        const one = Object.keys(r.types).length === 1;
+        out.innerHTML = `<table class="grid nosort"><tbody>${Object.entries(r.types).map(([p, t]) => `<tr><td class="ltr">${esc(p)}</td><td><span class="tag ${T[t][0]}">${t === "file" && !one ? "فایل" : T[t][1]}</span></td></tr>`).join("")}</tbody></table>
+          <p class="hint ${r.tar ? "" : "warn"}">${r.tar ? "tar روی سرور هست." : "tar روی سرور پیدا نشد؛ روش جایگزین SFTP (بدون sudo) به کار می‌رود."}</p>
+          ${r.errors.length ? `<pre class="ltr paste-prev" data-no-i18n>${esc(r.errors.join("\n"))}</pre>` : ""}`;
+      });
+      $("[data-x='0']", m).onclick = () => close();
+      $("[data-x='1']", m).onclick = (e) => withSpin(e.currentTarget, async () => {
+        const r = await api("fbk_save", payload(m)); if (!r.ok) return toast(r.error, "error");
+        close(); toast("ذخیره شد", "ok"); fbRefresh();
+      });
+    } });
+}
+function fbHist(j) {
+  const runs = j.runs || [];
+  openModal({ title: `سابقه‌ی «${j.name}»`, wide: true,
+    body: runs.length ? `<div class="table-wrap inner"><table class="grid"><thead><tr><th>زمان</th><th>وضعیت</th><th>حجم</th><th>فایل‌ها</th><th>مدت</th><th>نوع اجرا</th><th>فایل</th></tr></thead><tbody>
+      ${runs.map((x, i) => { const st = FBK_ST[x.status] || ["mute", x.status]; return `<tr><td class="ltr" data-sort="${x.at}">${fmtDate(x.at)}</td><td><span class="tag ${st[0]}">${st[1]}</span>${x.errors && x.errors.length ? ` <button class="btn sm ghost" data-er="${i}">${num(x.errors.length)} هشدار</button>` : ""}</td>
+        <td class="ltr" data-sort="${x.size}">${x.size ? esc(fmtBytes(x.size)) : "—"}</td><td data-sort="${x.files}">${num(x.files)}</td><td data-sort="${x.secs}">${num(x.secs)} ثانیه</td>
+        <td>${x.trigger === "schedule" ? "زمان‌بندی" : "دستی"}</td><td class="wrap w-lg">${x.file ? `<span class="ltr">${esc(x.file)}</span>` : esc(x.message || "")}</td></tr>`; }).join("")}</tbody></table></div><pre class="ltr paste-prev" id="fbErr" hidden data-no-i18n></pre>`
+      : `<div class="empty">هنوز اجرا نشده است.</div>`,
+    foot: `<button class="btn primary" data-x="0">بستن</button>`,
+    onOpen: (m, close) => {
+      $("[data-x='0']", m).onclick = () => close();
+      $$("[data-er]", m).forEach((b) => (b.onclick = () => { const p = $("#fbErr", m); p.hidden = false; p.textContent = runs[Number(b.dataset.er)].errors.join("\n"); }));
+    } });
+}
