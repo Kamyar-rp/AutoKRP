@@ -20,7 +20,7 @@ import platform
 import secrets as pysecrets
 import shutil
 
-from . import AUTHOR, APP_NAME, CONTACTS, __version__, atrest, paths
+from . import AUTHOR, APP_NAME, CONTACTS, OTHER_APPS, REPO_URL, __version__, atrest, paths
 from .vault import VaultError, check_password, derive_key
 from .connectors import ConnectorError, friendly_error
 from .connectors import redmine as rm
@@ -1221,7 +1221,8 @@ class Api:
                 "credit": "با کمک Claude (Anthropic) نوشته شده است",
                 "python": platform.python_version(), "os": platform.platform(),
                 "libs": {"pywebview": ver("webview"), "requests": ver("requests"), "cryptography": ver("cryptography")},
-                "data_dir": str(paths.data_dir()), "build": self._build_info()}
+                "data_dir": str(paths.data_dir()), "build": self._build_info(), "repo": REPO_URL,
+                "other_apps": [{"name": n, "desc": d, "url": u} for n, d, u in OTHER_APPS if str(u).startswith("https://")]}
 
     @staticmethod
     def _build_info():
@@ -1881,6 +1882,30 @@ class Api:
                     self._store.add_history("security", "FortiGate", "ok", f"قاعده‌های مدت بلاک تغییر کرد ({len(fgp['ban_rules'])} قاعده)")
         except banrules.RuleError as e:
             raise ConnectorError(str(e))
+        ip_ = p.get("intel")
+        if isinstance(ip_, dict) and "sources" in ip_:            # 1.59: منابع بررسی تکمیلی
+            from . import intel
+            try:
+                ip_["sources"] = intel.clean_sources(ip_["sources"], paths.is_server())
+            except intel.IntelError as e:
+                raise ConnectorError(str(e))
+            old_s = {x["id"]: x for x in intel.sources(self._settings.get("intel") or {})}
+            for x in ip_["sources"]:
+                o = old_s.get(x["id"])
+                if not o or {k: v for k, v in o.items() if k != "builtin"} != {k: v for k, v in x.items() if k != "builtin"}:
+                    self._store.add_history("intel", x["name"], "ok", ("منبع افزوده شد: " if not o else "منبع تغییر کرد: ")
+                                            + (x["url"] or x["path"] or "آپلود") + ("" if x["enabled"] else " (خاموش)"))
+            for sid, o in old_s.items():
+                if sid not in {x["id"] for x in ip_["sources"]}:
+                    self._store.add_history("intel", o["name"], "ok", "منبع حذف شد")
+        fgp = p.get("fortigate")
+        if isinstance(fgp, dict) and "clean_rules" in fgp:      # 1.59: قاعده‌های بلاک غیرمخرب
+            from . import cleanrules
+            try:
+                fgp["clean_rules"] = cleanrules.clean(fgp["clean_rules"])
+            except cleanrules.RuleError as e:
+                raise ConnectorError(str(e))
+            self._clean_rules_hist(fgp["clean_rules"])
         if "fg_scenarios" in p:           # 1.29: تسک‌های پایتونی FortiGate (فقط ادمین؛ هر تغییر کد در تاریخچه)
             from . import fgtask
             try:
@@ -2421,17 +2446,72 @@ class Api:
         cols, raw = self._store.list_ips_raw()
         acfg = self._settings.get("abuseipdb") or {}
         seen = self._store.seen_days()
+        from datetime import datetime as _dt, timedelta as _td
+        atk = self._store.attack_stats((_dt.now() - _td(days=29)).strftime("%Y-%m-%d"))      # 1.59: ۳۰ روز اخیر
         ix = {c: i for i, c in enumerate(cols)}
         i_ip, i_st, i_sc, i_wl, i_fw = ix["ip"], ix["abuse_status"], ix["score"], ix.get("is_whitelisted"), ix["fw_status"]
         data = []
         for t in raw:
             sb = bool(block_reason_v(t[i_st], t[i_sc], t[i_wl] if i_wl is not None else None, acfg))
-            data.append(t + (sb, sb and t[i_fw] not in FW_DONE, (seen.get(t[i_ip]) or (0,))[0]))
-        cols = cols + ["should_block", "fw_pending", "seen_days"]
+            a = atk.get(t[i_ip])
+            data.append(t + (sb, sb and t[i_fw] not in FW_DONE, (seen.get(t[i_ip]) or (0,))[0], a[0] if a else 0, a[2] if a else 0))
+        cols = cols + ["should_block", "fw_pending", "seen_days", "atk_days", "atk_runs"]
         rd = int(acfg.get("repeat_days") or 0)
         if compact:
             return {"repeat_days": rd, **_pack_rows(cols, data)}
         return {"rows": [dict(zip(cols, t)) for t in data], "repeat_days": rd}
+
+    # ------------------------------------------------------------ 1.59: قاعده‌های بلاک غیرمخرب
+    def _clean_rules_hist(self, new):
+        from . import cleanrules
+        old = {r["id"]: r for r in self._settings.get("fortigate", "clean_rules", default=[]) or []}
+        nn = {r["id"]: r for r in new}
+        for rid, r in nn.items():
+            if rid not in old:
+                self._store.add_history("security", "قاعده‌ی بلاک غیرمخرب", "ok", f"افزوده شد: «{r['name']}» — {cleanrules.summary(r)} ← {r['ban_days'] or 'دائم'} روز")
+            elif old[rid] != r:
+                self._store.add_history("security", "قاعده‌ی بلاک غیرمخرب", "ok", f"تغییر کرد: «{r['name']}» — {cleanrules.summary(r)} ← {r['ban_days'] or 'دائم'} روز"
+                                        + ("" if r["enabled"] else " (خاموش)"))
+        for rid, r in old.items():
+            if rid not in nn:
+                self._store.add_history("security", "قاعده‌ی بلاک غیرمخرب", "ok", f"حذف شد: «{r['name']}»")
+
+    @_safe
+    def clean_rules_preview(self, rule=None):
+        """تعداد IPهایی که الان با قاعده(ها) جورند. rule: یک قاعده (فرم ویرایش) یا None = همه‌ی قاعده‌های ذخیره‌شده (هر کدام جدا)."""
+        from . import cleanrules
+        cfg = self._settings.conn_config("abuseipdb")
+        from .connectors import fortigate as fg
+        nets, _ = fg.parse_ignore(self._settings.get("fortigate", "ignore_networks", default=[]))
+
+        def one(r):
+            hits = cleanrules.evaluate(self._store, [{**r, "enabled": True}], cfg, include_banned=True)
+            info = self._store.ips_info(list(hits), "ip, fw_status") if hits else {}
+            excl = [ip for ip in hits if fg.is_excluded(ip, nets)]
+            banned = [ip for ip in hits if (info.get(ip) or {}).get("fw_status") in cleanrules.FW_DONE]
+            ex_new = [ip for ip in excl if ip not in set(banned)]
+            return {"match": len(hits), "excluded": len(ex_new), "banned": len(banned), "new": len(hits) - len(banned) - len(ex_new),
+                    "sample": sorted(hits, key=lambda ip: (-hits[ip].get("atk_runs", 0), -hits[ip]["atk_days"]))[:20]}
+        try:
+            if rule is not None:
+                return one(cleanrules.clean_one(rule))
+            rules = self._settings.get("fortigate", "clean_rules", default=[]) or []
+            return {"rules": {r["id"]: one(r) for r in rules}}
+        except cleanrules.RuleError as e:
+            raise ConnectorError(str(e))
+
+    @_safe
+    def clean_rule_add(self, rule):
+        """«ذخیره به‌عنوان قاعده» از صفحه‌ی آدرس‌ها (فقط ادمین)."""
+        from . import cleanrules
+        rules = list(self._settings.get("fortigate", "clean_rules", default=[]) or [])
+        try:
+            new = cleanrules.clean(rules + [rule])
+        except cleanrules.RuleError as e:
+            raise ConnectorError(str(e))
+        self._clean_rules_hist(new)
+        self._settings.update({"fortigate": {"clean_rules": new}})
+        return {"rules": new}
 
     # ------------------------------------------------------------ بررسی تکمیلی (فید و لیست داخلی؛ فقط ادمین)
     @_safe
@@ -2440,6 +2520,80 @@ class Api:
         return {"feed": intel.feed_meta(), "local": intel.local_meta(), "server": paths.is_server(),
                 "lists": {k: {"name": v["name"], **intel.list_meta(k), "url": intel.list_url(k, self._settings.get("intel") or {}),
                               "default_url": v["url"]} for k, v in intel.LISTS.items()}}
+
+    # 1.59: مدیر منابع بررسی تکمیلی
+    @_safe
+    def intel_sources(self):
+        from . import intel
+        cfg = self._settings.get("intel") or {}
+        out = []
+        for x in intel.sources(cfg):
+            m = intel.src_meta(x["id"])
+            if not m and x["id"] == "local":
+                lm = intel.local_meta()
+                m = {"name": lm.get("name"), "uploaded": lm.get("uploaded"), "ips": lm.get("ips"), "nets": lm.get("nets")} if lm else {}
+            out.append({**x, "meta": {k: m.get(k) for k in ("fetched", "uploaded", "name", "ips", "nets", "size", "last_error", "last_try")}})
+        return {"sources": out, "defaults": intel.default_sources(), "server": paths.is_server()}
+
+    def _intel_src(self, sid):
+        from . import intel
+        src = next((x for x in intel.sources(self._settings.get("intel") or {}) if x["id"] == sid), None)
+        if not src:
+            raise ConnectorError("منبع پیدا نشد؛ اگر تازه است اول تنظیمات را ذخیره کنید.")
+        return src
+
+    @_safe
+    def intel_source_update(self, sid):
+        from . import intel
+        src = self._intel_src(str(sid))
+        if src["kind"] != "url":
+            raise ConnectorError("این منبع اینترنتی نیست؛ هر اجرا خوانده می‌شود.")
+        if self._demo:
+            raise ConnectorError("در حالت Demo چیزی دانلود نمی‌شود.")
+        try:
+            meta, note = intel.update_source(src, self._settings.get("intel") or {}, force=True)
+        except intel.IntelError as e:
+            self._store.add_history("intel", src["name"], "error", str(e))
+            raise ConnectorError(str(e))
+        self._store.add_history("intel", src["name"], "ok", note)
+        return {"meta": meta, "message": note}
+
+    @_safe
+    def intel_source_test(self, src):
+        """«آزمایش» در فرم منبع (بدون ذخیره)."""
+        from . import intel
+        try:
+            x = intel.clean_sources([src], paths.is_server())[0]
+            if x["kind"] == "upload" and not str((src or {}).get("id") or ""):
+                raise intel.IntelError("فایل را بعد از ذخیره‌ی منبع آپلود کنید، بعد آزمایش.")
+            x["id"] = str((src or {}).get("id") or x["id"])
+            if self._demo and x["kind"] == "url":
+                raise intel.IntelError("در حالت Demo چیزی دانلود نمی‌شود.")
+            return intel.test_source(x, self._settings.get("intel") or {})
+        except intel.IntelError as e:
+            raise ConnectorError(str(e))
+        except Exception as e:      # requests و شبکه
+            raise ConnectorError(f"دانلود یا خواندن ناموفق: {e.__class__.__name__}: {str(e)[:200]}")
+
+    @_safe
+    def intel_source_upload(self, sid, path):
+        from . import intel
+        src = self._intel_src(str(sid))
+        if src["kind"] != "upload":
+            raise ConnectorError("نوع این منبع «آپلود» نیست.")
+        try:
+            p = paths.user_file(path)
+        except PermissionError as e:
+            raise ConnectorError(str(e))
+        if not p:
+            raise ConnectorError("فایلی انتخاب نشده است.")
+        try:
+            meta = intel.save_upload(src["id"], p)
+            _ips, desc = intel.source_lookup(src, self._settings.get("intel") or {}, [])
+        except intel.IntelError as e:
+            raise ConnectorError(str(e))
+        self._store.add_history("intel", src["name"], "ok", f"فایل «{meta['name']}» آپلود شد ({desc})")
+        return {"meta": meta, "message": desc}
 
     @_safe
     def intel_list_update(self, lid):
@@ -2531,6 +2685,9 @@ class Api:
             raise ConnectorError("این IP در داده‌ها نیست.")
         hist = self._store.history_query(target=ip, limit=30)[0]
         row["seen_days"] = (self._store.seen_days([ip]).get(ip) or (0,))[0]
+        from datetime import datetime as _dt, timedelta as _td
+        a = self._store.attack_stats((_dt.now() - _td(days=29)).strftime("%Y-%m-%d"), [ip]).get(ip) or (0, 0, 0)
+        row["atk_days"], row["atk_runs"] = a[0], a[2]
         return {"ip": row, "history": hist}
 
     @_safe

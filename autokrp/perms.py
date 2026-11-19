@@ -53,7 +53,8 @@ SEC_API = {"test_connection", "fg_device_add", "fg_device_delete", "fg_task_dryr
            "splunk_diagnose", "splunk_optimize", "splunk_check_fields", "splunk_save_mapping", "redmine_load_meta", "redmine_discover",
            "preview_template", "start_run", "start_full_sync", "cancel_run", "decide", "intel_status", "intel_list_update",
            "intel_feed_update", "intel_local_upload", "intel_local_clear", "repeat_ips", "ips_action", "import_preview", "import_commit",
-           "add_manual", "export_ips", "export_run_files", "pick_csv", "list_ips", "ip_detail"}
+           "add_manual", "export_ips", "export_run_files", "pick_csv", "list_ips", "ip_detail",
+           "clean_rules_preview", "clean_rule_add", "intel_sources", "intel_source_update", "intel_source_test", "intel_source_upload"}         # 1.59: قاعده‌های بلاک غیرمخرب (فقط ادمین)
 AUTO_API = {"jobs_list", "job_save", "job_delete", "job_run", "set_master"}      # کارهای خودکار: امنیت یا ارتباط با دستگاه‌ها
 
 

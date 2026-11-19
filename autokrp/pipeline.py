@@ -558,6 +558,10 @@ class Pipeline:
                 self.store.upsert_ip(ip, source="splunk", last_seen=now, attack_count=d["attack_count"],
                                      signatures=", ".join(d["signatures"][:20]), dest_ports=", ".join(d["dest_ports"][:30]),
                                      last_run=run.id)
+        try:        # 1.59: «روز حمله» برای قاعده‌های بلاک غیرمخرب (بیشترینِ اجراهای همان روز)
+            self.store.record_attacks({ip: d["attack_count"] for ip, d in sources.items() if ip not in excluded})
+        except Exception:
+            log.exception("record attacks")
         run.data["splunk_csv"] = str(out)
         run.data["splunk_sources"] = sources
         run.data["splunk_has_src"] = bool(fields["src"]) or not rows
@@ -1364,10 +1368,9 @@ class Pipeline:
     def _step_intel(self, run):
         from . import intel
         cfg = dict(self.settings.get("intel") or {})
-        use_feed, use_local = bool(cfg.get("feed_enabled", True)), bool(cfg.get("local_enabled"))
-        use_lists = [k for k, on in (cfg.get("lists") or {}).items() if on and k in intel.LISTS]
-        if not use_feed and not use_local and not use_lists:
-            raise ConnectorError("بررسی تکمیلی: هیچ منبعی (فید آنلاین، فهرست‌های عمومی یا لیست داخلی) روشن نیست (تنظیمات ← بررسی تکمیلی).")
+        srcs = [x for x in intel.sources(cfg) if x.get("enabled")]           # 1.59: منابع قابل ویرایش
+        if not srcs:
+            raise ConnectorError("بررسی تکمیلی: هیچ منبعی روشن نیست (تنظیمات ← بررسی تکمیلی ← منابع).")
         ips, label = self._intel_input(run)
         st = self._st(run)
         nets, _ = fg.parse_ignore(self.settings.get("fortigate", "ignore_networks", default=[]))
@@ -1378,49 +1381,32 @@ class Pipeline:
             else:
                 targets.append(ip)
         self._log(run, f"بررسی تکمیلی: {len(targets)}\u200f IP از {label}" + (f" ({skipped} خصوصی/مستثنا رد شد)" if skipped else ""))
-        sm = {"total": len(targets), "skipped": skipped, "malicious": 0, "feed": 0, "local": 0, "lists": 0, "clean": 0}
+        sm = {"total": len(targets), "skipped": skipped, "malicious": 0, "feed": 0, "local": 0, "lists": 0, "clean": 0, "by_source": {}}
         if not targets:
             st["message"] = "ورودی خالی بود؛ بررسی‌ای انجام نشد"
             self._log(run, "بررسی تکمیلی: " + st["message"], "warn")
             run.summary["intel"] = sm
             run.data["out_path"], run.data["out_ips"] = None, []
             return
-        feed_hits, local_hits, sources, list_hits = {}, {}, [], {}
+        hits_by_ip, sources = {}, []
         try:
-            if use_feed:
-                st["message"] = "دریافت فید آنلاین"
+            for src in srcs:
+                nm = src["name"]
+                st["message"] = f"منبع {nm}"
                 if self.demo:
-                    feed_hits = {ip: {"ip": ip, "score": 90, "confirmations": 12, "category": "brute_force", "type": "datacenter"}
-                                 for ip in targets if sum(int(x) for x in ip.split(".") if x.isdigit()) % 5 == 0}
-                    self._log(run, "بررسی تکمیلی (Demo): فید نمایشی؛ چیزی دانلود نشد", "warn")
+                    salt = sum(map(ord, src["id"])) % 5 + 5
+                    hits = {ip: "Demo" for ip in targets if sum(int(x) for x in ip.split(".") if x.isdigit()) % salt == 0}
+                    self._log(run, f"بررسی تکمیلی (Demo): {nm} نمایشی؛ چیزی دانلود یا خوانده نشد", "warn")
                 else:
-                    meta, note = intel.update_feed(cfg, run.cancel, logf=lambda m, lv="info": self._log(run, "بررسی تکمیلی: " + m, lv))
-                    self._log(run, f"بررسی تکمیلی: {note}")
-                    feed_hits = intel.feed_lookup(targets, int(cfg.get("min_score") or 0))
-                sources.append("FFraud")
-            for lid in use_lists:             # 1.44: فهرست‌های عمومی
-                nm = intel.LISTS[lid]["name"]
-                st["message"] = f"دریافت {nm}"
-                if self.demo:
-                    hits = {ip: "Demo" for ip in targets if sum(int(x) for x in ip.split(".") if x.isdigit()) % 7 == 0}
-                    self._log(run, f"بررسی تکمیلی (Demo): {nm} نمایشی؛ چیزی دانلود نشد", "warn")
-                else:
-                    _m, note = intel.update_list(lid, cfg, run.cancel, logf=lambda m, lv="info": self._log(run, "بررسی تکمیلی: " + m, lv))
-                    self._log(run, f"بررسی تکمیلی: {note}")
-                    hits = intel.list_lookup(lid, targets, max(1, int(cfg.get("ipsum_min") or 3)) if lid == "ipsum" else 1, cfg)
+                    if src["kind"] == "url":
+                        _m, note = intel.update_source(src, cfg, run.cancel, logf=lambda m, lv="info": self._log(run, "بررسی تکمیلی: " + m, lv))
+                        self._log(run, f"بررسی تکمیلی: {note}")
+                    hits, desc = intel.source_lookup(src, cfg, targets)
+                    self._log(run, f"بررسی تکمیلی: {nm} — {desc}: {len(hits)}\u200f IP منطبق")
                 for ip, why in hits.items():
-                    list_hits.setdefault(ip, []).append(f"{nm} ({why})" if why and why != ip else nm)
+                    hits_by_ip.setdefault(ip, []).append((nm, why))
+                sm["by_source"][nm] = len(hits)
                 sources.append(nm)
-            if use_local:
-                lips, lnets, ldesc, bad = intel.load_local(cfg)
-                if bad:
-                    self._log(run, f"بررسی تکمیلی: {len(bad)} خط نامعتبر در لیست داخلی نادیده گرفته شد (مثلاً {bad[0]})", "warn")
-                self._log(run, f"بررسی تکمیلی: لیست داخلی — {ldesc}: {len(lips)}\u200f IP و {len(lnets)} رنج")
-                for ip in targets:
-                    m = intel.local_match(ip, lips, lnets)
-                    if m:
-                        local_hits[ip] = m
-                sources.append("لیست داخلی")
         except InterruptedError:
             raise Cancelled()
         except intel.IntelError as e:
@@ -1429,22 +1415,11 @@ class Pipeline:
         rows, mal = [], []
         with self.store.batch():
             for ip in targets:
-                f, lo = feed_hits.get(ip), local_hits.get(ip)
-                if f:
-                    det = f"امتیاز {f['score']}، {f['confirmations']} تأیید" + (f"، {f['category']}" if f["category"] else "") \
-                          + (f"/{f['type']}" if f["type"] else "") + (f"؛ لیست داخلی: {lo}" if lo else "")
-                    row = {"ip": ip, "result": "ABUSE", "source": "FFraud" + (" + لیست داخلی" if lo else ""), "score": f["score"],
-                           "confirmations": f["confirmations"], "category": f["category"], "type": f["type"], "detail": det}
-                    sm["feed"] += 1
-                elif lo:
-                    det = "در لیست داخلی" + (f" (رنج {lo})" if lo != ip else "")
-                    row = {"ip": ip, "result": "ABUSE", "source": "لیست داخلی", "score": "", "confirmations": "",
-                           "category": "", "type": "", "detail": det}
-                    sm["local"] += 1
-                elif list_hits.get(ip):
-                    names = list_hits[ip]
-                    row = {"ip": ip, "result": "ABUSE", "source": " + ".join(n.split(" (")[0] for n in names), "score": "", "confirmations": "",
-                           "category": "", "type": "", "detail": "؛ ".join(names)}
+                hs = hits_by_ip.get(ip)
+                if hs:
+                    sc = next((m.group(1) for _n, w in hs for m in [re.search(r"\u0627\u0645\u062a\u06cc\u0627\u0632 (\d+)", w or "")] if m), "")
+                    row = {"ip": ip, "result": "ABUSE", "source": " + ".join(n for n, _w in hs), "score": sc, "confirmations": "",
+                           "category": "", "type": "", "detail": "؛ ".join(f"{n} ({w})" if w and w != ip else n for n, w in hs)}
                     sm["lists"] += 1
                 else:
                     row = {"ip": ip, "result": "CLEAN", "source": "", "score": "", "confirmations": "", "category": "", "type": "",
@@ -1477,7 +1452,7 @@ class Pipeline:
         # خروجی برای ابزار بعدی (FortiGate، SSH، ...): فقط مخرب‌ها
         run.data["out_path"], run.data["out_ips"] = str(mal_f), mal
         run.summary["intel"] = sm
-        st["message"] = f"{sm['malicious']} مخرب (فید {sm['feed']}، فهرست‌های عمومی {sm['lists']}، لیست داخلی {sm['local']})، {sm['clean']} پاک"
+        st["message"] = f"{sm['malicious']} مخرب ({'، '.join(f'{k} {v}' for k, v in sm['by_source'].items())})، {sm['clean']} پاک"
         self._log(run, "بررسی تکمیلی: " + st["message"], "warn" if mal else "ok")
         if mal:
             self._log(run, "بررسی تکمیلی: مخرب‌ها — " + "، ".join(mal[:30]) + (" …" if len(mal) > 30 else ""), "warn")
@@ -1498,7 +1473,8 @@ class Pipeline:
             if run.data.get("abuse_errors"):
                 self._log(run, f"FortiGate: {len(run.data['abuse_errors'])}\u200f IP که بررسی‌شان خطا داد ارسال نمی‌شوند", "warn")
             run.data["fw_origin"] = {ip: "abuse" for ip in run.data["malicious"]}
-            return list(run.data["malicious"]), [], "IPهای مخرب AbuseIPDB"
+            extra = self._clean_rule_hits(run, set(run.data["malicious"]))
+            return list(run.data["malicious"]) + extra, [], "IPهای مخرب AbuseIPDB" + (" + قاعده‌های غیرمخرب" if extra else "")
         if src == "db":
             cfg = self.settings.conn_config("abuseipdb")
             origin, skipped = {}, 0
@@ -1511,7 +1487,8 @@ class Pipeline:
             run.data["fw_origin"] = origin
             self._log(run, f"FortiGate: از کل دیتابیس {len(origin)}\u200f IP مخرب انتخاب شد؛ "
                            f"{skipped} مورد طبق قانون فعلی بلاک‌شدنی نیست (غیرمخرب/Whitelisted)")
-            return list(origin), [], "کل دیتابیس"
+            extra = self._clean_rule_hits(run, set(origin))
+            return list(origin) + extra, [], "کل دیتابیس"
         if src == "list":
             values = [v for line in (inp.get("text") or "").splitlines() for v in line.replace(",", " ").split()]
             t, notes = fg.expand_targets(values, max_expand)
@@ -1525,6 +1502,28 @@ class Pipeline:
             t, notes = fg.expand_targets(values, max_expand)
             return t, notes, f"فایل {Path(path).name} (ستون اول)"
         raise ConnectorError("منبع ورودی FortiGate نامعتبر است.")
+
+    def _clean_rule_hits(self, run, have):
+        """1.59: IPهای غیرمخربی که قاعده‌های بلاک غیرمخرب (تنظیمات FortiGate) با آن‌ها جورند — همان مسیر تأیید مخرب‌ها."""
+        from . import cleanrules
+        rules = self.settings.get("fortigate", "clean_rules", default=[]) or []
+        if not any(r.get("enabled") for r in rules):
+            return []
+        try:
+            hits = cleanrules.evaluate(self.store, rules, self.settings.conn_config("abuseipdb"))
+        except Exception as e:
+            log.exception("clean rules")
+            self._log(run, f"FortiGate: قاعده‌های بلاک غیرمخرب بررسی نشد: {e}", "warn")
+            return []
+        hits = {ip: h for ip, h in hits.items() if ip not in have}
+        run.data.setdefault("fw_origin", {}).update({ip: "rule" for ip in hits})
+        run.data["fw_rule"] = hits
+        by = {}
+        for h in hits.values():
+            by[h["rule"]] = by.get(h["rule"], 0) + 1
+        if hits:
+            self._log(run, "FortiGate: قاعده‌های بلاک غیرمخرب — " + "، ".join(f"«{k}»: {v}\u200f IP" for k, v in by.items()), "warn")
+        return list(hits)
 
     def _fw_target(self, run):
         """1.28: دستگاه و تسک انتخاب‌شده در گام FortiGate. خروجی: (conn, نام دستگاه, تسک یا None, چند دستگاهی؟)"""
@@ -1801,7 +1800,11 @@ class Pipeline:
             info = self.store.ips_info(targets) if rules else {}
             hits = {}
 
+            rule_hits = run.data.get("fw_rule") or {}
+
             def days_of(ip):
+                if ip in rule_hits:          # 1.59: مدت بلاک قاعده‌ی غیرمخرب
+                    return rule_hits[ip]["days"]
                 d, n = banrules.days_for(rules, info.get(ip), origin.get(ip, "manual"), def_days)
                 if n:
                     hits[n] = hits.get(n, 0) + 1
@@ -1920,6 +1923,11 @@ class Pipeline:
                     until = _until(days)
                     dur = f" — {banrules.label(days)}" + (f"، تا {until}" if until else "")
                     self._log(run, f"{ip} → بلاک شد{dur}", "ok", "ban")
+                    rh = (run.data.get("fw_rule") or {}).get(ip)
+                    if rh:       # 1.59: بعد از پایان این بلاک، شمارش روزهای حمله از صفر
+                        from .cleanrules import reset_day
+                        up(ip, fw_rule=rh["rule"], attack_reset=reset_day(days))
+                        dur += f" — قاعده‌ی «{rh['rule']}» ({rh.get('atk_runs', 0)} بار در گزارش‌ها، {rh['atk_days']} روز)"
                     up(ip, fw_status="banned", fw_detail="در این اجرا بلاک شد" + dur, fw_at=now, fw_until=until, fw_days=str(days) if days else "")
                     self.store.add_history("ban", ip, "ok", f"افزوده شد به Banned IP{dur} ({APPROVED_TXT.get(run.data.get('approved_by', {}).get('fortigate'), 'تأیید دستی')}){tag}", run.id)
                     self.store.add_stat("ban", "ok", ip, src=p.get("origin", ""))

@@ -1454,7 +1454,8 @@ const IP_COLS = [
   ["ip", "IP", 1], ["abuse_status", "وضعیت", 1], ["score", "امتیاز", 1], ["reports", "گزارش‌ها", 1], ["country_code", "کشور", 1],
   ["isp", "ISP", 1], ["usage_type", "نوع کاربری", 0], ["domain", "دامنه", 0], ["asn", "ASN", 0], ["categories", "دسته‌ها", 1],
   ["is_tor", "Tor", 0], ["is_whitelisted", "Whitelist", 0], ["fw_status", "FortiGate", 1],
-  ["attack_count", "تعداد حمله", 1], ["signatures", "Signatureها", 0], ["dest_ports", "پورت‌های مقصد", 0],
+  ["atk_runs", "حضور در گزارش‌ها (۳۰ روز)", 1], ["atk_days", "روز حمله (۳۰ روز)", 1],
+  ["signatures", "Signatureها", 0], ["dest_ports", "پورت‌های مقصد", 0],
   ["checked_at", "زمان بررسی", 1], ["last_seen", "آخرین مشاهده", 0], ["first_seen", "اولین مشاهده", 0],
   ["seen_days", "روزهای بررسی", 1], ["intel_status", "بررسی تکمیلی", 1],
 ];
@@ -1534,7 +1535,7 @@ function cell(k, r) {
   if (k === "fw_status") { const u = fwUntilTxt(r); return `<td>${v ? `<span class="tag ${(FW[v] || ["mute"])[0]}" title="${esc(r.fw_detail || "")}">${esc((FW[v] || [0, v])[1])}</span>${u ? ` <small class="muted nowrap" title="${esc(I18N.t("بلاک موقت"))}: ${esc(r.fw_days || "")} ${esc(I18N.t("روز"))}">${esc(u)}</small>` : ""}` : "—"}</td>`; }
   if (k === "seen_days") return `<td class="num">${v ? (isRepeat(r) ? `<span class="tag warn" title="IP غیرمخربی که بارها تکرار شده؛ بررسی مجدد">${num(v)}</span>` : num(v)) : "—"}</td>`;
   if (k === "intel_status") return `<td>${intelTag(r)}</td>`;
-  if (["reports", "attack_count"].includes(k)) return `<td class="num">${num(v)}</td>`;
+  if (["reports", "attack_count", "atk_runs", "atk_days"].includes(k)) return `<td class="num">${num(v)}</td>`;
   if (["asn", "domain", "dest_ports", "checked_at", "last_seen", "first_seen"].includes(k)) return `<td class="ltr">${esc(v ?? "—")}</td>`;
   const w = k === "categories" || k === "signatures" ? " w-lg" : k === "isp" || k === "usage_type" || k === "fw_detail" || k === "error" ? " w-md" : "";
   const t = esc(v === null || v === undefined || v === "" ? "—" : v);
@@ -1545,12 +1546,28 @@ function intelTag(r) {
   if (!r.intel_status) return "—";
   return `<span class="tag ${r.intel_status === "ABUSE" ? "err" : "ok"}" title="${esc([r.intel_source, r.intel_detail, r.intel_at].filter(Boolean).join(" — "))}">${r.intel_status === "ABUSE" ? "مخرب" : "پاک"}</span>`;
 }
+/* 1.59: فیلترهای جمع‌وجور (کشور چندتایی، روز حمله، امتیاز، حمله‌ی ۳۰ روزه، بررسی تکمیلی، ISP) */
+const IPF = { cc: new Set(), ccOp: "in", atkD: 0, atkT: 0, scMin: null, scMax: null, intel: "", text: "", days: 0 };
+function ipfNum(id) { const v = $(id).value; return v === "" ? null : Number(String(v).replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d))); }
+function ipfRead() {
+  IPF.days = ipfNum("#ipDays") || 0; IPF.atkT = ipfNum("#ipAtkT") || 0; IPF.scMin = ipfNum("#ipScMin"); IPF.scMax = ipfNum("#ipScMax");
+  IPF.text = $("#ipText").value.trim().toLowerCase();
+  const on = $("#ipAtkD button.on"); IPF.atkD = on && on.dataset.v === "c" ? ipfNum("#ipAtkDc") || 0 : Number(on ? on.dataset.v : 0) || 0;
+}
+function ipfActive() { return IPF.cc.size || IPF.atkD || IPF.atkT || IPF.scMin !== null || IPF.scMax !== null || IPF.intel || IPF.text || IPF.days; }
 function filteredIps() {
   const q = $("#ipSearch").value.trim().toLowerCase(), f = S.ipFilter;
-  const cc = $("#ipCountry").value, dmin = Number($("#ipDays").value || 0);     // 1.37: فیلتر دقیق کشور و روزهای بررسی
+  ipfRead();
+  const F = IPF;
   let rows = S.ips.filter((r) => {
-    if (cc && (cc === "-" ? r.country_code : String(r.country_code || "").toUpperCase() !== cc)) return false;
-    if (dmin > 0 && (r.seen_days || 0) < dmin) return false;
+    if (F.cc.size) { const c = String(r.country_code || "").toUpperCase() || "-"; if (F.cc.has(c) !== (F.ccOp === "in")) return false; }
+    if (F.days > 0 && (r.seen_days || 0) < F.days) return false;
+    if (F.atkD > 0 && (r.atk_days || 0) < F.atkD) return false;
+    if (F.atkT > 0 && (r.atk_runs || 0) < F.atkT) return false;
+    if (F.scMin !== null || F.scMax !== null) { const sc = r.score === null || r.score === "" || r.score === undefined ? null : Number(r.score);
+      if (sc === null || (F.scMin !== null && sc < F.scMin) || (F.scMax !== null && sc > F.scMax)) return false; }
+    if (F.intel && (F.intel === "none" ? !!r.intel_status : r.intel_status !== F.intel)) return false;
+    if (F.text && !`${r.isp || ""} ${r.usage_type || ""}`.toLowerCase().includes(F.text)) return false;
     if (f === "ABUSE" && r.abuse_status !== "ABUSE") return false;
     if (f === "CLEAN" && r.abuse_status !== "CLEAN") return false;
     if (f === "unchecked" && r.abuse_status && r.abuse_status !== "ERROR") return false;
@@ -1573,15 +1590,19 @@ function filteredIps() {
   return rows;
 }
 function ipCountryOpts() {
-  const sel = $("#ipCountry"), cur = sel.value, n = {};
+  const n = {};
   S.ips.forEach((r) => { const c = String(r.country_code || "").toUpperCase() || "-"; n[c] = (n[c] || 0) + 1; });
-  const sig = Object.keys(n).sort().map((k) => k + n[k]).join(",");
-  if (sel._sig === sig) return;
-  sel._sig = sig;
-  const keys = Object.keys(n).filter((k) => k !== "-").sort((a, b) => n[b] - n[a] || a.localeCompare(b));
-  sel.innerHTML = `<option value="">${esc(I18N.t("همه‌ی کشورها"))}</option>` + keys.map((k) => `<option value="${esc(k)}">${esc(k)} (${num(n[k])})</option>`).join("")
-    + (n["-"] ? `<option value="-">${esc(I18N.t("بدون کشور"))} (${num(n["-"])})</option>` : "");
-  sel.value = n[cur] || (cur === "-" && n["-"]) ? cur : "";
+  const q = ($("#ipCcQ").value || "").trim().toLowerCase();
+  const names = {}; S.ips.forEach((r) => { const c = String(r.country_code || "").toUpperCase(); if (c && r.country && !names[c]) names[c] = r.country; });
+  const keys = Object.keys(n).sort((a, b) => n[b] - n[a] || a.localeCompare(b)).filter((k) => !q || k.toLowerCase().includes(q) || String(names[k] || "").toLowerCase().includes(q));
+  $("#ipCcList").innerHTML = keys.map((k) => `<label class="chk"><input type="checkbox" value="${esc(k)}" ${IPF.cc.has(k) ? "checked" : ""}><span class="ltr">${esc(k === "-" ? "—" : k)}</span> <span data-no-i18n>${esc(k === "-" ? I18N.t("بدون کشور") : names[k] || "")}</span><span class="muted">${num(n[k])}</span></label>`).join("")
+    || `<div class="muted">${esc(I18N.t("پیدا نشد"))}</div>`;
+  const b = $("#ipCcBtn");
+  b.textContent = IPF.cc.size ? `${I18N.t(IPF.ccOp === "in" ? "کشور" : "کشور غیر از")}: ${[...IPF.cc].slice(0, 3).join(", ")}${IPF.cc.size > 3 ? " +" + num(IPF.cc.size - 3) : ""} ▾` : `${I18N.t("کشور: همه")} ▾`;
+  b.classList.toggle("on", !!IPF.cc.size);
+  const mc = [IPF.scMin !== null || IPF.scMax !== null, IPF.atkT, IPF.intel, IPF.text, IPF.days].filter(Boolean).length;
+  $("#ipMoreBtn").textContent = `${I18N.t("فیلترهای بیشتر")}${mc ? ` (${num(mc)})` : ""} ▾`;
+  $("#ipMoreBtn").classList.toggle("on", !!mc);
 }
 function renderIps() {
   ipCountryOpts();
@@ -1600,14 +1621,97 @@ function renderIps() {
     $("#ipTable tbody").insertAdjacentHTML("beforeend", `<tr><td colspan="${cols.length + 1}" style="text-align:center"><button class="btn sm" id="ipMore">نمایش ${num(Math.min(IP_PAGE, allRows.length - rows.length))} ردیف بیشتر (${num(rows.length)} از ${num(allRows.length)})</button></td></tr>`);
     $("#ipMore").onclick = () => { S.ipShow += IP_PAGE; renderIps(); };
   }
-  $("#ipCount").textContent = `${num(allRows.length)} مورد`;
+  $("#ipCount").textContent = `${num(allRows.length)} ${I18N.t("از")} ${num(S.ips.length)}`;
+  ipCountryOpts();
+  const act = ipfActive() || (S.ipFilter && S.ipFilter !== "all");
+  $("#ipFiltBar").hidden = !act || !allRows.length;
+  if (act) {
+    $("#ipFiltN").textContent = `${num(allRows.length)}‏ IP ${I18N.t("با این فیلتر")}`;
+    const ruleOk = S.ipFilter === "CLEAN";
+    $("#ipFiltRule").disabled = !ruleOk;
+    $("#ipFiltHint").textContent = ruleOk ? "" : I18N.t("قاعده فقط برای غیرمخرب‌هاست؛ فیلتر «غیرمخرب» را بزنید.");
+  }
   updateSelBar();
 }
 function updateSelBar() {
   $("#selBar").hidden = !S.ipSel.size;
   $("#selCount").textContent = `${num(S.ipSel.size)} مورد انتخاب شده`;
 }
-["#ipCountry", "#ipDays"].forEach((id) => $(id).addEventListener(id === "#ipDays" ? "input" : "change", () => { S.ipShow = 0; renderIps(); }));
+{ let t = 0; const re = () => { clearTimeout(t); t = setTimeout(() => { S.ipShow = IP_PAGE; renderIps(); }, 150); };
+  ["#ipDays", "#ipAtkT", "#ipScMin", "#ipScMax", "#ipText", "#ipAtkDc"].forEach((id) => $(id).addEventListener("input", re));
+  const pop = (btn, el) => { $(btn).onclick = (e) => { e.stopPropagation(); const h = $(el).hidden; $$(".ipf-pop").forEach((x) => (x.hidden = true)); $(el).hidden = !h; if (!h) return; ipCountryOpts(); const f = $(el).querySelector("input"); if (f) f.focus(); }; };
+  pop("#ipCcBtn", "#ipCcPop"); pop("#ipMoreBtn", "#ipMorePop");
+  document.addEventListener("click", (e) => { if (!e.target.closest(".ipf-pop-w")) $$(".ipf-pop").forEach((x) => (x.hidden = true)); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $$(".ipf-pop").some((x) => !x.hidden)) { e.stopPropagation(); $$(".ipf-pop").forEach((x) => (x.hidden = true)); } }, true);
+  $("#ipCcQ").addEventListener("input", ipCountryOpts);
+  $("#ipCcList").addEventListener("change", (e) => { const c = e.target.value; e.target.checked ? IPF.cc.add(c) : IPF.cc.delete(c); re(); });
+  $("#ipCcPop").addEventListener("click", (e) => { const b = e.target.closest("[data-ccop]"); if (!b) return;
+    if (b.dataset.ccop === "clear") IPF.cc.clear(); else IPF.ccOp = b.dataset.ccop;
+    $("#ipCcPop").hidden = true; S.ipShow = IP_PAGE; renderIps(); });
+  $("#ipAtkD").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return;
+    $$("#ipAtkD button").forEach((x) => x.classList.toggle("on", x === b)); $("#ipAtkDc").hidden = b.dataset.v !== "c"; if (b.dataset.v === "c") $("#ipAtkDc").focus(); re(); });
+  $("#ipIntel").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; IPF.intel = b.dataset.v; $$("#ipIntel button").forEach((x) => x.classList.toggle("on", x === b)); re(); });
+  $("#ipFiltClr").onclick = () => {
+    IPF.cc.clear(); IPF.ccOp = "in"; IPF.intel = ""; ["#ipDays", "#ipAtkT", "#ipScMin", "#ipScMax", "#ipText", "#ipAtkDc", "#ipSearch"].forEach((id) => ($(id).value = ""));
+    $$("#ipAtkD button").forEach((x, i) => x.classList.toggle("on", i === 0)); $("#ipAtkDc").hidden = true; $$("#ipIntel button").forEach((x, i) => x.classList.toggle("on", i === 0));
+    S.ipFilter = "all"; $$("#ipFilter button").forEach((x) => x.classList.toggle("on", x.dataset.f === "all")); S.ipShow = IP_PAGE; renderIps();
+  };
+  $("#ipFiltBan").onclick = () => ipFiltBan();
+  $("#ipFiltRule").onclick = () => ipFiltRule();
+}
+function ipfSummary() {
+  const p = [];
+  if (S.ipFilter && S.ipFilter !== "all") p.push(I18N.t($(`#ipFilter button[data-f="${S.ipFilter}"]`).textContent));
+  if (IPF.atkD) p.push(`${I18N.t("روز حمله")} ≥ ${num(IPF.atkD)}`);
+  if (IPF.atkT) p.push(`${I18N.t("حضور در گزارش‌ها")} ≥ ${num(IPF.atkT)}`);
+  if (IPF.scMin !== null || IPF.scMax !== null) p.push(`${I18N.t("امتیاز")} ${num(IPF.scMin ?? 0)}–${num(IPF.scMax ?? 100)}`);
+  if (IPF.cc.size) p.push(`${I18N.t(IPF.ccOp === "in" ? "کشور" : "کشور غیر از")}: ${[...IPF.cc].join(", ")}`);
+  if (IPF.intel) p.push(`${I18N.t("بررسی تکمیلی")}: ${I18N.t({ ABUSE: "مخرب", CLEAN: "پاک", none: "بررسی‌نشده" }[IPF.intel])}`);
+  if (IPF.text) p.push(`ISP: ${IPF.text}`);
+  if (IPF.days) p.push(`${I18N.t("روز بررسی")} ≥ ${num(IPF.days)}`);
+  if ($("#ipSearch").value.trim()) p.push(`${I18N.t("جستجو")}: ${$("#ipSearch").value.trim()}`);
+  return p.join(" · ");
+}
+function ipfRule() {
+  return { name: "", enabled: true, window: 30, days_min: IPF.atkD || 0, runs_min: IPF.atkT || (IPF.atkD ? 0 : 1), attacks_min: 0, score_min: IPF.scMin ?? 0, score_max: IPF.scMax ?? 100,
+    intel: IPF.intel || "any", countries: [...IPF.cc].filter((c) => c !== "-"), countries_op: IPF.ccOp, text: IPF.text, ban_days: 30 };
+}
+async function ipFiltBan() {
+  const rows = filteredIps(), done = rows.filter((r) => ["banned", "already"].includes(r.fw_status));
+  const ips = rows.filter((r) => !["banned", "already"].includes(r.fw_status)).map((r) => r.ip);
+  if (!ips.length) return toast("همه‌ی این IPها از قبل بلاک‌اند.", "info");
+  const canRule = S.ipFilter === "CLEAN" && isAdmin();
+  const v = await openModal({ title: `${I18N.t("بلاک در FortiGate")}: ${num(ips.length)}‏ IP`,
+    body: `<p class="hint">${esc(I18N.t("فیلتر"))}: ${esc(ipfSummary())}</p>
+      <div class="field"><span>${esc(I18N.t("مدت بلاک"))}</span><div class="row" style="gap:6px"><input type="number" id="ifbD" min="0" max="3650" value="30" class="ipf-num"> ${esc(I18N.t("روز"))} <span class="muted">${esc(I18N.t("(۰ = دائمی)"))}</span></div></div>
+      ${done.length ? `<p class="hint">${num(done.length)}‏ ${esc(I18N.t("IP از قبل بلاک‌اند و دوباره فرستاده نمی‌شوند."))}</p>` : ""}
+      <p class="hint">${esc(I18N.t("پیش از ارسال، رنج‌های مستثنا، Address و Banned بررسی می‌شوند و در صفحه‌ی «ابزارها» فهرست نهایی را تأیید می‌کنید."))}</p>
+      ${canRule ? `<label class="chk"><input type="checkbox" id="ifbR">${esc(I18N.t("این فیلتر را به‌عنوان قاعده هم ذخیره کن تا از این به بعد خودکار اعمال شود"))}</label>
+        <label class="field" id="ifbNw" hidden><span>${esc(I18N.t("نام قاعده"))}</span><input type="text" id="ifbN" maxlength="60"></label>` : ""}`,
+    foot: `<button class="btn ghost" data-x="0">انصراف</button><button class="btn warn" data-x="1">${esc(I18N.t("ادامه"))}</button>`,
+    onOpen: (m, close) => {
+      if ($("#ifbR", m)) $("#ifbR", m).onchange = (e) => { $("#ifbNw", m).hidden = !e.target.checked; if (e.target.checked) $("#ifbN", m).focus(); };
+      $("[data-x='0']", m).onclick = () => close(null);
+      $("[data-x='1']", m).onclick = () => { const d = Number($("#ifbD", m).value); if (!(d >= 0 && d <= 3650)) return toast("مدت باید بین ۰ و ۳۶۵۰ روز باشد.", "warn");
+        const r = $("#ifbR", m) && $("#ifbR", m).checked; if (r && !$("#ifbN", m).value.trim()) return toast("نام قاعده را وارد کنید.", "warn");
+        close({ days: Math.round(d), rule: r ? $("#ifbN", m).value.trim() : "" }); };
+    } });
+  if (!v) return;
+  if (v.rule) { const rr = await api("clean_rule_add", { ...ipfRule(), name: v.rule, ban_days: v.days }); if (!rr.ok) return toast(rr.error, "error"); crSync(rr.rules); toast(`${I18N.t("قاعده ذخیره شد")}: ${v.rule}`, "ok"); }
+  const r = await api("ips_action", "ban", ips, { days: v.days });
+  if (!r.ok) return toast(r.error, "error");
+  toast(r.message || "انجام شد", "ok");
+  if (r.run_id) { S.resultTab = "fw"; go("run"); }
+}
+function crSync(rules) {          // قاعده‌ها مستقیم ذخیره شد ← نسخه‌ی تنظیمات و پیش‌نویس هم‌سان شوند
+  [S.settings, S.draft].forEach((o) => { if (o && o.fortigate) o.fortigate.clean_rules = clone(rules); });
+}
+async function ipFiltRule() {
+  if (S.ipFilter !== "CLEAN") return;
+  const base = ipfRule();
+  ruleEdit(base, async (rule) => { const r = await api("clean_rule_add", rule); if (!r.ok) { toast(r.error, "error"); return false; } crSync(r.rules);
+    toast(`${I18N.t("قاعده ذخیره شد")}: ${rule.name}`, "ok"); return true; });
+}
 $("#ipTable").addEventListener("click", (e) => {
   const th = e.target.closest("th[data-sort]");
   if (th) { const k = th.dataset.sort; S.ipSort = { k, d: S.ipSort.k === k ? -S.ipSort.d : 1 }; renderIps(); }
@@ -1813,7 +1917,7 @@ async function showIp(ip) {
     ["Tor", ynTxt(d.is_tor)], ["Whitelisted", ynTxt(d.is_whitelisted)], ["دسته‌ها", d.categories], ["خطا", d.error],
     ["FortiGate", d.fw_status ? `${esc((FW[d.fw_status] || [0, d.fw_status])[1])} — ${esc(d.fw_detail || "")}` : "—", 1],
     ...(["banned", "already"].includes(d.fw_status) && d.fw_until ? [["مدت بلاک", `${banDaysTxt(d.fw_days)} — ${fwUntilTxt(d)}`]] : []),
-    ["تعداد حمله (Splunk)", num(d.attack_count)], ["Signatureها", d.signatures], ["پورت‌های مقصد", d.dest_ports],
+    ["حضور در گزارش‌ها (۳۰ روز)", num(d.atk_runs || 0)], ["روز حمله (۳۰ روز)", num(d.atk_days || 0)], ["Signatureها", d.signatures], ["پورت‌های مقصد", d.dest_ports],
     ["زمان بررسی", d.checked_at], ["اولین / آخرین مشاهده", `${d.first_seen || "—"} / ${d.last_seen || "—"}`], ["آخرین اجرا", d.last_run],
     ["روزهای بررسی در AbuseIPDB", d.seen_days ? `${num(d.seen_days)} روز مختلف` : "—"],
     ["بررسی تکمیلی", d.intel_status ? `${intelTag(d)} ${esc(d.intel_source || "")} — ${esc(d.intel_detail || "")} <span class="muted ltr">${esc(d.intel_at || "")}</span>` : "—", 1]];
@@ -2224,6 +2328,173 @@ function brBind(body, D) {
   if (add) add.onclick = () => { if (rules().length >= 50) return toast("حداکثر ۵۰ قاعده.", "warn"); rules().push({ field: "country", op: "in", value: [], days: 30 }); redraw(); };
   wire();
 }
+/* ---------------------------------------------------------------- 1.59: قاعده‌های بلاک غیرمخرب (fortigate.clean_rules) */
+function crSummary(r) {
+  const p = [`${I18N.t("در")} ${num(r.window)} ${I18N.t("روز اخیر")}`];
+  if (r.runs_min) p.push(`${I18N.t("حضور در گزارش‌ها")} ≥ ${num(r.runs_min)} ${I18N.t("بار")}`);
+  if (r.days_min) p.push(`${I18N.t("روز حمله")} ≥ ${num(r.days_min)}`);
+  if (r.attacks_min) p.push(`${I18N.t("حمله")} ≥ ${num(r.attacks_min)}`);
+  if (Number(r.score_min) !== 0 || Number(r.score_max) !== 100) p.push(`${I18N.t("امتیاز")} ${num(r.score_min)}–${num(r.score_max)}`);
+  if (r.intel && r.intel !== "any") p.push(`${I18N.t("بررسی تکمیلی")}: ${I18N.t({ ABUSE: "مخرب", CLEAN: "پاک", none: "بررسی‌نشده" }[r.intel])}`);
+  if ((r.countries || []).length) p.push(`${I18N.t(r.countries_op === "not_in" ? "کشور غیر از" : "کشور")}: <span class="ltr">${esc(r.countries.join(", "))}</span>`);
+  if (r.text) p.push(`ISP/${I18N.t("نوع")}: ${esc(r.text)}`);
+  return p.join(" · ");
+}
+function crBind(body, D) {
+  const L = () => (D.fortigate.clean_rules = D.fortigate.clean_rules || []);
+  let prev = {};
+  const draw = () => {
+    const tb = $("#crList", body); if (!tb) return;
+    tb.innerHTML = L().length ? L().map((r, i) => `<tr><td><label class="switch"><input type="checkbox" data-cron="${i}" ${r.enabled !== false ? "checked" : ""}><span class="track"><span class="thumb"></span></span></label></td>
+      <td><b>${esc(r.name)}</b></td><td class="wrap">${crSummary(r)}</td><td>${r.ban_days ? `${num(r.ban_days)} ${esc(I18N.t("روز"))}` : esc(I18N.t("دائم"))}</td>
+      <td>${r.id && prev[r.id] ? `${num(prev[r.id].match)}‏ IP <span class="muted">(${num(prev[r.id].new)} ${esc(I18N.t("بلاک تازه"))})</span>` : "—"}</td>
+      <td><div class="row" style="gap:4px;flex-wrap:nowrap"><button class="btn sm ghost" data-crm="${i}" data-d="-1" ${i ? "" : "disabled"}>↑</button><button class="btn sm ghost" data-crm="${i}" data-d="1" ${i < L().length - 1 ? "" : "disabled"}>↓</button>
+        <button class="btn sm ghost" data-cred="${i}">ویرایش</button><button class="btn sm ghost" data-crx="${i}">حذف</button></div></td></tr>`).join("")
+      : `<tr><td colspan="6"><div class="empty">${esc(I18N.t("قاعده‌ای نیست؛ غیرمخرب‌ها بلاک نمی‌شوند."))}</div></td></tr>`;
+    $$("[data-cron]", tb).forEach((c) => (c.onchange = () => { L()[Number(c.dataset.cron)].enabled = c.checked; }));
+    $$("[data-crm]", tb).forEach((b) => (b.onclick = () => { const i = Number(b.dataset.crm), j = i + Number(b.dataset.d), a = L(); [a[i], a[j]] = [a[j], a[i]]; draw(); }));
+    $$("[data-crx]", tb).forEach((b) => (b.onclick = () => { L().splice(Number(b.dataset.crx), 1); draw(); }));
+    $$("[data-cred]", tb).forEach((b) => (b.onclick = () => { const i = Number(b.dataset.cred);
+      ruleEdit(L()[i], (r) => { if (L().some((x, j) => j !== i && x.name.toLowerCase() === r.name.toLowerCase())) { toast("نام قاعده تکراری است.", "warn"); return false; } L()[i] = r; draw(); return true; }); }));
+  };
+  $("#crAdd", body).onclick = () => { if (L().length >= 30) return toast("حداکثر ۳۰ قاعده.", "warn");
+    ruleEdit({ name: "", enabled: true, window: 30, days_min: 0, runs_min: 3, attacks_min: 0, score_min: 0, score_max: 100, intel: "any", countries: [], countries_op: "in", text: "", ban_days: 30 },
+      (r) => { if (L().some((x) => x.name.toLowerCase() === r.name.toLowerCase())) { toast("نام قاعده تکراری است.", "warn"); return false; } L().push(r); draw(); return true; }); };
+  draw();
+  api("clean_rules_preview").then((r) => { if (r.ok) { prev = r.rules || {}; draw(); } });
+}
+function ruleEdit(r0, onSave) {
+  const r = { ...r0 };
+  openModal({ title: r.name ? `ویرایش قاعده «${r.name}»` : "قاعده‌ی بلاک غیرمخرب", wide: true,
+    body: `<div class="form-grid">
+      <label class="field"><span>نام</span><input type="text" id="crN" maxlength="60" value="${esc(r.name || "")}" autofocus></label>
+      <label class="field"><span>مدت بلاک (روز؛ ۰ = دائم)</span><input type="number" id="crB" min="0" max="3650" value="${esc(r.ban_days ?? 30)}"></label>
+      <label class="field"><span>بازه</span><div class="row" style="gap:6px">${esc(I18N.t("در"))} <input type="number" id="crW" min="1" max="365" value="${esc(r.window)}" class="ipf-num"> ${esc(I18N.t("روز اخیر"))}</div></label>
+      <label class="field"><span>حضور در گزارش‌ها ≥ (چند اجرای Splunk؛ ۰ = مهم نیست)</span><div class="row" style="gap:6px"><input type="number" id="crR" min="0" max="100000" value="${esc(r.runs_min || 0)}" class="ipf-num"> ${esc(I18N.t("بار"))}</div></label>
+      <label class="field"><span>روز حمله ≥ (روزهای مختلف؛ ۰ = مهم نیست)</span><input type="number" id="crD" min="0" max="365" value="${esc(r.days_min || 0)}" class="ipf-num"></label>
+      <label class="field"><span>امتیاز AbuseIPDB</span><div class="row" style="gap:6px"><input type="number" id="crS1" min="0" max="100" value="${esc(r.score_min ?? 0)}" class="ipf-num"> ${esc(I18N.t("تا"))} <input type="number" id="crS2" min="0" max="100" value="${esc(r.score_max ?? 100)}" class="ipf-num"></div></label>
+      <label class="field"><span>بررسی تکمیلی</span><select id="crI">${[["any", "مهم نیست"], ["ABUSE", "مخرب"], ["CLEAN", "پاک"], ["none", "بررسی‌نشده"]].map(([k, t]) => `<option value="${k}" ${r.intel === k ? "selected" : ""}>${esc(I18N.t(t))}</option>`).join("")}</select></label>
+      <label class="field"><span>کشور (کد دوحرفی، خالی = همه)</span><div class="row" style="gap:6px"><select id="crCo" style="width:auto"><option value="in" ${r.countries_op !== "not_in" ? "selected" : ""}>${esc(I18N.t("یکی از"))}</option><option value="not_in" ${r.countries_op === "not_in" ? "selected" : ""}>${esc(I18N.t("هیچ‌کدام از"))}</option></select><input type="text" id="crC" class="ltr" value="${esc((r.countries || []).join(", "))}" placeholder="RU, CN"></div></label>
+      <label class="field"><span>ISP یا نوع استفاده شامل (اختیاری)</span><input type="text" id="crT" value="${esc(r.text || "")}" placeholder="Data Center"></label>
+      <div class="field wide" id="crPv"></div></div>`,
+    foot: `<button class="btn ghost" id="crPrev">پیش‌نمایش</button><span style="flex:1"></span><button class="btn ghost" data-x="0">انصراف</button><button class="btn primary" data-x="1">تأیید</button>`,
+    onOpen: (m, close) => {
+      const val = () => ({ ...r, name: $("#crN", m).value.trim(), ban_days: Number($("#crB", m).value) || 0, days_min: Number($("#crD", m).value) || 0, window: Number($("#crW", m).value) || 30,
+        runs_min: Number($("#crR", m).value) || 0, attacks_min: 0, score_min: Number($("#crS1", m).value) || 0, score_max: $("#crS2", m).value === "" ? 100 : Number($("#crS2", m).value),
+        intel: $("#crI", m).value, countries_op: $("#crCo", m).value, countries: $("#crC", m).value.toUpperCase().split(/[\s,\u060c]+/).filter(Boolean), text: $("#crT", m).value.trim() });
+      const pv = async () => { const r2 = await api("clean_rules_preview", { ...val(), name: val().name || "x" });
+        $("#crPv", m).innerHTML = r2.ok ? `<p class="hint">${esc(I18N.t("پیش‌نمایش"))}: ${num(r2.match)}‏ IP ${esc(I18N.t("الان منطبق‌اند"))} — <b>${num(r2.new)}</b> ${esc(I18N.t("بلاک تازه"))}${r2.banned ? `، ${num(r2.banned)} ${esc(I18N.t("از قبل بلاک‌اند"))}` : ""}${r2.excluded ? `، ${num(r2.excluded)} ${esc(I18N.t("در رنج مستثنا"))}` : ""}.</p>
+          ${r2.sample.length ? `<div class="ltr muted" style="font-size:12px">${r2.sample.map(esc).join(", ")}</div>` : ""}` : `<p class="hint warn">${esc(r2.error)}</p>`; };
+      $("#crPrev", m).onclick = (e) => withSpin(e.currentTarget, pv);
+      $("[data-x='0']", m).onclick = () => close();
+      $("[data-x='1']", m).onclick = async () => { const y = val(); if (!y.name) return toast("نام را وارد کنید.", "warn");
+        if (y.days_min > y.window) return toast("روز حمله نمی‌تواند از بازه بیشتر باشد.", "warn");
+        if (!y.days_min && !y.runs_min) return toast("حداقل یکی از «حضور در گزارش‌ها» یا «روز حمله» را بیشتر از صفر بگذارید.", "warn");
+        if (y.score_min > y.score_max) return toast("کمترین امتیاز از بیشترین بزرگ‌تر است.", "warn");
+        if (await onSave(y)) close(); };
+      pv();
+    } });
+}
+/* ---------------------------------------------------------------- 1.59: منابع بررسی تکمیلی */
+const ISRC_KIND = { url: "آدرس اینترنتی", path: "فایل روی کامپیوتر", upload: "آپلود (رمزشده)" };
+const ISRC_FMT = { lines: "خط‌به‌خط (IP/CIDR)", csv: "CSV", ipsum: "IPsum (IP و تعداد فهرست)" };
+let ISRC = { meta: {}, defaults: [] };
+function isrcFmt(x) {
+  if (x.fmt === "csv") return `${I18N.t("ستون")} <span class="ltr">${esc(x.ip_col)}</span>` + (x.score_col ? ` · <span class="ltr">${esc(x.score_col)}</span> ≥ ${num(x.min_score)}` : "");
+  if (x.fmt === "ipsum") return `${I18N.t("حداقل فهرست")} ≥ ${num(x.min_score || 1)}`;
+  return esc(I18N.t(ISRC_FMT.lines));
+}
+function intelSrcBind(body, D) {
+  const L = () => D.intel.sources;
+  const draw = () => {
+    const tb = $("#isrcB", body); if (!tb) return;
+    tb.innerHTML = L().length ? L().map((x, i) => { const m = ISRC.meta[x.id] || {};
+      const when = m.fetched || m.uploaded, cnt = m.ips != null ? `${num(m.ips)}${m.nets ? ` + ${num(m.nets)} ${I18N.t("رنج")}` : ""}` : "—";
+      return `<tr><td><label class="switch"><input type="checkbox" data-ion="${i}" ${x.enabled ? "checked" : ""}><span class="track"><span class="thumb"></span></span></label></td><td><b>${esc(x.name)}</b></td>
+        <td>${esc(I18N.t(ISRC_KIND[x.kind]))}</td><td class="ltr isrc-u" style="font-size:12px">${esc(x.kind === "url" ? x.url : x.kind === "path" ? x.path : m.name || "—")}</td>
+        <td>${isrcFmt(x)}</td><td class="num">${cnt}</td>
+        <td>${when ? fmtDate(when) : x.kind === "path" ? esc(I18N.t("هر اجرا")) : "—"}${m.last_error ? `<div class="warn" style="font-size:12px">${esc(m.last_error)}</div>` : ""}</td>
+        <td><div class="row" style="gap:4px;flex-wrap:nowrap"><button class="btn sm ghost" data-ied="${i}">ویرایش</button>
+          ${x.kind === "url" && ISRC.meta[x.id] !== undefined ? `<button class="btn sm ghost no-ro" data-iup="${esc(x.id)}">به‌روزرسانی</button>` : ""}
+          ${x.kind === "upload" && ISRC.meta[x.id] !== undefined ? `<button class="btn sm ghost no-ro" data-iul="${esc(x.id)}">آپلود فایل…</button>` : ""}
+          <button class="btn sm ghost" data-idel="${i}">حذف</button></div></td></tr>`; }).join("")
+      : `<tr><td colspan="8"><div class="empty">${esc(I18N.t("منبعی نیست؛ «منبع تازه» یا «بازگرداندن پیش‌فرض‌ها»."))}</div></td></tr>`;
+    $$("[data-ion]", tb).forEach((c) => (c.onchange = () => { L()[Number(c.dataset.ion)].enabled = c.checked; }));
+    $$("[data-ied]", tb).forEach((b) => (b.onclick = () => isrcEdit(D, Number(b.dataset.ied), draw)));
+    $$("[data-idel]", tb).forEach((b) => (b.onclick = async () => {
+      const x = L()[Number(b.dataset.idel)];
+      if (!(await confirm2({ title: "حذف منبع", danger: true, confirm: "حذف", body: `<p>«${esc(x.name)}» از منابع حذف شود؟ (با «ذخیره‌ی تنظیمات» اعمال می‌شود)</p>` }))) return;
+      L().splice(Number(b.dataset.idel), 1); draw();
+    }));
+    $$("[data-iup]", tb).forEach((b) => (b.onclick = () => withSpin(b, async () => { const r = await api("intel_source_update", b.dataset.iup); toast(r.ok ? r.message : r.error, r.ok ? "ok" : "error"); await load(); })));
+    $$("[data-iul]", tb).forEach((b) => (b.onclick = () => withSpin(b, async () => {
+      const p = await api("pick_csv"); if (!p.ok) return toast(p.error, "warn"); if (!p.path) return;
+      const r = await api("intel_source_upload", b.dataset.iul, p.path); toast(r.ok ? `${I18N.t("آپلود شد")}: ${r.message}` : r.error, r.ok ? "ok" : "error"); await load();
+    })));
+  };
+  const load = async () => {
+    const r = await api("intel_sources"); if (!r.ok) return;
+    ISRC = { meta: Object.fromEntries(r.sources.map((x) => [x.id, x.meta || {}])), defaults: r.defaults };
+    if (!Array.isArray(D.intel.sources)) {        // تنظیمات پیش از 1.59: منابع مؤثر هم در نسخه‌ی ذخیره‌شده و هم در پیش‌نویس (تغییر حساب نشود)
+      const L0 = r.sources.map(({ meta, ...x }) => x);
+      D.intel.sources = clone(L0); if (S.settings.intel) S.settings.intel.sources = clone(L0);
+    }
+    draw();
+  };
+  $("#isrcNew", body).onclick = () => isrcEdit(D, -1, draw);
+  $("#isrcDef", body).onclick = async () => {
+    if (!(await confirm2({ title: "بازگرداندن پیش‌فرض‌ها", body: `<p>${esc(I18N.t("منابع پیش‌فرض (FFraud، FireHOL، IPsum، AFTA، لیست داخلی) که حذف یا عوض شده‌اند برمی‌گردند؛ منابع خودتان می‌مانند."))}</p>`, confirm: "بازگرداندن" }))) return;
+    const keep = L().filter((x) => !ISRC.defaults.some((d) => d.id === x.id));
+    D.intel.sources = [...ISRC.defaults.map((d) => ({ ...d, enabled: (L().find((x) => x.id === d.id) || d).enabled })), ...keep];
+    draw();
+  };
+  load();
+}
+function isrcEdit(D, i, redraw) {
+  const isNew = i < 0, x = isNew ? { id: "", name: "", enabled: true, kind: "url", url: "", path: "", fmt: "lines", ip_col: "ip", score_col: "", min_score: 0, min_entries: 1 } : { ...D.intel.sources[i] };
+  const seg = (id, opts, cur) => `<div class="seg" id="${id}">${Object.entries(opts).filter(([k]) => !(WEB && k === "path")).map(([k, t]) => `<button type="button" data-v="${k}" class="${cur === k ? "on" : ""}">${esc(I18N.t(t))}</button>`).join("")}</div>`;
+  openModal({ title: isNew ? "منبع تازه" : `ویرایش «${x.name}»`, wide: true,
+    body: `<div class="form-grid">
+      <label class="field"><span>نام</span><input type="text" id="isN" value="${esc(x.name)}" autofocus></label>
+      <div class="field"><span>از کجا</span>${seg("isK", ISRC_KIND, x.kind)}</div>
+      <label class="field wide" id="isUw"><span>آدرس</span><input type="text" id="isU" class="ltr" value="${esc(x.url)}" placeholder="https://"></label>
+      <label class="field wide" id="isPw"><span>مسیر فایل (هر اجرا خوانده می‌شود)</span><input type="text" id="isP" class="ltr" value="${esc(x.path)}" placeholder="C:\\lists\\malicious.csv"></label>
+      <p class="hint wide" id="isUlw">${esc(I18N.t("بعد از ذخیره، در جدول منابع «آپلود فایل…» را بزنید. فایل رمزشده نگه داشته می‌شود."))}</p>
+      <div class="field"><span>قالب</span>${seg("isF", ISRC_FMT, x.fmt)}</div>
+      <label class="field" id="isCw"><span>ستون IP</span><input type="text" id="isC" class="ltr" value="${esc(x.ip_col || "")}" placeholder="ip"></label>
+      <label class="field" id="isSw"><span>ستون امتیاز (اختیاری) و حداقل</span><div class="row" style="gap:6px"><input type="text" id="isS" class="ltr" value="${esc(x.score_col || "")}" placeholder="score" style="width:140px"> ≥ <input type="number" id="isM" value="${esc(x.min_score || 0)}" style="width:90px"></div></label>
+      <label class="field" id="isLw"><span>حداقل تعداد فهرست‌ها</span><input type="number" id="isL" min="1" value="${esc(x.min_score || 3)}"></label>
+      <div class="field wide" id="isTo" hidden></div></div>`,
+    foot: `<button class="btn ghost" id="isTest">آزمایش</button><span style="flex:1"></span><button class="btn ghost" data-x="0">انصراف</button><button class="btn primary" data-x="1">تأیید</button>`,
+    onOpen: (m, close) => {
+      const v = (id) => $("#" + id + " button.on", m)?.dataset.v;
+      const vis = () => { const k = v("isK"), f = v("isF");
+        $("#isUw", m).hidden = k !== "url"; $("#isPw", m).hidden = k !== "path"; $("#isUlw", m).hidden = k !== "upload";
+        $("#isCw", m).hidden = $("#isSw", m).hidden = f !== "csv"; $("#isLw", m).hidden = f !== "ipsum"; };
+      $$(".seg", m).forEach((g) => g.addEventListener("click", (e) => { const b = e.target.closest("button[data-v]"); if (!b) return; $$("button", g).forEach((y) => y.classList.toggle("on", y === b)); vis(); }));
+      vis();
+      const val = () => { const f = v("isF");
+        return { ...x, name: $("#isN", m).value.trim(), kind: v("isK"), url: $("#isU", m).value.trim(), path: $("#isP", m).value.trim(), fmt: f,
+          ip_col: $("#isC", m).value.trim(), score_col: $("#isS", m).value.trim(), min_score: Number(f === "ipsum" ? $("#isL", m).value : $("#isM", m).value) || 0 }; };
+      $("#isTest", m).onclick = (e) => withSpin(e.currentTarget, async () => {
+        const r = await api("intel_source_test", val()), o = $("#isTo", m); o.hidden = false;
+        if (!r.ok) { o.innerHTML = `<p class="hint warn">${esc(r.error)}</p>`; return; }
+        o.innerHTML = `<p class="hint ${r.ok ? "" : "warn"}">${num(r.ips)}‏ IP، ${num(r.nets)} ${esc(I18N.t("رنج"))}${r.columns.length ? ` — ${esc(I18N.t("ستون‌ها"))}: <span class="ltr">${esc(r.columns.join(", "))}</span>` : ""}</p>
+          ${r.sample.length ? `<pre class="ltr paste-prev" data-no-i18n>${esc(r.sample.join("\n"))}</pre>` : ""}`;
+      });
+      $("[data-x='0']", m).onclick = () => close();
+      $("[data-x='1']", m).onclick = () => {
+        const y = val();
+        if (!y.name) return toast("نام را وارد کنید.", "warn");
+        if (y.kind === "url" && !/^https?:\/\//i.test(y.url)) return toast("آدرس باید با https:// شروع شود.", "warn");
+        if (y.kind === "path" && !y.path) return toast("مسیر فایل را وارد کنید.", "warn");
+        if (y.fmt === "csv" && !y.ip_col) return toast("نام ستون IP را برای CSV وارد کنید.", "warn");
+        if (D.intel.sources.some((z, j) => j !== i && z.name.toLowerCase() === y.name.toLowerCase())) return toast("نام منبع تکراری است.", "warn");
+        if (isNew) D.intel.sources.push(y); else D.intel.sources[i] = y;
+        close(); redraw();
+      };
+    } });
+}
 function renderFgSettings(body, D) {
   const conns = fgDraftConns();
   if (!conns.includes(S.fgDev)) S.fgDev = "fortigate";
@@ -2249,6 +2520,10 @@ function renderFgSettings(body, D) {
       <p class="hint">قاعده‌ها از بالا بررسی می‌شوند؛ اولین قاعده‌ای که با IP جور باشد مدت بلاک را تعیین می‌کند. اگر هیچ‌کدام جور نبود، «مدت بلاک پیش‌فرض» همان دستگاه به کار می‌رود. قاعده‌ها برای اجرای دستی و خودکار یکسان‌اند و برای همه‌ی دستگاه‌ها مشترک. اطلاعات هر IP (کشور، امتیاز، ISP) از فهرست «آدرس‌ها» می‌آید؛ اگر برای IP ثبت نشده باشد، قاعده‌ی آن شرط جور نمی‌شود. بعد از تمام شدن مدت، FortiGate خودش بلاک را برمی‌دارد و اگر IP دوباره دیده شود از نو بررسی و بلاک می‌شود.</p>
       <div id="brList">${brRows(D.fortigate.ban_rules || [])}</div>
       <div class="form-foot"><button class="btn" id="brAdd">افزودن قاعده</button><span class="hint">مثال: کشور یکی از IR ← ۳۰ روز. مدت به روز است؛ ۰ یعنی دائم.</span></div></div>
+    <div class="form" id="crForm"><h3>قاعده‌های بلاک غیرمخرب‌ها</h3>
+      <p class="hint">قانون اصلی عوض نمی‌شود (فقط مخرب‌ها بلاک می‌شوند). این قاعده‌ها IP غیرمخربی را که شرط‌هایشان را دارد هم برای بلاک می‌آورند — درست مثل مخرب‌ها: اگر بلاک خودکار روشن است بلاک می‌شود، وگرنه به فهرست تأیید می‌رود؛ رنج‌های مستثنا همه‌جا معتبرند. «روز حمله» = روزهای مختلفی که IP در خروجی Splunk بوده. بعد از پایان بلاکی که قاعده زده، شمارش از صفر شروع می‌شود. اولین قاعده‌ی منطبق مدت را تعیین می‌کند.</p>
+      <div class="table-wrap inner"><table class="grid nosort"><thead><tr><th></th><th>نام</th><th>شرط‌ها (همه با هم)</th><th>مدت بلاک</th><th>الان منطبق</th><th></th></tr></thead><tbody id="crList"></tbody></table></div>
+      <div class="form-foot"><button class="btn" id="crAdd">قاعده‌ی تازه</button><span class="hint">تغییرها با «ذخیره‌ی تنظیمات» ذخیره می‌شوند.</span></div></div>
     <div class="form"><h3>تسک‌ها</h3>
       <p class="hint">تسک = کد پایتون با تابع plan(fg, rows, ctx). کد فقط می‌خواند و «کار» پیشنهاد می‌کند؛ برنامه فهرست کارها را نشان می‌دهد و فقط کارهای تأییدشده را به همان دستگاه می‌فرستد (حالت تست: هیچ). در کارهای خودکار، با تیک «FortiGate بدون تأیید» بدون پنجره‌ی تأیید اجرا می‌شود.</p>
       <p class="hint warn">${WEB ? "کد پایتون روی همین سرور اجرا می‌شود و قابل محصورسازی کامل نیست؛ فقط ادمین تسک می‌سازد و هر تغییر کد با diff در تاریخچه ثبت می‌شود. کدی را که نمی‌شناسید اجرا نکنید."
@@ -2259,6 +2534,7 @@ function renderFgSettings(body, D) {
       <div class="form-foot"><button class="btn" id="scNew">افزودن تسک…</button><span class="hint">تغییرها با «ذخیره‌ی تنظیمات» ذخیره می‌شوند.</span></div></div>`;
   $$("[data-fgdev]", body).forEach((b) => (b.onclick = () => { S.fgDev = b.dataset.fgdev; renderSettings(); }));
   brBind(body, D);
+  crBind(body, D);
   const add = $("#fgAdd", body);
   if (add) add.onclick = async () => {
     const r = await api("fg_device_add", ""); if (!r.ok) return toast(r.error, "error");
@@ -2479,61 +2755,20 @@ function renderSettings() {
   } else if (t === "intel") {
     if (!D.intel) D.intel = {};
     const I = D.intel;
-    if (!I.lists) I.lists = {};
-    if (!I.list_urls) I.list_urls = {};
-    /* 1.46.1: همه‌ی منبع‌ها یک شکل: کلید روشن/خاموش، توضیح، دکمه، وضعیت و «تنظیمات» همان منبع؛ تنظیمات دانلود مشترک پایین */
-    const SRC = [
-      { k: "ffraud", name: "FFraud", on: "intel.feed_enabled", onv: I.feed_enabled !== false, d: "IPهای سوءاستفاده‌گر تأییدشده با امتیاز و دسته؛ هر ۳۰ دقیقه به‌روز می‌شود",
-        btn: `<button class="btn sm no-ro" id="btnIntelFeed">دریافت الان</button>`,
-        opts: `${inp("intel.feed_url", "آدرس (CSV با ستون ip)", { ltr: true, wide: true })}${inp("intel.min_score", "حداقل امتیاز ffraud_score", { type: "num", hint: "۰ تا ۱۰۰. خود فید فقط IPهای با امتیاز ۵۰ و بیشتر را دارد." })}` },
-      ...[["firehol_l1", "FireHOL Level 1", "مجموعه‌ی DShield، Feodo Tracker (abuse.ch) و Spamhaus DROP؛ کم‌خطا، مناسب بلاک"],
-        ["ipsum", "IPsum", "IPهایی که در چند فهرست عمومی (بیش از ۳۰ منبع) آمده‌اند؛ هر روز به‌روز می‌شود"],
-        ["afta", "AFTA IOC", "فهرست IP شاخص‌های نفوذ مرکز افتا (afta.gov.ir)"]].map(([k, nm, d]) => ({ k, name: nm, on: "intel.lists." + k, onv: !!I.lists[k], d,
-        btn: `<button class="btn sm no-ro" data-ilist="${k}">دریافت الان</button>`,
-        opts: `${inp("intel.list_urls." + k, "آدرس (خالی = پیش‌فرض)", { ltr: true, wide: true, ph: "", hint: "" })}${k === "ipsum" ? inp("intel.ipsum_min", "حداقل تعداد فهرست‌ها", { type: "num", hint: "IPی مخرب حساب می‌شود که دست‌کم در این تعداد فهرست آمده باشد. پیشنهاد سازنده‌ی IPsum: ۳ (کمتر = خطای بیشتر)." }) : ""}` })),
-      { k: "local", name: "لیست داخلی", on: "intel.local_enabled", onv: !!I.local_enabled, d: "فهرست IP یا رنج خودتان (مثل malicious.csv)",
-        btn: `<button class="btn sm no-ro" id="btnIntelUp">بارگذاری فایل…</button><button class="btn sm danger-ghost no-ro" id="btnIntelClr">حذف</button>`,
-        opts: `${WEB ? "" : inp("intel.local_path", "یا مسیر فایل (هر اجرا خوانده می‌شود)", { ltr: true, wide: true, ph: "C:\\lists\\malicious.csv", hint: "اگر پر باشد همین فایل در هر اجرا خوانده می‌شود و فایل آپلودشده استفاده نمی‌شود؛ وقتی فایل را به‌روز می‌کنید لازم نیست دوباره بارگذاری کنید. فایل در همان مسیر رمزنشده می‌ماند." })}
-          <p class="hint">قالب: هر خط یک IP یا رنج CIDR در ستون اول (مثل malicious.csv)؛ سرستون‌هایی مثل ip و src_ip و خطوط # نادیده گرفته می‌شوند. فایل آپلودشده رمزشده نگه داشته می‌شود؛ وقتی فایل شما به‌روز شد دوباره بارگذاری کنید.</p>` },
-    ];
-    body.innerHTML = `<div class="form"><h3>منبع‌های بررسی تکمیلی</h3>
-      <p class="hint">فهرست‌ها فقط متن ساده‌ی IP و رنج‌اند و فقط به‌عنوان داده خوانده می‌شوند (هیچ فایلی اجرا یا باز نمی‌شود)؛ هر خطی که IP یا CIDR معتبر نیست کنار گذاشته می‌شود، رنج‌های داخلی و رزرو هرگز مخرب حساب نمی‌شوند و فایل ذخیره‌شده با اثر انگشت بررسی می‌شود. هیچ IPی از شبکه‌ی شما بیرون فرستاده نمی‌شود و محدودیت تعداد بررسی ندارند.</p>
-      <div class="isrc-list">${SRC.map((x) => `<div class="isrc" data-isrc="${x.k}">
-        <div class="isrc-head">${sw(x.on, x.onv, `<b>${esc(x.name)}</b>`)}<span class="muted isrc-d">${esc(I18N.t(x.d))}</span><span class="isrc-b">${x.btn}</span></div>
-        <div class="hint isrc-st" id="intelSt_${x.k}">…</div>
-        <details class="isrc-opt"><summary>تنظیمات</summary><div class="form-grid">${x.opts}</div></details></div>`).join("")}</div></div>
+    /* 1.59: مدیر منابع — فهرست قابل ویرایش (پیش‌فرض‌ها هم)؛ تغییرها در پیش‌نویس تا «ذخیره‌ی تنظیمات» */
+    body.innerHTML = `<div class="form"><h3>منابع</h3>
+      <p class="hint">هر منبع یک فهرست IP یا رنج است: آدرس اینترنتی، فایل روی همین کامپیوتر (هر اجرا خوانده می‌شود) یا فایل آپلودشده (رمزشده). فقط به‌عنوان داده خوانده می‌شوند؛ از منبع اینترنتی فقط IP عمومی پذیرفته می‌شود. اگر منبع روشنی خوانده نشود، ابزار خطا می‌دهد و هیچ IPای «پاک» حساب نمی‌شود.</p>
+      <div class="table-wrap inner"><table class="grid" id="isrcT"><thead><tr><th class="nosort"></th><th>نام</th><th>نوع</th><th>آدرس / مسیر</th><th>قالب و آستانه</th><th>تعداد</th><th>آخرین دریافت</th><th class="nosort"></th></tr></thead><tbody id="isrcB"><tr><td colspan="8">…</td></tr></tbody></table></div>
+      <div class="form-foot"><button class="btn primary" id="isrcNew">منبع تازه</button><button class="btn ghost" id="isrcDef">بازگرداندن پیش‌فرض‌ها</button><span class="hint">تغییرها با «ذخیره‌ی تنظیمات» ذخیره می‌شوند.</span></div></div>
     <div class="form"><h3>دانلود منبع‌های آنلاین</h3><div class="form-grid">
-      ${inp("intel.refresh_minutes", "دانلود دوباره حداکثر هر (دقیقه)", { type: "num", hint: "تا این مدت نسخه‌ی ذخیره‌شده استفاده می‌شود؛ بعد از آن فقط اگر تغییر کرده باشد دانلود می‌شود (ETag)." })}
+      ${inp("intel.refresh_minutes", "دانلود دوباره حداکثر هر (دقیقه)", { type: "num", hint: "تا این مدت نسخه‌ی ذخیره‌شده استفاده می‌شود؛ بعد از آن فقط اگر تغییر کرده باشد دانلود می‌شود." })}
       ${inp("intel.max_age_hours", "استفاده از نسخه‌ی ذخیره‌شده هنگام خطای دانلود تا (ساعت)", { type: "num", hint: "قدیمی‌تر از این ← ابزار خطا می‌دهد و هیچ IPای پاک حساب نمی‌شود." })}
       ${inp("intel.timeout", "Timeout دانلود (ثانیه)", { type: "num" })}
       <div class="field"><span>&nbsp;</span>${sw("intel.verify_ssl", I.verify_ssl !== false, "بررسی گواهی SSL")}</div></div></div>
     <div class="form"><h3>بلاک</h3>
       ${sw("intel.auto_ban", !!I.auto_ban, "بلاک مخرب‌های بررسی تکمیلی در FortiGate بدون تأیید")}
       <p class="hint">فقط در کار زمان‌بندی‌شده‌ای که «بلاک بدون تأیید» آن روشن است اثر دارد (با همان سقف بلاک). پیش‌فرض خاموش: پیش از بلاک، فهرست را می‌بینید و تأیید می‌کنید.</p></div>`;
-    const stLine = (m, what) => m.fetched ? `${esc(I18N.t("نسخه‌ی ذخیره‌شده"))}: <span class="ltr">${fmtDate(m.fetched)}</span> — ${what}${m.last_error ? `<br><span class="warn">${esc(I18N.t("آخرین خطا"))}: ${esc(m.last_error)}</span>` : ""}`
-      : (m.last_error ? `<span class="warn">${esc(m.last_error)}</span>` : esc(I18N.t("هنوز دانلود نشده است (اولین اجرای ابزار یا «دریافت الان»).")));
-    const showSt = async () => {
-      const r = await api("intel_status"); if (!r.ok) return;
-      const f = r.feed || {}, l = r.local || {}, set = (k, h) => { const el = $("#intelSt_" + k); if (el) el.innerHTML = h; };
-      set("ffraud", stLine(f, `${num(f.rows)}‏ IP، ${num(Math.round((f.size || 0) / 1024))}KB`));
-      Object.entries(r.lists || {}).forEach(([k, m]) => set(k, stLine(m, `${num(m.ips)}‏ IP، ${num(m.nets)} ${esc(I18N.t("رنج"))}`)));
-      set("local", l.uploaded ? `${esc(I18N.t("فایل آپلودشده"))}: <b class="ltr">${esc(l.name)}</b> — <span class="ltr">${fmtDate(l.uploaded)}</span> — ${num(l.ips)}‏ IP، ${num(l.nets)} ${esc(I18N.t("رنج"))}${l.invalid ? `، <span class="warn">${num(l.invalid)} ${esc(I18N.t("خط نامعتبر"))}</span>` : ""}` : esc(I18N.t("فایلی آپلود نشده است.")));
-      Object.entries(r.lists || {}).forEach(([k, m]) => { const x = $(`[data-path="intel.list_urls.${k}"]`); if (x) x.placeholder = m.default_url || ""; });
-    };
-    showSt();
-    $$("[data-ilist]").forEach((x) => (x.onclick = (e) => withSpin(e.currentTarget, async () => { const r = await api("intel_list_update", x.dataset.ilist); toast(r.ok ? r.message : r.error, r.ok ? "ok" : "error"); showSt(); })));
-    $("#btnIntelFeed").onclick = (e) => withSpin(e.currentTarget, async () => { const r = await api("intel_feed_update"); toast(r.ok ? r.message : r.error, r.ok ? "ok" : "error"); showSt(); });
-    $("#btnIntelUp").onclick = (e) => withSpin(e.currentTarget, async () => {
-      const p = await api("pick_csv"); if (!p.ok) return toast(p.error, "warn"); if (!p.path) return;
-      const r = await api("intel_local_upload", p.path); if (!r.ok) return toast(r.error, "error");
-      S.settings = r.settings; setPath(S.draft, "intel.local_enabled", true);
-      toast(`لیست داخلی بارگذاری شد: ${num(r.local.ips)}‏ IP و ${num(r.local.nets)} رنج`, "ok"); renderSettings();
-    });
-    $("#btnIntelClr").onclick = async () => {
-      if (!(await confirm2({ title: "حذف لیست داخلی", body: "<p>فایل آپلودشده‌ی لیست داخلی حذف شود؟</p>", confirm: "حذف", danger: true }))) return;
-      const r = await api("intel_local_clear"); if (!r.ok) return toast(r.error, "error");
-      S.settings = r.settings; setPath(S.draft, "intel.local_enabled", !!r.settings.intel.local_enabled); toast("حذف شد", "ok"); renderSettings();
-    };
+    intelSrcBind(body, D);
   } else if (t === "scan") {
     if (!D.scan) D.scan = { allowed_networks: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"], max_hosts: 1024, max_probes: 200000, workers: 100, timeout: 1 };
     body.innerHTML = `<div class="form"><h3>ابزار اسکن شبکه</h3><div class="form-grid">
@@ -3457,6 +3692,8 @@ async function renderAbout() {
       ${r.build ? `<dt>نوع نسخه</dt><dd>${r.build.full ? "کامل (همه‌ی ماژول‌ها)" : `${r.build.edition ? `<b class="ltr">${esc(r.build.edition)}</b> — ` : ""}${r.build.modules.map((m) => esc(I18N.t(r.build.titles[m] || m))).join(I18N.t("، ")) || "—"}`}${r.build.mode === "client" ? " — فقط کلاینت" : r.build.mode === "server" ? " — فقط سرور" : ""}</dd>` : ""}</dl></div>
       <div class="sec"><h3>ارتباط با سازنده</h3><dl class="kv">${(r.contacts || []).map((c) => `<dt>${{ email: "ایمیل", telegram: "تلگرام", github: "GitHub", issues: "گزارش مشکل / پیشنهاد" }[c.kind] || esc(c.kind)}</dt>
         <dd>${WEB && /^(https:|mailto:)/.test(c.url || "") ? `<a href="${esc(c.url)}" class="ltr" target="_blank" rel="noopener noreferrer">${esc(c.text)}</a>` : `<a href="#" class="ltr" data-contact="${esc(c.kind)}">${esc(c.text)}</a>`}</dd>`).join("")}</dl></div>
+      ${(r.other_apps || []).length ? `<div class="sec"><h3>برنامه‌های دیگر این ناشر</h3><dl class="kv">${r.other_apps.map((a) => `<dt class="ltr" data-no-i18n>${esc(a.name)}</dt>
+        <dd>${esc(a.desc || "")} ${WEB ? `<a href="${esc(a.url)}" class="ltr" target="_blank" rel="noopener noreferrer">${esc(a.url.replace(/^https:\/\//, ""))}</a>` : `<span class="ltr">${esc(a.url.replace(/^https:\/\//, ""))}</span>`}</dd>`).join("")}</dl></div>` : ""}
       <div class="sec"><h3>محیط اجرا</h3><dl class="kv"><dt>Python</dt><dd class="ltr" style="text-align:start">${esc(r.python)}</dd><dt>سیستم‌عامل</dt><dd class="ltr" style="text-align:start">${esc(r.os)}</dd>
       ${Object.entries(r.libs).map(([k, v]) => `<dt>${esc(k)}</dt><dd class="ltr" style="text-align:start">${esc(v)}</dd>`).join("")}
       <dt>پوشه‌ی داده</dt><dd class="ltr" style="text-align:start">${esc(r.data_dir)}</dd></dl></div>
@@ -4458,18 +4695,17 @@ async function bkPanel() {
   const vs = (vr.ok && vr.versions) || [];
   b.pick = (b.pick || []).filter((id) => vs.some((v) => v.id === id));
   box.innerHTML = `<div class="panel"><div class="panel-head"><h3><span class="tech">${esc(cur.name)}</span> <span class="muted ltr">${esc(cur.host)}</span></h3></div>
-    <p class="hint">${num(vs.length)} نسخه${cur.backup_status ? ` — آخرین پشتیبان‌گیری: ${stTag(cur.backup_status)} ${fmtDate(cur.backup_at)}` : ""}${cur.backup_on ? "" : ` — <span class="tag mute">پشتیبان خاموش</span>`}</p>
+    <div class="bk-sum"><span>${num(vs.length)} نسخه</span>${cur.backup_status ? `<span>${esc(I18N.t("آخرین پشتیبان‌گیری"))}: ${stTag(cur.backup_status)} <span class="ltr">${fmtDate(cur.backup_at)}</span></span>` : ""}${cur.backup_on ? "" : `<span class="tag mute">پشتیبان خاموش</span>`}</div>
     <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">
       <button class="btn sm primary" id="bkOne" data-need-run="ssh">پشتیبان‌گیری همین دستگاه</button>
       <button class="btn sm" id="bkCmp" ${b.pick.length === 2 ? "" : "disabled"}>مقایسه‌ی دو نسخه</button>
       <button class="btn sm danger-ghost adm-only" id="bkDelSel" ${b.pick.length ? "" : "disabled"}>حذف انتخاب‌شده‌ها (${num(b.pick.length)})</button></div>
-    <div class="table-wrap inner bk-vers"><table class="grid"><thead><tr><th class="chk nosort"></th>${["زمان", "خطوط", "تغییر", "حجم", ""].map((t) => `<th class="nosort">${t}</th>`).join("")}</tr></thead><tbody>
+    <div class="table-wrap inner bk-vers"><table class="grid bk-vt"><thead><tr><th class="chk nosort"></th>${["زمان", "تغییر", ""].map((t) => `<th class="nosort">${t}</th>`).join("")}</tr></thead><tbody>
     ${vs.length ? vs.map((v, i) => `<tr><td class="chk"><input type="checkbox" class="bkPick" value="${v.id}" ${b.pick.includes(v.id) ? "checked" : ""}></td>
-      <td class="ltr nowrap">${fmtDate(v.ts)}</td><td class="num">${num(v.lines)}</td>
-      <td class="nowrap">${v.first ? `<span class="tag mute">اولین نسخه</span>` : `<span class="tag ok">+${num(v.added)}</span> <span class="tag err">−${num(v.removed)}</span>`}</td>
-      <td class="num ltr nowrap">${(v.size / 1024).toFixed(1)} KB</td>
-      <td><div class="row" style="gap:4px;flex-wrap:wrap"><button class="btn sm" data-bv="${v.id}">نمایش</button>${vs[i + 1] ? `<button class="btn sm" data-bdf="${vs[i + 1].id}|${v.id}">تفاوت با قبلی</button>` : ""}<button class="btn sm ghost" data-bx="${v.id}">دانلود</button><button class="btn sm danger-ghost adm-only" data-bdel="${v.id}" title="حذف این نسخه">✕</button></div></td></tr>`).join("")
-      : `<tr><td colspan="6"><div class="empty">${cur.backup_on ? "هنوز نسخه‌ای ذخیره نشده است. «پشتیبان‌گیری همین دستگاه» را بزنید." : "پشتیبان‌گیری برای این دستگاه خاموش است."}</div></td></tr>`}
+      <td><span class="ltr">${fmtDate(v.ts)}</span><div class="muted bk-vm">${num(v.lines)} ${I18N.t("خط")} · <span class="ltr">${fmtBytes(v.size)}</span></div></td>
+      <td>${v.first ? `<span class="tag mute">اولین نسخه</span>` : `<span class="tag ok">+${num(v.added)}</span> <span class="tag err">−${num(v.removed)}</span>`}</td>
+      <td><div class="bk-va"><button class="btn sm" data-bv="${v.id}" title="نمایش">👁</button>${vs[i + 1] ? `<button class="btn sm" data-bdf="${vs[i + 1].id}|${v.id}" title="تفاوت با قبلی">⇄</button>` : ""}<button class="btn sm ghost" data-bx="${v.id}" title="دانلود">⬇</button><button class="btn sm danger-ghost adm-only" data-bdel="${v.id}" title="حذف این نسخه">✕</button></div></td></tr>`).join("")
+      : `<tr><td colspan="4"><div class="empty">${cur.backup_on ? "هنوز نسخه‌ای ذخیره نشده است. «پشتیبان‌گیری همین دستگاه» را بزنید." : "پشتیبان‌گیری برای این دستگاه خاموش است."}</div></td></tr>`}
     </tbody></table></div></div>`;
   $("#bkOne", box).onclick = async () => { const x = await api("backup_now", [cur.id]); if (!x.ok) return toast(x.error, "error"); toast("پشتیبان‌گیری شروع شد", "ok"); SSH.jobSig = ""; pollSsh(true); };
   $$(".bkPick", box).forEach((c) => (c.onchange = () => {

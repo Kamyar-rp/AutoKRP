@@ -165,10 +165,23 @@
           <button data-f="fw_pending">جامانده از بلاک</button>
           <button data-f="intel" title="مخرب در «بررسی تکمیلی» (فید یا لیست داخلی)">مخرب تکمیلی</button>
         </div>
-        <select id="ipCountry" title="فقط IPهای یک کشور (کد کشور دقیق، نه جستجوی متن)"><option value="">همه‌ی کشورها</option></select>
-        <label class="ip-days" title="فقط IPهایی که دست‌کم این تعداد روزِ مختلف در AbuseIPDB بررسی شده‌اند"><span>روز بررسی ≥</span><input type="number" id="ipDays" min="0" max="3650" placeholder="—"></label>
+        <div class="ipf-pop-w"><button class="btn ghost sm" id="ipCcBtn" type="button">کشور: همه ▾</button>
+          <div class="ipf-pop" id="ipCcPop" hidden><input type="search" class="search" id="ipCcQ" placeholder="جستجوی کشور…"><div class="ipf-cc" id="ipCcList"></div>
+            <div class="row" style="gap:6px;margin-top:6px"><button class="btn sm ghost" data-ccop="in" type="button">فقط این‌ها</button><button class="btn sm ghost" data-ccop="not_in" type="button">همه جز این‌ها</button><button class="btn sm ghost" data-ccop="clear" type="button">همه‌ی کشورها</button></div></div></div>
+        <span class="muted ipf-l" title="روزهای مختلفی که IP در ۳۰ روز اخیر در خروجی Splunk بوده">روز حمله ≥</span>
+        <div class="seg" id="ipAtkD"><button data-v="0" class="on">—</button><button data-v="2">2</button><button data-v="5">5</button><button data-v="10">10</button><button data-v="c" title="عدد دلخواه">…</button></div>
+        <input type="number" id="ipAtkDc" min="1" max="30" class="ipf-num" hidden placeholder="روز">
+        <div class="ipf-pop-w"><button class="btn ghost sm" id="ipMoreBtn" type="button">فیلترهای بیشتر ▾</button>
+          <div class="ipf-pop wide" id="ipMorePop" hidden>
+            <label class="field"><span>امتیاز AbuseIPDB</span><div class="row" style="gap:6px"><input type="number" id="ipScMin" min="0" max="100" placeholder="0" class="ipf-num"> تا <input type="number" id="ipScMax" min="0" max="100" placeholder="100" class="ipf-num"></div></label>
+            <label class="field"><span title="چند اجرای Splunk در ۳۰ روز اخیر این IP را گزارش کرده‌اند">حضور در گزارش‌ها (۳۰ روز) ≥</span><input type="number" id="ipAtkT" min="0" class="ipf-num"></label>
+            <label class="field"><span title="روزهای مختلفی که IP به مرحله‌ی AbuseIPDB رسیده">روز بررسی AbuseIPDB ≥</span><input type="number" id="ipDays" min="0" max="3650" class="ipf-num" placeholder="—"></label>
+            <div class="field"><span>بررسی تکمیلی</span><div class="seg" id="ipIntel"><button data-v="" class="on">مهم نیست</button><button data-v="ABUSE">مخرب</button><button data-v="CLEAN">پاک</button><button data-v="none">بررسی‌نشده</button></div></div>
+            <label class="field"><span>ISP / نوع استفاده شامل</span><input type="text" id="ipText" placeholder="Data Center, Hosting…"></label>
+          </div></div>
         <span class="muted" id="ipCount"></span>
       </div>
+      <div class="ipf-bar" id="ipFiltBar" hidden><b id="ipFiltN"></b><button class="btn sm warn no-ro" id="ipFiltBan" data-need-tool="fortigate">بلاک همه‌ی این‌ها…</button><button class="btn sm adm-only" id="ipFiltRule" data-need-tool="fortigate">ذخیره به‌عنوان قاعده‌ی بلاک…</button><button class="btn sm ghost" id="ipFiltClr">پاک کردن فیلترها</button><span class="muted" id="ipFiltHint"></span></div>
       <div class="table-wrap" id="ipTableWrap"><table class="grid" id="ipTable"></table></div>
       <div class="selbar no-ro" id="selBar" hidden>
         <b id="selCount"></b>

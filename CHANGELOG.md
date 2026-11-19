@@ -2,6 +2,58 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.59.1] — 2026-11-18
+
+### Changed
+- **Block rules for non-malicious IPs** now count **appearances in reports**: how many Splunk runs reported the IP in the last N days (for example "3 times in 30 days"). "Attack days" stays as an optional second condition; the unreliable attack-total condition was removed from the rule editor. New rules default to 3 appearances in 30 days.
+- **Addresses page**: the attack-count columns were removed. The table shows "Appearances in reports (30 days)" and "Attack days (30 days)"; the filter uses appearances.
+- **Rule preview** now splits matching IPs into new blocks, already blocked and excluded ranges, so the numbers add up.
+- **Monitoring**: the top toolbar is compact. Main actions stay visible; SNMP credentials, maintenance windows, policies, NOC dashboards and the sound test moved to a "More" menu, and the sound switch is an icon. The group list shows the number of targets in each group and no longer stretches.
+- **Device backups**: the versions side panel is compact (time with lines and size, change, icon buttons) and never scrolls sideways.
+
+### Fixed
+- Dashboards: the target list in widget settings is now a searchable checkbox list filtered by the chosen group and service type, with "All shown" and "None"; selecting and removing targets works without Ctrl-click. The services widget explains its columns.
+- Dashboards: right-to-left and left-to-right alignment of table columns.
+- Dashboards: the response-time chart fits its widget instead of scrolling.
+- Settings → Supplementary check: long addresses or paths no longer run into the "Type" column.
+- NOC: the auto-rotation time setting explains when it applies, and the view tells you when only one dashboard has a rotation time.
+
+## [1.59.0] — 2026-11-17
+
+### Added
+- **Block rules for non-malicious IPs** (Settings → FortiGate). The main rule does not change: only malicious IPs are blocked. In addition, you can define rules that also bring non-malicious IPs for blocking when all of a rule's conditions are met:
+  - attack days in the last N days (different days on which the IP was in the Splunk output);
+  - total attacks in the same window;
+  - AbuseIPDB score range;
+  - supplementary check result;
+  - countries (in / not in);
+  - ISP or usage type.
+  Each rule has its own block duration in days. They follow the same path as malicious IPs: blocked when auto-block is on, otherwise sent to the approval list; excluded ranges always apply. After a block placed by a rule ends, counting starts again from zero. A preview shows how many IPs match now.
+- **Addresses page**:
+  - New columns "Attack days (30 days)" and "Attacks (30 days)". Attacks are now stored per day; for each day, the highest count reported by that day's Splunk runs is kept. The old "Attack count" column is now "Attacks (last Splunk run)".
+  - Compact, searchable country picker with "only these" / "all except these".
+  - Quick buttons for attack days (≥ 2, 5, 10 or a custom number).
+  - "More filters": AbuseIPDB score range, attacks in 30 days, AbuseIPDB check days, supplementary check result, ISP/usage type.
+  - When a filter is active, a bar offers "Block all of these…" (with the duration in days; already-blocked IPs are skipped; the final list is still approved on the Tools page) and "Save as block rule…".
+- **Supplementary check: source manager** (Settings → Supplementary check). Every source, including the defaults (FFraud, FireHOL, IPsum, AFTA, internal list), can be edited, turned off or removed; "Restore defaults" brings them back.
+  - New sources can be an internet address, a file on this computer (read on every run) or an uploaded file (stored encrypted).
+  - Formats: one IP/CIDR per line, CSV (IP column, optional score column and minimum) or IPsum.
+  - "Test" downloads or reads a source and shows the count and a sample before saving.
+  - Same safety as before: only public IPs from internet sources, fingerprint check of the saved copy, and an enabled source that cannot be read stops the check instead of marking IPs clean.
+- **Dashboards: five new widgets**:
+  - Services table: Ping/HTTP/TCP status, current, average and maximum response time, availability, trend and HTTPS certificate days; sortable.
+  - Response-time chart for up to 8 services.
+  - Status tiles for NOC screens.
+  - 24-hour availability bar.
+  - SNMP table: ports (all / up / down / watched / busiest), hardware or OIDs of one device.
+  Clicking a service opens its chart window.
+- **Service chart window** (Ping/HTTP/TCP): cards for current, average and maximum response time, availability and outages, plus "Add to dashboard…" which adds a response-time chart for that service to a dashboard you can edit.
+- About: an "Other apps by this publisher" section (shown when there are any).
+
+### Changed
+- Pages use the full window width on large screens (previously limited to 1500 px).
+- The supplementary check log and summary list the matches per source.
+
 ## [1.58.1] — 2026-11-16
 
 ### Fixed

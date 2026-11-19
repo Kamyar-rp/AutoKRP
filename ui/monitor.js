@@ -112,7 +112,7 @@ function monBanner() {
 function monSetMute(v) {
   MON.muted = v; try { localStorage.setItem("akrp_mon_mute", v ? "1" : "0"); } catch (_) { /* */ }
   if (v) monStopSound();
-  const m = $("#monMute"); if (m) m.textContent = I18N.t(v ? "صدا: خاموش" : "صدا: روشن");
+  const m = $("#monMute"); if (m) { m.textContent = v ? "🔕" : "🔔"; m.title = I18N.t(v ? "صدا: خاموش" : "صدا: روشن"); }
 }
 function monNotifyBrowser(a) {
   try {
@@ -206,15 +206,21 @@ function monChips() {
 }
 function monBannerCap() { const el = $("#monCapB"); if (el) el.innerHTML = monCapBanner(); }
 function renderMon() {
-  $("#monActions").innerHTML = `${MON.canAdd ? `<button class="btn primary" id="monAdd">+ هدف تازه</button><button class="btn" id="monSnmpP">اعتبارنامه‌های SNMP</button>` : ""}
-    <button class="btn" id="monMaint">پنجره‌های نگهداری</button>${MON.admin ? `<button class="btn" id="monPol" title="بازه، دقت داده، نگهداری و این‌که چه داده‌ای جمع شود">سیاست‌های پایش</button>` : ""}${axOk("monitor.noc") ? `<button class="btn" id="monNoc" title="نمای تمام‌صفحه برای مانیتور دیواری">نمای NOC</button>` : ""}${MON.admin && axOk("monitor.noc", "run") ? `<button class="btn" id="monNocD" title="داشبوردهای نام‌دار برای مانیتور دیواری: هدف‌ها، چیدمان، نمودار uplink و چرخش خودکار">داشبوردهای NOC</button>` : ""}
-    <button class="btn ghost" id="monMute">${MON.muted ? "صدا: خاموش" : "صدا: روشن"}</button>
+  // 1.59.1: نوار بالا جمع‌وجور — کارهای اصلی بیرون، بقیه در منوی «بیشتر»
+  const more = `${MON.canAdd ? `<button class="btn ghost" id="monSnmpP">اعتبارنامه‌های SNMP</button>` : ""}
+    <button class="btn ghost" id="monMaint">پنجره‌های نگهداری</button>${MON.admin ? `<button class="btn ghost" id="monPol" title="بازه، دقت داده، نگهداری و این‌که چه داده‌ای جمع شود">سیاست‌های پایش</button>` : ""}${MON.admin && axOk("monitor.noc", "run") ? `<button class="btn ghost" id="monNocD" title="داشبوردهای نام‌دار برای مانیتور دیواری: هدف‌ها، چیدمان، نمودار uplink و چرخش خودکار">داشبوردهای NOC</button>` : ""}
     <button class="btn ghost" id="monTest" title="پخش صدای قطعی برای امتحان">امتحان صدا</button>
     ${WEB && "Notification" in window && Notification.permission === "default" ? `<button class="btn ghost" id="monNotif">اعلان مرورگر</button>` : ""}
     ${MON.desktop && MON.admin ? `<button class="btn danger-ghost" id="monQuit" title="بستن کامل برنامه؛ با بستن پنجره، برنامه برای مانیتورینگ در پس‌زمینه می‌ماند">خروج کامل</button>` : ""}`;
+  $("#monActions").innerHTML = `${MON.canAdd ? `<button class="btn primary" id="monAdd">+ هدف تازه</button>` : ""}${axOk("monitor.noc") ? `<button class="btn" id="monNoc" title="نمای تمام‌صفحه برای مانیتور دیواری">نمای NOC</button>` : ""}
+    <button class="btn ghost mon-mute" id="monMute" title="${MON.muted ? "صدا: خاموش" : "صدا: روشن"}">${MON.muted ? "🔕" : "🔔"}</button>
+    <details class="mon-more" id="monMore"><summary class="btn">⋯ بیشتر</summary><div class="mon-menu">${more}</div></details>`;
   $("#monBody").innerHTML = monTabsHtml() + `<div class="mon-sum" id="monChips"></div><div id="monCapB"></div>
     <div id="mvWrap"><div id="mvBar"></div><div id="mvEdit"></div><div id="mvBody"></div><div id="mvPager"></div></div>`;
   monChips(); monBannerCap(); mvRenderAll();
+  const mm = $("#monMore");
+  $$(".mon-menu button", mm).forEach((b) => b.addEventListener("click", () => mm.removeAttribute("open")));
+  if (!window._monMoreDoc) { window._monMoreDoc = 1; document.addEventListener("click", (e) => { const d = $("#monMore"); if (d && d.open && !d.contains(e.target)) d.removeAttribute("open"); }); }
   if ($("#monAdd")) $("#monAdd").onclick = () => monEdit();
   if ($("#monSnmpP")) $("#monSnmpP").onclick = () => snmpProfiles();
   $("#monMaint").onclick = () => monMaintList();
@@ -243,10 +249,12 @@ async function monDetail(id) {
         ${monRelLine(t)}
         ${t.err ? `<div class="muted" style="color:var(--err)">${esc(t.err)}</div>` : ""}</div></div>
       <div class="toolbar" style="margin-top:12px"><div id="mdTr"></div><span class="muted" id="mdSum"></span></div><div class="tr-note" id="mdNote"></div>
+      <div class="md-kpi" id="mdKpi"></div><div class="md-add" id="mdAdd" hidden></div>
       <div class="chart-grid"><div class="chart-card wide"><div class="chart-head"><h3>در دسترس بودن (٪)</h3></div><div class="chart" id="mdAv"></div></div>
       <div class="chart-card wide"><div class="chart-head"><h3>زمان پاسخ (ms)</h3></div><div class="chart" id="mdRtt"></div></div></div>
       <h3 style="margin:12px 0 6px">قطعی‌های این بازه</h3><div id="mdEv"><div class="empty">در حال خواندن…</div></div>`,
     foot: `${t.can_edit ? `<button class="btn danger-ghost" data-a="del">حذف</button><button class="btn" data-a="toggle">${t.enabled ? "توقف بررسی" : "ادامه‌ی بررسی"}</button><button class="btn" data-a="edit">ویرایش</button>` : ""}
+      ${typeof dashRender === "function" && hasB("monitor") ? `<button class="btn ghost" data-a="dash">افزودن به داشبورد…</button>` : ""}
       <button class="btn" data-a="now">بررسی همین حالا</button><button class="btn ghost" data-a="close">بستن</button>`,
     onOpen: async (m, close) => {
       $$("[data-a]", m).forEach((b) => (b.onclick = async () => {
@@ -254,6 +262,7 @@ async function monDetail(id) {
         if (a === "close") return close();
         if (a === "edit") { close(); return monEdit(t); }
         if (a === "now") { await api("mon_check_now", id); toast("بررسی انجام می‌شود…", "info"); return; }
+        if (a === "dash") return monAddToDash(t, $("#mdAdd", m));
         if (a === "toggle") { const r = await api("mon_toggle", id, !t.enabled); if (!r.ok) return toast(r.error, "error"); close(); return loadMon(); }
         if (a === "del") {
           if (!(await confirm2({ title: "حذف هدف", body: `<p>«${esc(t.name)}» و سابقه‌ی قطعی‌هایش حذف شود؟</p>`, confirm: "حذف", danger: true }))) return;
@@ -269,6 +278,10 @@ async function monDetail(id) {
         const z = { zoom: (a, b) => monZoomTo(r.keys, r.step, a, b, setR), zoomOut: () => monZoomOut(MON.tr, setR), sync: "md", times: ax.times, tips: ax.tips, stats: true };
         drawChart($("#mdAv", m), ax.lab, [{ name: "در دسترس بودن", color: c.ok, values: row.avail_series }], { type: "line", height: 170, fmt: (v) => Math.round(v * 100) / 100 + "%", ...z });
         drawChart($("#mdRtt", m), ax.lab, [{ name: "میانگین زمان پاسخ", color: c.info, values: row.rtt_series }], { type: "line", height: 170, fmt: (v) => Math.round(v * 10) / 10 + " ms", ...z });
+        const ms = (v) => v == null ? "—" : v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${num(Math.round(v))} ms`;
+        $("#mdKpi", m).innerHTML = [["پاسخ فعلی", t.status === "down" ? "—" : ms(t.rtt)], ["میانگین", ms(row.rtt_avg)], ["بیشینه", ms(row.rtt_max)],
+          ["دسترس‌پذیری", row.avail == null ? "—" : (row.avail >= 99.995 ? "100" : row.avail.toFixed(2)) + "%"], ["قطعی", num(row.outages)]]
+          .map(([k, v]) => `<div class="chart-card"><div class="muted">${esc(I18N.t(k))}</div><b class="ltr">${esc(v)}</b></div>`).join("");
         $("#mdSum", m).textContent = `${I18N.t("در دسترس بودن")}: ${row.avail == null ? "—" : num(row.avail) + "٪"} · ${I18N.t("قطعی")}: ${num(row.outages)} · ${I18N.t("زمان قطعی")}: ${row.downtime ? monDur(row.downtime) : "—"}`;
         $("#mdNote", m).textContent = trResNote(r);
         $("#mdEv", m).innerHTML = monEvTable(r.events.slice(0, 50));
@@ -278,6 +291,28 @@ async function monDetail(id) {
       trBar($("#mdTr", m), bar);
       draw();
     } });
+}
+/** 1.59: نمودار زمان پاسخ همین هدف در یک داشبورد قابل ویرایش (انتهای صفحه‌ی اول) */
+async function monAddToDash(t, box) {
+  const r = await api("dash_list"); if (!r.ok) return toast(r.error, "error");
+  const L = r.dashboards.filter((d) => d.can_edit);
+  box.hidden = false;
+  if (!L.length) { box.innerHTML = `<span class="hint">${esc(I18N.t("داشبوردی که بتوانید ویرایش کنید نیست؛ اول در صفحه‌ی «داشبوردها» یکی بسازید."))}</span>`; return; }
+  box.innerHTML = `<span>${esc(I18N.t("داشبورد"))}</span><select id="mdDash">${L.map((d) => `<option value="${d.id}" data-no-i18n>${esc(d.name)}</option>`).join("")}</select>
+    <select id="mdDashP"></select><button class="btn sm primary" id="mdDashGo">${esc(I18N.t("افزودن نمودار زمان پاسخ"))}</button>`;
+  const pages = () => { const d = L.find((x) => x.id === Number($("#mdDash", box).value)); $("#mdDashP", box).innerHTML = d.data.pages.map((p, i) => `<option value="${i}" data-no-i18n>${esc(p.name)}</option>`).join(""); };
+  $("#mdDash", box).onchange = pages; pages();
+  $("#mdDashGo", box).onclick = async () => {
+    const d = L.find((x) => x.id === Number($("#mdDash", box).value)), pg = d.data.pages[Number($("#mdDashP", box).value) || 0];
+    if (pg.widgets.length >= 60) return toast("حداکثر ۶۰ ویجت در هر صفحه.", "warn");
+    const y = pg.widgets.reduce((a, w) => Math.max(a, w.y + w.h), 0);
+    const rng = MON.tr && ["1h", "6h", "24h", "7d", "30d"].includes(MON.tr.p) ? MON.tr.p : "";
+    pg.widgets.push({ id: "w" + Math.random().toString(36).slice(2, 9), type: "rtt", x: 0, y, w: 6, h: 4, title: "", cfg: { kinds: [], tids: [t.id], range: rng } });
+    const s = await api("dash_save", { id: d.id, name: d.name, data: d.data });
+    if (!s.ok) return toast(s.error, "error");
+    box.hidden = true; toast(`${I18N.t("به داشبورد اضافه شد")}: ${d.name}`, "ok");
+    if (typeof DB !== "undefined" && DB.cur && DB.cur.id === d.id && !DB.edit) { DB.cur = null; if (S.page === "dash") dashRender(); }
+  };
 }
 function monLabel(ts, step) { return trTick(ts, step, 0); }
 const MON_EVK = { down: ["err", "قطعی"], unreach: ["unr", "به‌خاطر پدر"], maint: ["mnt", "در نگهداری"] };

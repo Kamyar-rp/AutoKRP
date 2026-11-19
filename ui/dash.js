@@ -27,7 +27,14 @@ const DB_TYPES = {
   clock: ["ساعت", "◷", 3, 2, "ساعت و تاریخ"],
   events: ["آخرین Trap و Syslog", "✉", 6, 4, "رخدادهای اخیر دستگاه‌ها"],
   text: ["متن / عنوان", "T", 4, 1, "نوشته‌ی دلخواه"],
+  svc: ["جدول سرویس‌ها", "☷", 8, 5, "Ping، HTTP و TCP: وضعیت، زمان پاسخ، دسترس‌پذیری، گواهی"],
+  rtt: ["نمودار زمان پاسخ", "〽", 6, 4, "زمان پاسخ چند سرویس روی یک نمودار"],
+  tiles: ["کاشی‌های وضعیت", "▣", 6, 3, "یک کاشی رنگی برای هر سرویس (NOC)"],
+  availbar: ["نوار دسترس‌پذیری", "▬", 8, 4, "نوار ۲۴ ساعته‌ی وصل و قطع هر سرویس"],
+  snmptab: ["جدول SNMP", "▥", 6, 5, "پورت‌ها، سخت‌افزار یا OIDهای یک دستگاه SNMP"],
 };
+const DB_SVC_K = ["ping", "tcp", "http"];
+const DB_KIND_N = { ping: "Ping", tcp: "TCP", http: "HTTP", snmp: "SNMP" };
 const DB_TOPT = { cpu: "بیشترین CPU", mem: "بیشترین مصرف حافظه", temp: "بیشترین دما", rtt: "بیشترین زمان پاسخ", traffic: "بیشترین ترافیک پورت", avail: "کمترین دسترس‌پذیری (۲۴ ساعت)" };
 const dbAscii = (t) => /^[\x20-\x7e·]+$/.test(String(t || ""));
 /** نام دستگاه/پورت لاتین با ارقام لاتین (قلم رابط ارقام را فارسی نشان می‌دهد) */
@@ -101,7 +108,7 @@ function dbT(id) {
   const r = DB.rows[t.id] || {};
   return { ...t, st: r.st || t.status, since: r.since ?? t.since, rtt: r.rtt ?? t.rtt, err: r.err ?? t.err, maint: r.maint || "", cause: r.cause || "",
     lvl: r.lvl || "", alm: r.alm || [], cpu: r.cpu, mem: r.mem, temp: r.temp, disk: r.disk, ses: r.ses, avail: r.avail, spark: r.spark || [],
-    ports: r.ports || [], pu: r.pu, pn: r.pn };
+    ports: r.ports || [], pu: r.pu, pn: r.pn, cert: r.cert ?? t.cert };
 }
 /** وضعیت خلاصه: up | warn | down | unr | maint | unknown | paused */
 function dbState(t) {
@@ -116,6 +123,11 @@ function dbState(t) {
 function dbScope(c) {
   const ids = Array.isArray(c.tids) && c.tids.length ? new Set(c.tids.map(Number)) : null;
   return [...DB.tg.keys()].map(dbT).filter((t) => t && (!ids || ids.has(t.id)) && (!c.grp || (t.grp || "") === c.grp));
+}
+/** 1.59: محدوده‌ی ابزارهای سرویس: گروه/هدف‌ها + نوع (خالی = Ping، TCP و HTTP) */
+function dbSvcScope(c) {
+  const ks = Array.isArray(c.kinds) && c.kinds.length ? c.kinds : DB_SVC_K;
+  return dbScope(c).filter((t) => ks.includes(t.kind)).sort((a, b) => a.name.localeCompare(b.name, "fa"));
 }
 function dbRange(w) { return (w.cfg && w.cfg.range) || (DB.edit ? DB.draft.data.range : DB.range) || "1h"; }
 /** درخواست سنگین (نمودار، گزارش، رخداد) با کش: همان درخواست تا maxAge دوباره فرستاده نمی‌شود */
@@ -266,6 +278,7 @@ function dbDefTitle(w) {
   if (w.type === "metric") return (c.keys || ["cpu"]).filter((k) => DB_KEYS[k]).map((k) => DB_KEYS[k][0]).join(" · ") || DB_TYPES.metric[0];
   if (w.type === "traffic") return "ترافیک";
   if (w.type === "avail") return "کمترین دسترس‌پذیری";
+  if (w.type === "snmptab") return { ports: "پورت‌ها", hw: "سخت‌افزار", oids: "OIDها" }[c.tab || "ports"];
   return DB_TYPES[w.type][0];
 }
 function dbTitleHtml(w) {
@@ -282,7 +295,7 @@ const DB_STC = { up: ["ok", "وصل"], down: ["err", "قطع"], unr: ["unr", "د
 function dbBody(w, el, light) {
   try {
     const c = w.cfg || {};
-    const need = ["traffic", "metric", "gauge", "value"].includes(w.type);
+    const need = ["traffic", "metric", "gauge", "value", "snmptab"].includes(w.type);
     if (need && !c.tid) { el.innerHTML = `<div class="db-hint">${DB.edit ? "با ⚙ دستگاه را انتخاب کنید." : "دستگاهی انتخاب نشده است."}</div>`; return; }
     if (need && !DB.tg.get(Number(c.tid))) { el.innerHTML = `<div class="db-hint">دستگاه پیدا نشد (حذف شده یا به آن دسترسی ندارید).</div>`; return; }
     if (w.type === "map" && !c.map) { el.innerHTML = `<div class="db-hint">${DB.edit ? "با ⚙ نقشه را انتخاب کنید." : "نقشه‌ای انتخاب نشده است."}</div>`; return; }
@@ -414,6 +427,97 @@ const DB_RENDER = {
       <td>${dbN(x.tname || x.src || "")}</td><td><span class="db-tag ${s[0]}">${s[1]}</span></td>
       <td class="ltr db-msg" data-no-i18n title="${esc((x.msg || "").slice(0, 300))}">${esc(x.name ? x.name + " — " : "")}${esc((x.msg || "").slice(0, 160))}</td></tr>`; }).join("")}</tbody></table>`;
   },
+  async svc(w, el, c) {
+    const ts = dbSvcScope(c).slice(0, Number(c.n) || 50), rng = dbRange(w);
+    if (!ts.length) { el.innerHTML = `<div class="db-hint">${esc(I18N.t("سرویس Ping، TCP یا HTTP در این محدوده نیست."))}</div>`; return; }
+    const ids = ts.map((t) => t.id);
+    const r = await dbFetch(`a|${rng}|${ids.join(",")}`, 120000, () => api("mon_report", rng, ids));
+    if (!el.isConnected) return;
+    const rep = new Map(((r && r.ok && r.rows) || []).map((x) => [x.id, x]));
+    const sk = el._sort || (el._sort = { k: "", d: 1 });
+    const val = (t, k) => { const x = rep.get(t.id) || {}; return k === "name" ? t.name : k === "kind" ? t.kind : k === "st" ? ["down", "unr", "warn", "maint", "unknown", "paused", "up"].indexOf(dbState(t))
+      : k === "rtt" ? (t.st === "down" ? Infinity : t.rtt ?? Infinity) : k === "avg" ? x.rtt_avg ?? Infinity : k === "av" ? x.avail ?? 101 : k === "cert" ? (t.cert && t.cert.days != null ? t.cert.days : 99999) : 0; };
+    const L = sk.k ? [...ts].sort((a, b) => { const x = val(a, sk.k), y = val(b, sk.k); return (typeof x === "string" ? x.localeCompare(y, "fa") : x - y) * sk.d; }) : ts;
+    const anyCert = ts.some((t) => t.cert && t.cert.days != null);
+    const H = [["name", "سرویس"], ["kind", "نوع"], ["st", "وضعیت"], ["rtt", "پاسخ فعلی"], ["avg", "میانگین / بیشینه"], ["av", "دسترس‌پذیری"], ["", "روند"], ...(anyCert ? [["cert", "گواهی"]] : [])];
+    const ms = (v) => v == null ? "—" : v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${num(Math.round(v))} ms`;
+    el.innerHTML = `<div class="db-scroll"><table class="db-tbl db-svc"><thead><tr>${H.map(([k, t]) => `<th${k ? ` data-sk="${k}" class="db-sk${sk.k === k ? (sk.d > 0 ? " asc" : " desc") : ""}"` : ""}>${esc(I18N.t(t))}</th>`).join("")}</tr></thead><tbody>
+      ${L.map((t) => { const s = dbState(t), x = rep.get(t.id) || {}, st = DB_STC[s];
+        const avc = x.avail == null ? "" : x.avail < 95 ? "c-err" : x.avail < 99.9 ? "c-warn" : "c-ok";
+        return `<tr data-tid="${t.id}" class="db-click"><td>${dbN(t.name)}<div class="muted ltr db-sub" data-no-i18n>${esc(monWhere(t))}</div></td><td><span class="db-tag info">${DB_KIND_N[t.kind] || t.kind}</span></td>
+          <td><span class="db-tag ${st[0]}">${esc(I18N.t(st[1]))}</span></td><td class="ltr">${s === "down" ? "—" : ms(t.rtt)}</td><td class="ltr">${ms(x.rtt_avg)} / ${ms(x.rtt_max)}</td>
+          <td class="ltr ${avc}">${x.avail == null ? "—" : (x.avail >= 99.995 ? "100" : x.avail.toFixed(2)) + "%"}</td><td class="db-spkc">${dbSpark(x.rtt_series || [])}</td>
+          ${anyCert ? `<td>${t.cert && t.cert.days != null ? `<span class="${t.cert.days < 0 ? "c-err" : t.cert.days <= (t.cert_days || 14) ? "c-warn" : ""}">${num(t.cert.days)} ${esc(I18N.t("روز"))}</span>` : "—"}</td>` : ""}</tr>`; }).join("")}</tbody></table></div>`;
+    $$("th[data-sk]", el).forEach((h) => (h.onclick = (e) => { e.stopPropagation(); sk.d = sk.k === h.dataset.sk ? -sk.d : 1; sk.k = h.dataset.sk; DB_RENDER.svc(w, el, c); }));
+    dbRowClicks(el);
+  },
+  async rtt(w, el, c, light) {
+    const ts = dbSvcScope(c).slice(0, 8), rng = dbRange(w);
+    if (!ts.length) { el.innerHTML = `<div class="db-hint">${esc(I18N.t(DB.edit ? "با ⚙ سرویس‌ها را انتخاب کنید." : "سرویسی انتخاب نشده است."))}</div>`; return; }
+    const ids = ts.map((t) => t.id), key = `a|${rng}|${ids.join(",")}`;
+    const cc = DB.cache.get(key);
+    if (light && cc && cc.r && Date.now() - cc.at < 60000 && el.dataset.k === key && el.dataset.at === String(cc.at)) return;
+    const r = await dbFetch(key, 60000, () => api("mon_report", rng, ids));
+    if (!el.isConnected) return;
+    if (!r || !r.ok) { el.innerHTML = `<div class="db-hint">${esc((r && r.error) || "")}</div>`; return; }
+    el.dataset.k = key; el.dataset.at = String((DB.cache.get(key) || {}).at || 0);
+    const C = COLORS(), cols = [C.info, C.warn, "#c678dd", C.ok, C.err, "#0ea5a4", "#d19a66", C.acc || "#4f8fe6"], ax = monAxis(r.keys, r.step);
+    const series = (r.rows || []).map((x, i) => ({ name: x.name, color: cols[i % cols.length], values: x.rtt_series }));
+    dbFitChart(el, (hh) => { el.innerHTML = ""; drawChart(el, ax.lab, series, { type: "line", height: hh, fmt: (v) => Math.round(v * 10) / 10 + " ms", times: ax.times, tips: ax.tips }); });
+  },
+  tiles(w, el, c) {
+    const ts = dbSvcScope(c).slice(0, Number(c.n) || 60);
+    if (!ts.length) { el.innerHTML = `<div class="db-hint">${esc(I18N.t("سرویس Ping، TCP یا HTTP در این محدوده نیست."))}</div>`; return; }
+    el.innerHTML = `<div class="db-tiles">${ts.map((t) => { const s = dbState(t), st = DB_STC[s];
+      return `<div class="db-tile t-${st[0]}${s === "down" ? " blink" : ""} db-click" data-tid="${t.id}" title="${esc(monWhere(t))}">${dbN(t.name, "db-tn")}
+        <b class="ltr">${s === "down" ? esc(I18N.t("قطع")) : t.rtt != null ? `${num(Math.round(t.rtt))} ms` : "—"}</b>
+        <small class="muted">${DB_KIND_N[t.kind] || ""}${t.avail != null ? ` · <span class="ltr">${t.avail >= 99.995 ? "100" : t.avail.toFixed(1)}%</span>` : ""}</small></div>`; }).join("")}</div>`;
+    dbRowClicks(el);
+  },
+  availbar(w, el, c) {
+    const ts = dbSvcScope(c).slice(0, Number(c.n) || 12);
+    if (!ts.length) { el.innerHTML = `<div class="db-hint">${esc(I18N.t("سرویس Ping، TCP یا HTTP در این محدوده نیست."))}</div>`; return; }
+    const now = Date.now() / 1000, start = Math.floor((now - 86400) / 1800) * 1800;
+    const cell = (v, i) => { const t0 = start + i * 1800, cls = v == null ? "n" : v >= 99.9 ? "ok" : v >= 95 ? "warn" : "err";
+      return `<i class="b-${cls}" title="${esc(trFmt(t0).slice(-5) + "–" + trFmt(t0 + 1800).slice(-5) + " · " + (v == null ? I18N.t("بدون داده") : v + "%"))}"></i>`; };
+    el.innerHTML = `<div class="db-scroll"><div class="db-avb">${ts.map((t) => `<div class="db-avr db-click" data-tid="${t.id}">${dbN(t.name, "db-avn")}<span class="db-avc">${(t.spark || []).map(cell).join("")}</span>
+      <b class="ltr">${t.avail == null ? "—" : (t.avail >= 99.995 ? "100" : t.avail.toFixed(2)) + "%"}</b></div>`).join("")}
+      <div class="db-avr db-avx"><span></span><span class="db-avt ltr"><span>-24h</span><span>-12h</span><span>${esc(I18N.t("اکنون"))}</span></span><b></b></div></div></div>`;
+    dbRowClicks(el);
+  },
+  async snmptab(w, el, c, light) {
+    const t = DB.tg.get(Number(c.tid));
+    if (t.kind !== "snmp") { el.innerHTML = `<div class="db-hint">فقط برای هدف SNMP.</div>`; return; }
+    const r = await dbFetch(`l|${t.id}`, 20000, () => api("mon_snmp_live", t.id, 0, true));
+    if (!el.isConnected) return;
+    if (!r || !r.ok || r.none) { el.innerHTML = `<div class="db-hint">${esc(r && !r.ok ? r.error || "" : I18N.t("هنوز داده‌ی زنده‌ای از این دستگاه نیامده است."))}</div>`; return; }
+    const n = Number(c.n) || 50, tab = c.tab || "ports";
+    const tbl = (head, rows) => `<table class="db-tbl"><thead><tr>${head.map((h) => `<th>${esc(I18N.t(h))}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+    const lv = (x) => { const k = x === "crit" ? "err" : x === "warn" ? "warn" : x === "ok" ? "ok" : "mute"; return `<span class="db-tag ${k}">${esc(I18N.t({ err: "بحرانی", warn: "هشدار", ok: "سالم", mute: "نامعلوم" }[k]))}</span>`; };
+    let html = "";
+    if (tab === "ports") {
+      const pf = c.pf || "all";
+      let L = (r.ifs || []).filter((x) => x.type !== 24 && (pf === "all" || (pf === "up" && x.oper === 1) || (pf === "down" && x.admin === 1 && x.oper !== 1) || (pf === "watch" && x.watch) || pf === "top"));
+      if (pf === "top") L = L.filter((x) => x.util != null || x.in_bps != null).sort((a, b) => (b.util ?? -1) - (a.util ?? -1) || Math.max(b.in_bps || 0, b.out_bps || 0) - Math.max(a.in_bps || 0, a.out_bps || 0));
+      html = L.length ? tbl(["پورت", "توضیح", "وضعیت", "ورودی", "خروجی", "مصرف", "خطا/دقیقه"], L.slice(0, n).map((x) => `<tr><td class="ltr">${esc(x.name)}</td><td class="bidi db-msg" data-no-i18n>${esc(x.alias || "")}</td>
+        <td><span class="db-tag ${x.admin !== 1 ? "mute" : x.oper === 1 ? "ok" : "err"}">${esc(I18N.t(x.admin !== 1 ? "خاموش" : x.oper === 1 ? "وصل" : "قطع"))}</span></td>
+        <td class="ltr">${fmtBps(x.in_bps)}</td><td class="ltr">${fmtBps(x.out_bps)}</td><td class="ltr">${x.util == null ? "—" : Math.round(x.util * 10) / 10 + "%"}</td><td class="ltr">${x.err_min ? num(x.err_min) : "—"}</td></tr>`))
+        : `<div class="db-hint">${esc(I18N.t("پورتی با این فیلتر نیست."))}</div>`;
+    } else if (tab === "hw") {
+      const rows = [...(r.temps || []).map((x) => [I18N.t("دما"), x.name, x.value == null ? "—" : num(x.value) + "°C", x.st]),
+        ...(r.fans || []).map((x) => [I18N.t("فن"), x.name, "", x.state]), ...(r.psus || []).map((x) => [I18N.t("منبع تغذیه"), x.name, "", x.state]),
+        ...(r.sensors || []).map((x) => [I18N.t("سنسور"), x.name, x.value ?? "", x.state]),
+        ...(r.disks || []).map((x) => [I18N.t("دیسک"), x.name, x.pct == null ? "" : Math.round(x.pct) + "%", x.pct >= 90 ? "crit" : x.pct >= 80 ? "warn" : "ok"])];
+      html = rows.length ? tbl(["بخش", "نام", "مقدار", "وضعیت"], rows.slice(0, n).map(([k, nm, v, s]) => `<tr><td>${esc(k)}</td><td class="bidi" data-no-i18n>${esc(nm)}</td><td class="ltr">${esc(String(v))}</td><td>${lv(s)}</td></tr>`))
+        : `<div class="db-hint">${esc(I18N.t("دستگاه اطلاعات سخت‌افزاری برنگرداند."))}</div>`;
+    } else {
+      const al = {}; (r.alarms || []).forEach((a) => (al[a.key] = a.level));
+      html = (r.oids || []).length ? tbl(["نام", "مقدار", "وضعیت"], r.oids.slice(0, n).map((o) => `<tr><td class="bidi" data-no-i18n>${esc(o.name)}</td>
+        <td class="ltr">${o.missing ? "—" : esc(String(o.text ?? o.value ?? "")) + (o.unit ? " " + esc(o.unit) : "")}</td><td>${lv(al["oid:" + o.oid] || "ok")}</td></tr>`))
+        : `<div class="db-hint">${esc(I18N.t("OID دستی یا وضعیتی برای این دستگاه نیست."))}</div>`;
+    }
+    el.innerHTML = `<div class="db-scroll">${html}</div>`;
+  },
   text(w, el, c) {
     el.innerHTML = `<div class="db-text s-${["s", "m", "l"].includes(c.size) ? c.size : "m"} a-${["start", "center"].includes(c.align) ? c.align : "start"}" data-no-i18n>${esc(c.text || "").replace(/\n/g, "<br>")}</div>`;
   },
@@ -478,6 +582,14 @@ function dbGaugeSvg(v, max, wn, cr, unit, label) {
   return `<svg class="db-gauge" viewBox="0 0 100 62"><path d="M${cx - R} ${cy} A${R} ${R} 0 0 1 ${cx + R} ${cy}" class="db-gb"/>
     ${f > 0.002 ? `<path d="M${cx - R} ${cy} A${R} ${R} 0 0 1 ${x.toFixed(2)} ${y.toFixed(2)}" class="db-gv c-${cls}"/>` : ""}${mark(wn)}${mark(cr)}
     <text x="${cx}" y="${cy - 4}" text-anchor="middle" class="db-gt">${esc(txt)}</text><text x="${cx}" y="${cy + 9}" text-anchor="middle" class="db-gl">${esc(label)}</text></svg>`;
+}
+/** 1.59: کلیک روی سرویس ← پنجره‌ی نمودار همان هدف (در حالت ویرایش نه) */
+function dbRowClicks(el) {
+  $$("[data-tid]", el).forEach((r) => (r.onclick = (e) => {
+    if (DB.edit || e.target.closest("th")) return;
+    const id = Number(r.dataset.tid);
+    if (typeof monDetail === "function") { if (!MON.targets.some((x) => x.id === id)) MON.targets = [...DB.tg.values()]; monDetail(id); }
+  }));
 }
 function dbSpark(vals) {
   const pts = vals.map((v, i) => [i, v]).filter((p) => p[1] !== null && p[1] !== undefined);
@@ -685,7 +797,7 @@ function dbAdd(type, x, y) {
   ws.push(it); dbLayout(ws, it.id); dbLayout(ws, null); DB.dirty = true;
   dbDraw();
   const el = $(`.db-w[data-w="${it.id}"]`); if (el) { el.scrollIntoView({ block: "nearest", behavior: "smooth" }); el.classList.add("flash"); }
-  if (["traffic", "metric", "gauge", "value", "map", "text"].includes(type)) dbCfg(it.id);
+  if (["traffic", "metric", "gauge", "value", "map", "text", "rtt", "snmptab"].includes(type)) dbCfg(it.id);
 }
 function dbDefCfg(type) {
   const first = [...DB.tg.values()].find((t) => t.kind === "snmp");
@@ -699,6 +811,11 @@ function dbDefCfg(type) {
     case "events": return { n: 20, kinds: [], sev: [], range: "" };
     case "problems": return { n: 50 };
     case "text": return { text: "", size: "m", align: "start" };
+    case "svc": return { kinds: [], n: 50, range: "24h" };
+    case "rtt": return { kinds: [], tids: [...DB.tg.values()].filter((t) => DB_SVC_K.includes(t.kind)).slice(0, 3).map((t) => t.id), range: "" };
+    case "tiles": return { kinds: [], n: 60 };
+    case "availbar": return { kinds: [], n: 12 };
+    case "snmptab": return { tid: first ? first.id : 0, tab: "ports", pf: "down", n: 50 };
     default: return {};
   }
 }
@@ -777,14 +894,23 @@ function dbChipVal(m, id) { const el = $("#" + id, m); if (!el) return null; con
 async function dbCfg(wid) {
   const ws = dbWs(), w = ws.find((x) => x.id === wid); if (!w) return;
   const c = w.cfg || {}, T = w.type;
-  const rangeF = ["traffic", "metric", "avail", "events"].includes(T)
+  const rangeF = ["traffic", "metric", "avail", "events", "svc", "rtt"].includes(T)
     ? `<div class="field"><label>بازه</label>${dbChips("dcR", [["", "مثل داشبورد"], ...Object.entries(DB_RANGES)], c.range || "", false)}</div>` : "";
-  const scopeF = ["status", "severity", "problems", "topn", "avail"].includes(T)
+  const scopeF = ["status", "severity", "problems", "topn", "avail", "svc", "rtt", "tiles", "availbar"].includes(T)
     ? `<div class="row" style="gap:12px"><div class="field" style="flex:1"><label>گروه</label><select class="input" id="dcG"><option value="">همه‌ی گروه‌ها</option>${dbGroups().map((g) => `<option ${g === c.grp ? "selected" : ""} data-no-i18n>${esc(g)}</option>`).join("")}</select></div>
-        <div class="field" style="flex:2"><label>یا فقط این هدف‌ها (خالی = همه)</label><select class="input" id="dcTs" multiple size="4">${[...DB.tg.values()].sort((a, b) => a.name.localeCompare(b.name, "fa")).map((t) => `<option value="${t.id}" ${(c.tids || []).map(Number).includes(t.id) ? "selected" : ""} data-no-i18n>${esc(t.name)}</option>`).join("")}</select></div></div>` : "";
+        <div class="field" style="flex:2"><label>فقط این هدف‌ها (هیچ = همه‌ی هدف‌های گروه و نوع)</label>
+          <div class="db-tpick"><div class="row" style="gap:6px"><input class="input" id="dcTq" placeholder="جستجوی نام…" style="flex:1"><button type="button" class="btn sm ghost" id="dcTa">همه‌ی نمایش‌داده</button><button type="button" class="btn sm ghost" id="dcTn">هیچ</button><span class="muted" id="dcTc"></span></div>
+          <div class="db-tlist" id="dcTs">${[...DB.tg.values()].sort((a, b) => a.name.localeCompare(b.name, "fa")).map((t) => `<label class="chk" data-k="${esc(t.kind)}" data-g="${esc(t.grp || "")}"><input type="checkbox" value="${t.id}" ${(c.tids || []).map(Number).includes(t.id) ? "checked" : ""}><span data-no-i18n>${esc(t.name)}</span><small class="muted">${esc(DB_KIND_N[t.kind] || t.kind)}${t.grp ? " · " + esc(t.grp) : ""}</small></label>`).join("")}</div></div></div></div>
+        <p class="hint">${esc(I18N.t("گروه، نوع سرویس و فهرست هدف‌ها با هم اعمال می‌شوند. فهرست بالا با گروه و نوع انتخاب‌شده فیلتر می‌شود."))}</p>` : "";
   const nF = (def, mx) => `<div class="field"><label>تعداد ردیف</label><input class="input ltr" id="dcN" type="number" min="1" max="${mx}" value="${c.n || def}" style="max-width:110px"></div>`;
   let extra = "";
-  if (["traffic", "metric", "gauge", "value"].includes(T)) extra += `<div class="field"><label>دستگاه</label><select class="input" id="dcT">${dbTgOpts(c.tid, T !== "value")}</select></div>`;
+  if (["traffic", "metric", "gauge", "value", "snmptab"].includes(T)) extra += `<div class="field"><label>دستگاه</label><select class="input" id="dcT">${dbTgOpts(c.tid, T !== "value")}</select></div>`;
+  if (T === "svc") extra += `<p class="hint">${esc(I18N.t("هر ردیف یک هدف Ping، TCP یا HTTP است. «وضعیت» و «پاسخ فعلی» از آخرین بررسی می‌آیند؛ «میانگین / بیشینه»، «دسترس‌پذیری» و «روند» (نمودار کوچک زمان پاسخ) برای بازه‌ی انتخابی پایین حساب می‌شوند؛ «گواهی» روزهای مانده تا انقضای گواهی HTTPS است. با کلیک روی سرستون مرتب می‌شود و با کلیک روی ردیف نمودار همان سرویس باز می‌شود."))}</p>`;
+  if (["svc", "rtt", "tiles", "availbar"].includes(T)) extra += `<div class="field"><label>نوع سرویس (هیچ = Ping، TCP و HTTP)</label>${dbChips("dcSk", [["ping", "Ping"], ["tcp", "TCP"], ["http", "HTTP"], ["snmp", "SNMP"]], c.kinds || [], true)}</div>`
+    + (T === "rtt" ? `<p class="hint">${esc(I18N.t("حداکثر ۸ سرویس روی نمودار؛ از فهرست «فقط این هدف‌ها» انتخاب کنید."))}</p>` : "")
+    + (T !== "rtt" ? nF(T === "svc" ? 50 : T === "tiles" ? 60 : 12, 100) : "");
+  if (T === "snmptab") extra += `<div class="field"><label>جدول</label>${dbChips("dcTb", [["ports", "پورت‌ها"], ["hw", "سخت‌افزار"], ["oids", "OIDها"]], c.tab || "ports", false)}</div>
+    <div class="field" id="dcPfw"><label>پورت‌ها</label>${dbChips("dcPf", [["all", "همه"], ["up", "وصل"], ["down", "قطع"], ["watch", "پیگیری‌شده"], ["top", "پرمصرف‌ترین"]], c.pf || "down", false)}</div>${nF(50, 100)}`;
   if (T === "traffic") extra += `<div class="field"><label>پورت (یک یا چند؛ حداکثر ۴)</label><div id="dcP" class="db-chips" data-multi="1"><span class="muted">…</span></div><p class="hint">نمودار فقط برای پورت‌هایی است که تاریخچه‌ی ترافیک‌شان ثبت می‌شود (تنظیم SNMP هدف).</p></div>`;
   if (T === "metric") extra += `<div class="field"><label>مقدارها</label>${dbChips("dcK", Object.entries(DB_KEYS).map(([k, v]) => [k, v[0]]), c.keys || ["cpu"], true)}</div>`;
   if (T === "gauge") extra += `<div class="field"><label>مقدار</label>${dbChips("dcK", Object.entries(DB_KEYS).filter(([k]) => k !== "rtt").map(([k, v]) => [k, v[0]]), c.key || "cpu", false)}</div>
@@ -825,6 +951,20 @@ async function dbCfg(wid) {
           : `<span class="muted">${esc(I18N.t("هنوز داده‌ی زنده‌ای از این دستگاه نیامده است."))}</span>`;
       };
       if ($("#dcT", m)) $("#dcT", m).onchange = loadPorts;
+      if ($("#dcTs", m)) {        // 1.59.1: فهرست هدف‌ها با گروه، نوع و جستجو فیلتر می‌شود
+        const tf = () => { const gg = $("#dcG", m).value, q = $("#dcTq", m).value.trim().toLowerCase(), ks = $("#dcSk", m) ? dbChipVal(m, "dcSk") : [];
+          const svcT = ["svc", "rtt", "tiles", "availbar"].includes(T), kk = ks.length ? ks : svcT ? DB_SVC_K : null;
+          $$("#dcTs label", m).forEach((l) => { l.hidden = (gg && l.dataset.g !== gg) || (kk && !kk.includes(l.dataset.k)) || (q && !l.textContent.toLowerCase().includes(q)); });
+          const n = $$("#dcTs input:checked", m).filter((x) => !x.closest("label").hidden).length;
+          $("#dcTc", m).textContent = n ? `${num(n)} ${I18N.t("انتخاب‌شده")}` : I18N.t("همه"); };
+        $("#dcG", m).addEventListener("change", tf); $("#dcTq", m).addEventListener("input", tf); $("#dcTs", m).addEventListener("change", tf);
+        if ($("#dcSk", m)) $("#dcSk", m).addEventListener("click", () => setTimeout(tf));
+        $("#dcTa", m).onclick = () => { $$("#dcTs label:not([hidden]) input", m).forEach((x) => (x.checked = true)); tf(); };
+        $("#dcTn", m).onclick = () => { $$("#dcTs input", m).forEach((x) => (x.checked = false)); tf(); };
+        tf();
+      }
+      const pfVis = () => { if ($("#dcPfw", m)) $("#dcPfw", m).style.display = dbChipVal(m, "dcTb") === "ports" ? "" : "none"; };
+      if ($("#dcTb", m)) { $("#dcTb", m).addEventListener("click", () => setTimeout(pfVis)); pfVis(); }
       loadPorts();
       // 1.51: گره‌های نقشه‌ی انتخاب‌شده برای «کانون»
       const loadFocus = async () => {
@@ -863,8 +1003,10 @@ async function dbCfg(wid) {
         if (g("dcMp")) { o.map = Number(g("dcMp").value) || 0; o.view = dbChipVal(m, "dcMv"); o.focus = g("dcMf").value || ""; o.depth = Number(dbChipVal(m, "dcMd")) || 1; }
         if (g("dcS")) o.sec = g("dcS").checked;
         if (g("dcX")) { o.text = g("dcX").value; o.size = dbChipVal(m, "dcZ"); o.align = dbChipVal(m, "dcA"); }
-        if (g("dcG")) { o.grp = g("dcG").value; o.tids = [...g("dcTs").selectedOptions].map((x) => Number(x.value)); }
+        if (g("dcG")) { o.grp = g("dcG").value; o.tids = $$("#dcTs input:checked", m).filter((x) => !x.closest("label").hidden).map((x) => Number(x.value)); }
         if (g("dcR")) o.range = dbChipVal(m, "dcR");
+        if (g("dcSk")) o.kinds = dbChipVal(m, "dcSk");
+        if (g("dcTb")) { o.tab = dbChipVal(m, "dcTb"); o.pf = dbChipVal(m, "dcPf"); }
         close({ title: g("dcTi").value.trim(), cfg: o });
       }));
     } });

@@ -510,3 +510,341 @@ def list_lookup(lid, targets, min_level=1, cfg=None):
         if m:
             out[ip] = f"رنج {m}"
     return out
+
+
+# ------------------------------------------------------------------ 1.59: مدیر منابع (فهرست قابل ویرایش)
+# هر منبع: {"id", "name", "enabled", "kind": url|path|upload, "url", "path", "fmt": lines|csv|ipsum, "ip_col", "score_col",
+#            "min_score", "min_entries", "builtin"}. منابع پیش‌فرض هم مثل بقیه ویرایش و حذف می‌شوند؛ «بازگرداندن پیش‌فرض‌ها».
+# ایمنی مثل قبل: منبع اینترنتی فقط IP/CIDR عمومی؛ خطای دانلود بدون نسخه‌ی معتبرِ جوان‌تر از max_age_hours ← خطا (نه «پاک»)؛
+# اثر انگشت فایل ذخیره‌شده در meta رمزشده؛ فایل روی کامپیوتر/آپلود (داده‌ی خود کاربر) هر رنجی را می‌پذیرد.
+KINDS = ("url", "path", "upload")
+FMTS = ("lines", "csv", "ipsum")
+MAX_SOURCES = 30
+MAX_SRC_BYTES = MAX_FEED_BYTES
+_SID = re.compile(r"^[a-z0-9_]{2,24}$")
+
+
+def default_sources():
+    return [
+        {"id": "ffraud", "name": "FFraud", "enabled": True, "kind": "url", "url": FFRAUD_URL, "path": "", "fmt": "csv",
+         "ip_col": "ip", "score_col": "ffraud_score", "min_score": 50, "min_entries": MIN_LIST_ENTRIES, "builtin": True},
+        {"id": "firehol_l1", "name": "FireHOL Level 1", "enabled": False, "kind": "url", "url": LISTS["firehol_l1"]["url"], "path": "",
+         "fmt": "lines", "ip_col": "", "score_col": "", "min_score": 0, "min_entries": MIN_LIST_ENTRIES, "builtin": True},
+        {"id": "ipsum", "name": "IPsum", "enabled": False, "kind": "url", "url": LISTS["ipsum"]["url"], "path": "", "fmt": "ipsum",
+         "ip_col": "", "score_col": "", "min_score": 3, "min_entries": MIN_LIST_ENTRIES, "builtin": True},
+        {"id": "afta", "name": "AFTA IOC", "enabled": False, "kind": "url", "url": LISTS["afta"]["url"], "path": "", "fmt": "lines",
+         "ip_col": "", "score_col": "", "min_score": 0, "min_entries": 1, "builtin": True},
+        {"id": "local", "name": "لیست داخلی", "enabled": False, "kind": "upload", "url": "", "path": "", "fmt": "lines",
+         "ip_col": "", "score_col": "", "min_score": 0, "min_entries": 1, "builtin": True},
+    ]
+
+
+def sources(cfg):
+    """منابع مؤثر: فهرست ذخیره‌شده، یا (تنظیمات پیش از 1.59) ساخته‌شده از کلیدهای قدیمی."""
+    cfg = cfg or {}
+    if isinstance(cfg.get("sources"), list):
+        return cfg["sources"]
+    out = default_sources()
+    by = {s["id"]: s for s in out}
+    by["ffraud"].update(enabled=bool(cfg.get("feed_enabled", True)), url=str(cfg.get("feed_url") or FFRAUD_URL),
+                        min_score=int(cfg.get("min_score") or 0))
+    for lid in ("firehol_l1", "ipsum", "afta"):
+        by[lid]["enabled"] = bool((cfg.get("lists") or {}).get(lid))
+        u = str((cfg.get("list_urls") or {}).get(lid) or "").strip()
+        if u:
+            by[lid]["url"] = u
+    by["ipsum"]["min_score"] = max(1, int(cfg.get("ipsum_min") or 3))
+    lp = str(cfg.get("local_path") or "").strip()
+    by["local"].update(enabled=bool(cfg.get("local_enabled")), kind="path" if lp else "upload", path=lp)
+    return out
+
+
+def clean_sources(items, server=False):
+    if not isinstance(items, list):
+        raise IntelError("فهرست منابع نامعتبر است.")
+    if len(items) > MAX_SOURCES:
+        raise IntelError(f"حداکثر {MAX_SOURCES} منبع.")
+    out, ids, names = [], set(), set()
+    for i, s in enumerate(items, 1):
+        if not isinstance(s, dict):
+            raise IntelError(f"منبع {i} نامعتبر است.")
+        name = re.sub(r"[\x00-\x1f\x7f]", " ", str(s.get("name") or "")).strip()[:60]
+        if not name:
+            raise IntelError(f"منبع {i}: نام را وارد کنید.")
+        if name.lower() in names:
+            raise IntelError(f"نام منبع تکراری است: {name}")
+        names.add(name.lower())
+        sid = str(s.get("id") or "").strip().lower()
+        if not _SID.match(sid) or sid in ids:
+            sid = "s" + hashlib.sha256(f"{name}{time.time()}{i}".encode()).hexdigest()[:8]
+        ids.add(sid)
+        kind = s.get("kind") if s.get("kind") in KINDS else "url"
+        fmt = s.get("fmt") if s.get("fmt") in FMTS else "lines"
+        url = str(s.get("url") or "").strip()[:500]
+        path = str(s.get("path") or "").strip().strip('"')[:400]
+        p = f"منبع «{name}»: "
+        if kind == "url" and not url.lower().startswith(("https://", "http://")):
+            raise IntelError(p + "آدرس باید با https:// شروع شود.")
+        if kind == "path":
+            if server:
+                raise IntelError(p + "در حالت سرور «فایل روی کامپیوتر» نیست؛ فایل را آپلود کنید.")
+            if not path:
+                raise IntelError(p + "مسیر فایل را وارد کنید.")
+        ip_col = str(s.get("ip_col") or "").strip()[:60]
+        if fmt == "csv" and not ip_col:
+            raise IntelError(p + "نام ستون IP را برای CSV وارد کنید.")
+        try:
+            ms = int(s.get("min_score") or 0)
+            me = int(s.get("min_entries") if s.get("min_entries") not in (None, "") else 1)
+        except (TypeError, ValueError):
+            raise IntelError(p + "حداقل امتیاز باید عدد باشد.")
+        out.append({"id": sid, "name": name, "enabled": bool(s.get("enabled")), "kind": kind, "url": url if kind == "url" else "",
+                    "path": path if kind == "path" else "", "fmt": fmt, "ip_col": ip_col if fmt == "csv" else "",
+                    "score_col": str(s.get("score_col") or "").strip()[:60] if fmt == "csv" else "",
+                    "min_score": max(0, min(1_000_000, ms)), "min_entries": max(1, min(100_000, me)), "builtin": bool(s.get("builtin"))})
+    return out
+
+
+def src_meta(sid):
+    return _read_json(f"src_{sid}_meta.dat")
+
+
+def _src_file(sid):
+    return _dir() / f"src_{sid}.txt"
+
+
+def _src_upload(sid):
+    return _dir() / f"src_{sid}.dat"
+
+
+def _csv_cols(text):
+    for line in io.StringIO(text):
+        if not line.strip() or line.startswith("#"):
+            continue
+        return [c.strip().lstrip("﻿") for c in next(csv.reader([line]))]
+    return []
+
+
+def parse_source(src, text, private_ok=False):
+    """(ips: {ip: توضیح}، nets: [(شبکه، توضیح)]) — فقط ردیف‌های بالاتر از حداقل امتیاز."""
+    ok = (lambda n: True) if private_ok else _global
+    ips, nets = {}, []
+
+    def add(cell, why):
+        try:
+            if "/" in cell:
+                n = ipaddress.ip_network(cell, strict=False)
+                if not ok(n):
+                    return
+                if n.num_addresses == 1:
+                    ips[str(n.network_address)] = why
+                else:
+                    nets.append((n, why))
+            else:
+                a = ipaddress.ip_address(cell)
+                if ok(ipaddress.ip_network(a)):
+                    ips[str(a)] = why
+        except ValueError:
+            return
+    if src["fmt"] == "csv":
+        cols = None
+        for line in text.splitlines():
+            if not line.strip() or line.startswith("#"):
+                continue
+            row = next(csv.reader([line]))
+            if cols is None:
+                cols = [c.strip().lstrip("﻿").lower() for c in row]
+                ic = src["ip_col"].lower()
+                if ic not in cols:
+                    raise IntelError(f"{src['name']}: ستون «{src['ip_col']}» در فایل نیست (ستون‌ها: {', '.join(cols[:12])}).")
+                ii = cols.index(ic)
+                si = cols.index(src["score_col"].lower()) if src.get("score_col") and src["score_col"].lower() in cols else None
+                if src.get("score_col") and si is None:
+                    raise IntelError(f"{src['name']}: ستون امتیاز «{src['score_col']}» در فایل نیست.")
+                extra = [cols.index(c) for c in ("confirmations", "category", "type") if c in cols]
+                continue
+            if len(row) <= ii:
+                continue
+            why = ""
+            if si is not None:
+                sc = _int(row[si]) if si < len(row) else 0
+                if sc < int(src.get("min_score") or 0):
+                    continue
+                why = f"امتیاز {sc}"
+            more = [row[j].strip() for j in extra if j < len(row) and row[j].strip()]
+            if more:
+                why = "، ".join([why] + more if why else more)
+            add(row[ii].strip(), why)
+        return ips, nets
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip().lstrip("﻿")
+        if not line:
+            continue
+        parts = re.split(r"[\s,;|]+", line)
+        cell, why = parts[0].strip().strip('"\''), ""
+        if cell.lower() in HEADER_WORDS:
+            continue
+        if src["fmt"] == "ipsum":
+            if len(parts) < 2 or not parts[1].isdigit():
+                continue
+            if int(parts[1]) < max(1, int(src.get("min_score") or 1)):
+                continue
+            why = f"در {parts[1]} فهرست"
+        add(cell, why)
+    return ips, nets
+
+
+def _fetch_url(src, cfg, have, meta, cancel):
+    headers = {"User-Agent": USER_AGENT}
+    if have and meta.get("etag"):
+        headers["If-None-Match"] = meta["etag"]
+    holder = types.SimpleNamespace(live_resp=None)
+
+    def fetch():
+        with requests.Session() as s:
+            s.verify = bool(cfg.get("verify_ssl", True))
+            r = s.get(src["url"], headers=headers, timeout=(15, max(10, int(cfg.get("timeout") or 120))), stream=True,
+                      allow_redirects=True, verify=s.verify)
+            holder.live_resp = r
+            if r.status_code == 304 and have:
+                return None, None
+            if r.status_code != 200:
+                raise IntelError(f"{src['name']}: دانلود ناموفق (HTTP {r.status_code})")
+            buf, n = io.BytesIO(), 0
+            for chunk in r.iter_content(1024 * 1024):
+                if cancel is not None and cancel.is_set():
+                    raise InterruptedError()
+                n += len(chunk)
+                if n > MAX_SRC_BYTES:
+                    raise IntelError(f"{src['name']}: حجم بیشتر از {MAX_SRC_BYTES // (1024 * 1024)}MB است.")
+                buf.write(chunk)
+            return buf.getvalue(), r.headers.get("ETag") or ""
+    if cancel is not None:
+        try:
+            return run_cancellable(cancel, fetch, holder, name="intel-src")
+        except Cancelled:
+            raise InterruptedError()
+    return fetch()
+
+
+def update_source(src, cfg, cancel=None, force=False, logf=None):
+    """فقط منبع اینترنتی: نسخه‌ی تازه در صورت نیاز. خروجی: (meta، پیام)."""
+    logf = logf or (lambda m, lv="info": None)
+    name, sid = src["name"], src["id"]
+    meta, f = src_meta(sid), _src_file(sid)
+    have = f.exists() and meta.get("url") == src["url"] and hashlib.sha256(f.read_bytes()).hexdigest() == meta.get("sha256")
+    age = time.time() - float(meta.get("fetched") or 0) if have else None
+    refresh = max(5, int(cfg.get("refresh_minutes") or 60)) * 60
+    if have and not force and age is not None and age < refresh:
+        return meta, f"{name}: نسخه‌ی ذخیره‌شده ({_ago(age)} پیش)"
+
+    def fail(e):
+        msg = str(e) if isinstance(e, IntelError) else f"{name}: دانلود ناموفق: {e.__class__.__name__}: {str(e)[:200]}"
+        meta["last_error"], meta["last_try"] = msg, time.time()
+        _write_json(f"src_{sid}_meta.dat", meta)
+        max_age = float(cfg.get("max_age_hours") or 24) * 3600
+        if have and age is not None and age <= max_age:
+            logf(f"{msg}؛ نسخه‌ی ذخیره‌شده‌ی {_ago(age)} پیش استفاده می‌شود", "warn")
+            return meta, f"{name}: نسخه‌ی ذخیره‌شده ({_ago(age)} پیش) به‌خاطر خطای دانلود"
+        raise IntelError(msg + ". برای جلوگیری از پاک حساب کردن اشتباه، بررسی انجام نشد.")
+    try:
+        data, etag = _fetch_url(src, cfg, have, meta, cancel)
+    except InterruptedError:
+        raise
+    except (IntelError, requests.RequestException) as e:
+        return fail(e)
+    if data is None:
+        meta.update(fetched=time.time(), last_error="", last_try=time.time())
+        _write_json(f"src_{sid}_meta.dat", meta)
+        return meta, f"{name}: تغییری نکرده بود (304)"
+    text = data.decode("utf-8-sig", "replace")
+    try:
+        ips, nets = parse_source(src, text)
+    except IntelError as e:
+        return fail(e)
+    if len(ips) + len(nets) < int(src.get("min_entries") or 1):
+        return fail(IntelError(f"{name}: فایل دریافتی فهرست معتبری نیست ({len(ips) + len(nets)} مورد)"))
+    tmp = f.with_suffix(".tmp")
+    tmp.write_bytes(data)
+    meta = {"url": src["url"], "fetched": time.time(), "etag": etag, "size": len(data), "ips": len(ips), "nets": len(nets),
+            "last_try": time.time(), "last_error": "", "sha256": hashlib.sha256(data).hexdigest()}
+    _write_json(f"src_{sid}_meta.dat", meta)
+    os.replace(tmp, f)
+    return meta, f"{name}: دانلود شد ({len(data) // 1024:,}KB، {len(ips):,}\u200f IP و {len(nets):,} رنج)"
+
+
+def _src_text(src, cfg):
+    """متن منبع (اینترنتی: نسخه‌ی ذخیره‌شده با اثر انگشت؛ فایل: هر بار خوانده می‌شود؛ آپلود: رمزشده). خروجی: (متن، توضیح، داخلی؟)"""
+    sid = src["id"]
+    if src["kind"] == "url":
+        f, meta = _src_file(sid), src_meta(sid)
+        if not f.exists() or meta.get("url") != src["url"]:
+            raise IntelError(f"{src['name']}: نسخه‌ای ذخیره نشده است.")
+        raw = f.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != meta.get("sha256"):
+            raise IntelError(f"{src['name']}: فایل ذخیره‌شده با اثر انگشت ثبت‌شده جور نیست؛ دوباره دانلود کنید.")
+        return raw.decode("utf-8-sig", "replace"), "", False
+    if src["kind"] == "path":
+        if paths.is_server():
+            raise IntelError(f"{src['name']}: در حالت سرور «فایل روی کامپیوتر» خوانده نمی‌شود.")
+        p = Path(src["path"])
+        if not p.is_file():
+            raise IntelError(f"{src['name']}: فایل پیدا نشد: {src['path']}")
+        if p.stat().st_size > MAX_LOCAL_BYTES:
+            raise IntelError(f"{src['name']}: حجم فایل بیش از حد است.")
+        mt = time.strftime("%Y-%m-%d %H:%M", time.localtime(p.stat().st_mtime))
+        return _decode(atrest.read_bytes(p)), f"فایل {p.name} (تغییر {mt})", True
+    f = _src_upload(sid)
+    if not f.exists() and sid == "local" and (_dir() / "local.dat").exists():
+        f = _dir() / "local.dat"            # لیست داخلیِ آپلودشده در نسخه‌های پیش از 1.59
+    if not f.exists():
+        raise IntelError(f"{src['name']}: فایلی آپلود نشده است (تنظیمات ← بررسی تکمیلی ← منابع).")
+    return atrest.read_bytes(f).decode("utf-8", "replace"), "فایل آپلودشده", True
+
+
+def source_lookup(src, cfg, targets):
+    """{ip: توضیح} برای IPهایی که در این منبع‌اند + توضیح منبع."""
+    text, desc, private_ok = _src_text(src, cfg)
+    ips, nets = parse_source(src, text, private_ok)
+    if src["kind"] != "url" and not ips and not nets:
+        raise IntelError(f"{src['name']}: هیچ IP یا رنج معتبری در فایل نیست.")
+    out = {}
+    for ip in targets:
+        if ip in ips:
+            out[ip] = ips[ip]
+            continue
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        for n, why in nets:
+            if n.version == a.version and a in n:
+                out[ip] = f"رنج {n}" + (f"، {why}" if why else "")
+                break
+    return out, desc or f"{len(ips):,}\u200f IP و {len(nets):,} رنج"
+
+
+def save_upload(sid, src_path):
+    p = Path(src_path)
+    if not p.is_file():
+        raise IntelError("فایل پیدا نشد.")
+    if p.stat().st_size > MAX_LOCAL_BYTES + 1024:
+        raise IntelError(f"حجم فایل بیشتر از {MAX_LOCAL_BYTES // (1024 * 1024)}MB است.")
+    text = _decode(atrest.read_bytes(p))
+    atrest.write_bytes(_src_upload(sid), text.encode("utf-8"))
+    meta = {"name": p.name, "uploaded": time.time(), "size": len(text)}
+    _write_json(f"src_{sid}_meta.dat", meta)
+    return meta
+
+
+def test_source(src, cfg, cancel=None):
+    """«آزمایش» در فرم: دانلود/خواندن بدون ذخیره؛ تعداد و ۵ نمونه."""
+    if src["kind"] == "url":
+        data, _ = _fetch_url(src, cfg, False, {}, cancel)
+        text, private_ok = data.decode("utf-8-sig", "replace"), False
+    else:
+        text, _d, private_ok = _src_text(src, cfg)
+    ips, nets = parse_source(src, text, private_ok)
+    sample = [f"{ip}" + (f" — {why}" if why else "") for ip, why in list(ips.items())[:5]] + [str(n) for n, _ in nets[:max(0, 5 - len(ips))]]
+    return {"ips": len(ips), "nets": len(nets), "sample": sample, "columns": _csv_cols(text)[:30] if src["fmt"] == "csv" else [],
+            "ok": len(ips) + len(nets) >= int(src.get("min_entries") or 1)}

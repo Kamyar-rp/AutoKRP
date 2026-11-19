@@ -8,7 +8,8 @@ DASH_MAX = 200
 PAGE_MAX = 20
 WIDGET_MAX = 60
 COLS = 12
-TYPES = ("status", "severity", "problems", "traffic", "metric", "gauge", "value", "topn", "avail", "map", "clock", "events", "text")
+TYPES = ("status", "severity", "problems", "traffic", "metric", "gauge", "value", "topn", "avail", "map", "clock", "events", "text",
+         "svc", "rtt", "tiles", "availbar", "snmptab")       # 1.59: ابزارهای Ping/HTTP/TCP و جدول SNMP
 RANGES = ("1h", "6h", "24h", "7d", "30d")
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
 

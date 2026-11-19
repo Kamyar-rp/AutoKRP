@@ -27,7 +27,7 @@ async function nocOpen2(dash, rotate) {
   if (NOC.rotate) {
     const rot = NOC.list.filter((d) => d.data.rotate_sec > 0);
     if (!rot.length) { NOC.rotate = false; toast("هیچ داشبوردی زمان چرخش ندارد.", "warn"); }
-    else { NOC.dash = rot[0].id; NOC.rotAt = Date.now(); }
+    else { NOC.dash = rot[0].id; NOC.rotAt = Date.now(); if (rot.length === 1) toast("فقط یک داشبورد زمان چرخش دارد؛ برای چرخش، به داشبورد دیگری هم «زمان نمایش در چرخش خودکار» بدهید.", "info"); }
   }
   if (NOC.dash && !NOC.list.find((d) => d.id === NOC.dash)) NOC.dash = null;
   if ($("#noc")) return;
@@ -241,7 +241,7 @@ async function nocDashEdit(x) {
     body: `<div class="form-grid">
         <label class="field"><span>نام</span><input id="ndName" value="${esc(x.name || "")}" placeholder="مثلاً هسته‌ی شبکه"></label>
         <label class="field"><span>چیدمان</span><select id="ndLay">${LAY.map(([k, n]) => `<option value="${k}" ${d.layout === k ? "selected" : ""}>${n}</option>`).join("")}</select></label>
-        <label class="field"><span>زمان نمایش در چرخش خودکار (ثانیه)</span><input id="ndRot" type="number" min="0" max="3600" value="${esc(d.rotate_sec)}"><small class="hint">۰ = بیرون از چرخش؛ وگرنه ۱۰ تا ۳۶۰۰</small></label>
+        <label class="field"><span>زمان نمایش در چرخش خودکار (ثانیه)</span><input id="ndRot" type="number" min="0" max="3600" value="${esc(d.rotate_sec)}"><small class="hint">فقط وقتی اثر دارد که در نمای NOC از فهرست بالا «↻ چرخش خودکار» را انتخاب کنید (یا آدرس ‎#noc/rotate‎): داشبوردهایی که این عدد را دارند پشت‌سرهم، هرکدام همین مدت، نمایش داده می‌شوند و نوار باریک بالا زمان مانده را نشان می‌دهد. با فقط یک داشبورد چرخشی تغییری دیده نمی‌شود. ۰ = بیرون از چرخش؛ وگرنه ۱۰ تا ۳۶۰۰.</small></label>
         <label class="field"><span>بازه‌ی نمودارها</span><select id="ndRange">${[["1h", "۱ ساعت"], ["6h", "۶ ساعت"], ["24h", "۲۴ ساعت"]].map(([k, n]) => `<option value="${k}" ${d.range === k ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
       <div class="row" style="gap:14px;flex-wrap:wrap;margin:6px 0"><label class="chk"><input type="checkbox" id="ndProb" ${d.problems ? "checked" : ""}>ستون مشکل‌ها</label>
         <label class="chk"><input type="checkbox" id="ndFeed" ${d.feed ? "checked" : ""}>رخدادهای اخیر</label></div>

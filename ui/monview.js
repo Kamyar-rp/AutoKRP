@@ -194,7 +194,7 @@ function mvRenderBar() {
       <div class="seg" id="mvMode"><button data-m="cards" class="${V.mode !== "table" ? "on" : ""}">کارت‌ها</button><button data-m="table" class="${V.mode === "table" ? "on" : ""}">جدول</button></div>
       <select id="mvView" title="نماهای ذخیره‌شده"><option value="">نمای پیش‌فرض</option>${vs.list.map((o) => `<option value="${esc(o.name)}" ${o.name === V.name ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</select>
       <div class="seg" id="mvFilter">${MV_FILTER.map(([k, n]) => `<button data-f="${k}" class="${MV.filter === k ? "on" : ""}">${n}</button>`).join("")}</div>
-      ${groups.length ? `<select id="mvGrp"><option value="">همه‌ی گروه‌ها</option>${groups.map((g) => `<option ${g === MV.grp ? "selected" : ""}>${esc(g)}</option>`).join("")}</select>` : ""}
+      ${groups.length ? `<select id="mvGrp" title="گروه"><option value="">همه‌ی گروه‌ها</option>${groups.map((g) => `<option value="${esc(g)}" ${g === MV.grp ? "selected" : ""}>${esc(g)} (${num(MON.targets.filter((t) => t.grp === g).length)})</option>`).join("")}</select>` : ""}
       <input id="mvQ" type="search" placeholder="جستجو: نام، آدرس، گروه" value="${esc(MV.q)}">
       <button class="btn ${MV.edit ? "primary" : ""}" id="mvEditBtn" title="ستون‌ها، ترتیب، قالب و پورت‌های نمایشی؛ تغییرات بعد از «اعمال»">${MV.edit ? "در حال ویرایش…" : "✎ شخصی‌سازی"}</button></div>`;
   $$("#mvMode button", el).forEach((b) => (b.onclick = () => { V.mode = b.dataset.m; MV.page = 0; mvRenderAll(); }));

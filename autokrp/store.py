@@ -26,7 +26,10 @@ _IP_FIELDS_V2 = [   # ستون‌های جدول ips در مهاجرت _m2 (ثا
 INTEL_FIELDS = ["intel_status", "intel_source", "intel_detail", "intel_at"]
 # 1.54 بلاک موقت: fw_until = زمان پایان بلاکی که خود برنامه زده ("YYYY-MM-DD HH:MM:SS"؛ خالی = دائم/نامعلوم)، fw_days = مدت به روز
 FW_FIELDS = ["fw_until", "fw_days"]
-IP_FIELDS = _IP_FIELDS_V2 + INTEL_FIELDS + FW_FIELDS
+# 1.59 قاعده‌های بلاک غیرمخرب: attack_reset = روزی که شمارش روزهای حمله بعد از آن از نو شروع می‌شود (پایان آخرین بلاک قاعده)؛
+# fw_rule = نام قاعده‌ای که IP را بلاک کرد
+RULE_FIELDS = ["attack_reset", "fw_rule"]
+IP_FIELDS = _IP_FIELDS_V2 + INTEL_FIELDS + FW_FIELDS + RULE_FIELDS
 
 
 def _m1(c):
@@ -348,7 +351,29 @@ def _m25(c):
             c.execute(f"ALTER TABLE ips ADD COLUMN {col} TEXT")   # nosec B608 — نام‌های ثابت
 
 
-MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17, _m18, _m19, _m20, _m21, _m22, _m23, _m24, _m25]
+def _m26(c):
+    """1.59: حمله‌ی روزانه‌ی هر IP از خروجی Splunk (برای «روز حمله» و جمع حمله‌ها) + ستون‌های قاعده‌ی بلاک غیرمخرب.
+    attacks = بیشترین تعداد حمله‌ای که اجراهای همان روز گزارش کرده‌اند (اجراهای هم‌پوشان یک روز دوباره شمرده نمی‌شوند)."""
+    c.execute("CREATE TABLE IF NOT EXISTS ip_attack_day(ip TEXT, day TEXT, attacks INTEGER, PRIMARY KEY(ip, day))")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_iad_day ON ip_attack_day(day)")
+    have = {r[1] for r in c.execute("PRAGMA table_info(ips)")}
+    for col in RULE_FIELDS:
+        if col not in have:
+            c.execute(f"ALTER TABLE ips ADD COLUMN {col} TEXT")   # nosec B608 — نام‌های ثابت
+    # داده‌ی قبلی: آخرین اجرای Splunk هر IP یک روز حمله حساب می‌شود
+    c.execute("INSERT OR IGNORE INTO ip_attack_day SELECT ip, substr(last_seen, 1, 10), CAST(attack_count AS INTEGER) FROM ips "
+              "WHERE source = 'splunk' AND COALESCE(last_seen, '') <> '' AND attack_count IS NOT NULL")
+
+
+def _m27(c):
+    """1.59.1: runs = چند اجرای Splunk در آن روز IP را دیده‌اند («حضور در گزارش‌ها»)."""
+    have = {r[1] for r in c.execute("PRAGMA table_info(ip_attack_day)")}
+    if "runs" not in have:
+        c.execute("ALTER TABLE ip_attack_day ADD COLUMN runs INTEGER DEFAULT 1")
+
+
+MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17, _m18, _m19, _m20, _m21, _m22, _m23, _m24, _m25,
+              _m26, _m27]
 # ستون‌هایی که مهاجرت‌ها اضافه می‌کنند؛ هر بار باز شدن بررسی می‌شود و اگر نباشد اضافه می‌شود
 # (پایگاه داده‌ای که شماره‌ی نسخه‌اش جلوتر از ستون‌هایش است، مثلاً بازگردانی فایل قدیمی، دیگر خطا نمی‌دهد)
 REQUIRED_COLUMNS = {
@@ -357,10 +382,11 @@ REQUIRED_COLUMNS = {
                     "protocol": "TEXT DEFAULT 'ssh'"},
     "history": {"user": "TEXT"},
     "runs": {"log": "TEXT"},
-    "ips": {c: "TEXT" for c in INTEL_FIELDS + FW_FIELDS},
+    "ips": {c: "TEXT" for c in INTEL_FIELDS + FW_FIELDS + RULE_FIELDS},
     "mon_targets": {"snmp": "TEXT", "cred_id": "INTEGER", "parent_id": "INTEGER", "cert_days": "INTEGER DEFAULT 0",
                     "policy_id": "INTEGER", "tpl": "TEXT DEFAULT ''"},
     "mon_events": {"kind": "TEXT DEFAULT 'down'"},
+    "ip_attack_day": {"runs": "INTEGER DEFAULT 1"},
 }
 def hmac_eq(a, b):
     import hmac
@@ -1088,6 +1114,35 @@ class Store:
             except (TypeError, ValueError):
                 out[ip] = 0
         return out
+
+    # ------------------------------------------------------------ 1.59: حمله‌ی روزانه (Splunk)
+    def record_attacks(self, counts, day=None):
+        """counts: {ip: تعداد حمله در این اجرا}. هر روز بیشترینِ اجراهای همان روز نگه داشته می‌شود."""
+        day = day or time.strftime("%Y-%m-%d")
+        rows = [(ip, day, int(n or 0)) for ip, n in counts.items()]
+        with self._lock:
+            for i in range(0, len(rows), 2000):
+                self.db.executemany("INSERT INTO ip_attack_day(ip, day, attacks, runs) VALUES(?,?,?,1) ON CONFLICT(ip, day) DO UPDATE SET "
+                                    "attacks = MAX(attacks, excluded.attacks), runs = COALESCE(runs, 1) + 1", rows[i:i + 2000])
+        self._breathe()
+
+    def attack_stats(self, since_day, ips=None):
+        """{ip: (روزهای حمله، جمع حمله، حضور در گزارش‌ها = تعداد اجراهای Splunk)} از since_day (شامل) تا امروز."""
+        q = "SELECT ip, COUNT(*), SUM(attacks), SUM(COALESCE(runs, 1)) FROM ip_attack_day WHERE day >= ?"
+        with self._lock:
+            if ips is None:
+                return {r[0]: (r[1], r[2] or 0, r[3] or 0) for r in self.db.execute(q + " GROUP BY ip", (since_day,))}
+            out, ips = {}, list(dict.fromkeys(ips))
+            for i in range(0, len(ips), 500):
+                part = ips[i:i + 500]
+                for r in self.db.execute(q + f" AND ip IN ({','.join('?' * len(part))}) GROUP BY ip", [since_day] + part):  # nosec B608 — فقط ?
+                    out[r[0]] = (r[1], r[2] or 0, r[3] or 0)
+            return out
+
+    def attack_purge(self, before_day):
+        with self._lock:
+            n = self.db.execute("DELETE FROM ip_attack_day WHERE day < ?", (before_day,)).rowcount
+        return n
 
     def ips_info(self, ips, fields="ip, country_code, score, isp, usage_type, is_tor"):
         """ردیف آدرس‌ها برای قاعده‌های مدت بلاک (فقط ستون‌های لازم)."""

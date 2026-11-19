@@ -285,6 +285,10 @@ class Worker:
                     log.info("%d رویداد آماری خام قدیمی‌تر از %d روز پاک شد (خلاصه‌ها می‌مانند)", n, raw)
         except Exception:
             log.exception("پاک کردن رویدادهای آماری قدیمی")
+        try:        # 1.59: حمله‌ی روزانه‌ی IPها (قاعده‌های بلاک غیرمخرب حداکثر ۳۶۵ روز عقب را می‌بینند)
+            self.store.attack_purge((datetime.now() - timedelta(days=400)).strftime("%Y-%m-%d"))
+        except Exception:
+            log.exception("پاک کردن حمله‌های روزانه‌ی قدیمی")
         days = int(self.settings.get("abuseipdb", "purge_clean_days", default=30) or 0)
         if days <= 0:
             return

@@ -71,7 +71,7 @@ Review the addresses left for manual review."""
 FG_EXTRA = tuple(f"fortigate{i}" for i in range(2, 9))
 FG_DEV_FIELDS = ("name", "address", "port", "auth_type", "header_name", "username", "vdom", "verify_ssl", "pin_cert",
                  "ban_expiry", "ban_days", "address_count", "convert_auto_bans", "timeout", "check_json_status")
-FG_SHARED = ("ignore_networks", "max_cidr_expand", "ban_rules")
+FG_SHARED = ("ignore_networks", "max_cidr_expand", "ban_rules", "clean_rules")
 PIN_CONNS = ("splunk", "abuseipdb", "fortigate", "redmine") + FG_EXTRA
 # رنج‌های غیرعمومی که بلاک کردنشان معنا ندارد. پیش‌فرض‌اند و کاربر می‌تواند از فیلد حذفشان کند.
 NONPUBLIC_NETWORKS = [
@@ -180,7 +180,7 @@ DEFAULTS = {
         "address": "", "port": "", "auth_type": "bearer", "username": "",
         "vdom": "root", "verify_ssl": False, "pin_cert": True, "ban_expiry": 0, "address_count": 10000,
         # 1.54: مدت بلاک به روز (۰ = دائم). ban_expiry (ثانیه) دیگر در رابط نیست و در conn_config از ban_days ساخته می‌شود.
-        "ban_days": 0, "ban_rules": [],
+        "ban_days": 0, "ban_rules": [], "clean_rules": [],
         # IPی که در Banned هست ولی بلاک خودکار (IPS، Application Control، ...) یا با انقضاست ← Administrative دائمی (با تأیید)
         "convert_auto_bans": True,
         "timeout": 10, "max_cidr_expand": 256, "check_json_status": True,
