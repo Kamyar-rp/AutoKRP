@@ -233,6 +233,70 @@ function go(page) {
   }
   if (page === "run") { runTabApply(); renderStageForm(); loadToolsData(); pollRun(true); }
   $(".main").scrollTop = 0;
+  routeSync();
+}
+
+// ---- 1.59.4 (حالت وب): آدرس هر صفحه و «باز کردن در تب جدید» ----
+// ‎#p/<صفحه>‎ و ‎#p/dash/<شناسه>[/<شماره‌ی صفحه>]‎ (NOC: ‎#noc…‎ در noc.js). هر عنصر با data-href (یا تابع el._href) با کلیک راست
+// منوی «باز کردن در تب جدید / کپی آدرس» دارد؛ کلیک وسط و Ctrl/Shift+کلیک هم تب جدید.
+function routeParse(h) {
+  const m = /^#p\/([a-z]+)(?:\/(\d+)(?:\/(\d+))?)?$/.exec(h || "");
+  return m ? { page: m[1], id: m[2] ? Number(m[2]) : null, sub: m[3] ? Number(m[3]) : 0 } : null;
+}
+function routeHash() {
+  if (S.page === "dash" && typeof DB !== "undefined" && DB.cur && DB.cur.id && !DB.edit) return `#p/dash/${DB.cur.id}${DB.page ? "/" + DB.page : ""}`;
+  return `#p/${S.page}`;
+}
+function routeSync() {
+  if (!WEB || !S._routed || document.body.classList.contains("noc-on") || /^#noc/.test(location.hash)) return;   // پیش از اعمال آدرس اول نه
+  try { if (location.hash !== routeHash()) history.replaceState(null, "", location.pathname + location.search + routeHash()); } catch (_) { /* */ }
+}
+function routeApply() {
+  const p = routeParse(location.hash); if (!p) return false;
+  const b = $(`#nav button[data-page="${p.page}"]`);
+  if (!b || b.hidden || getComputedStyle(b).display === "none") return false;
+  if (p.page === "dash" && typeof DB !== "undefined" && p.id) { DB.want = p.id; DB.wantPage = p.sub; DB.cur = null; }
+  if (p.page !== S.page || p.page === "dash") go(p.page);
+  return true;
+}
+function hrefUrl(h) { return location.origin + location.pathname + location.search + h; }
+function newTab(h) { window.open(hrefUrl(h), "_blank", "noopener"); }
+function ctxClose() { const m = $("#ctxMenu"); if (m) m.remove(); }
+function hrefOf(t) {
+  const el = t && t.closest && t.closest("[data-href]"); if (!el) return null;
+  const h = typeof el._href === "function" ? el._href() : el.dataset.href;
+  return h ? { el, h } : null;
+}
+if (WEB) {
+  document.addEventListener("contextmenu", (e) => {
+    const x = hrefOf(e.target); if (!x) return;
+    e.preventDefault(); ctxClose();
+    const m = document.createElement("div"); m.id = "ctxMenu"; m.className = "ctx-menu";
+    m.innerHTML = `<button type="button" data-c="tab">${esc(I18N.t("باز کردن در تب جدید"))}</button><button type="button" data-c="copy">${esc(I18N.t("کپی آدرس"))}</button>`;
+    document.body.appendChild(m);
+    const r = m.getBoundingClientRect();
+    m.style.left = Math.max(4, Math.min(e.clientX, innerWidth - r.width - 4)) + "px";
+    m.style.top = Math.max(4, Math.min(e.clientY, innerHeight - r.height - 4)) + "px";
+    m.onclick = async (ev) => {
+      const c = ev.target.closest("[data-c]"); if (!c) return;
+      ctxClose();
+      if (c.dataset.c === "tab") return newTab(x.h);
+      try { await navigator.clipboard.writeText(hrefUrl(x.h)); toast("آدرس کپی شد", "ok"); } catch (_) { toast(hrefUrl(x.h), "info"); }
+    };
+  });
+  window.addEventListener("click", (e) => { if (!(e.target.closest && e.target.closest("#ctxMenu"))) ctxClose(); }, true);
+  window.addEventListener("scroll", (e) => { if (!(e.target.closest && e.target.closest("#ctxMenu"))) ctxClose(); }, true);
+  window.addEventListener("resize", ctxClose);
+  window.addEventListener("blur", (e) => { if (e.target === window) ctxClose(); });     // فقط خود پنجره (نه blur عنصرها)
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#ctxMenu")) { ctxClose(); e.stopPropagation(); e.preventDefault(); } }, true);
+  document.addEventListener("click", (e) => {
+    if (!(e.ctrlKey || e.metaKey || e.shiftKey)) return;
+    const x = hrefOf(e.target); if (!x) return;
+    e.preventDefault(); e.stopPropagation(); newTab(x.h);
+  }, true);
+  document.addEventListener("mousedown", (e) => { if (e.button === 1 && hrefOf(e.target)) e.preventDefault(); });   // بدون اسکرول خودکار
+  document.addEventListener("auxclick", (e) => { if (e.button !== 1) return; const x = hrefOf(e.target); if (!x) return; e.preventDefault(); newTab(x.h); });
+  $$("#nav button[data-page]").forEach((b) => (b.dataset.href = "#p/" + b.dataset.page));
 }
 $("#nav").addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-page]"); if (!b) return;
@@ -560,6 +624,7 @@ function applyRole(r) {
   chip.hidden = !(me && !me.single);
   if (me && !me.single) chip.innerHTML = `<svg style="width:14px;height:14px"><use href="#i-lock"/></svg><b class="ltr">${esc(me.username)}</b> — ${ROLE_FA[me.role] || me.role}`;
   if (me && !me.single) chip.title = me.username;
+  if (!S._routed) { S._routed = true; routeApply(); }     // 1.59.4: آدرس ‎#p/…‎ (تب تازه)
   if (!me) return;
   const forbidden = (role !== "admin" && S.page === "settings") || ($("#navSsh").hidden && S.page === "ssh");
   if (forbidden) { const first = $$("#nav button[data-page]").find((x) => getComputedStyle(x).display !== "none" && !x.hidden); go(first ? first.dataset.page : "dashboard"); }
@@ -606,7 +671,7 @@ function renderDashboard(r) {
   if (src) {
     const stages = r.run ? r.run.stages : Object.fromEntries(Object.keys(src.steps || {}).map((s) => [s, { state: src.steps[s] || "off", message: "" }]));
     renderRail($("#dashRail"), stages, src.summary || {}, r.run && r.run.order);
-    $("#railMeta").textContent = `${fmtDate(src.started)} — ${{ manual: "دستی", schedule: "زمان‌بندی", retry: "چک مجدد", sync: "بررسی کامل FortiGate" }[src.trigger] || src.trigger} — ${STATE_TXT[src.status] || { done: "کامل", failed: "ناموفق" }[src.status] || src.status}`;
+    $("#railMeta").textContent = `${fmtDate(src.started)} — ${{ manual: "دستی", schedule: "زمان‌بندی", retry: "چک مجدد", sync: "بررسی کامل FortiGate", ban: "بلاک از آدرس‌ها" }[src.trigger] || src.trigger} — ${STATE_TXT[src.status] || { done: "کامل", failed: "ناموفق" }[src.status] || src.status}`;
   } else {
     $("#dashRail").innerHTML = `<div class="empty" style="grid-column:1/-1">هنوز اجرایی انجام نشده است. از «ابزارها» شروع کنید.</div>`;
     $("#railMeta").textContent = "";
@@ -1175,6 +1240,8 @@ function scoreHtml(v) {
   const n = Number(v), col = n >= 75 ? "var(--err)" : n >= 25 ? "var(--warn)" : n > 0 ? "var(--info)" : "var(--ok)";
   return `<span class="score"><i><b style="width:${Math.min(100, n)}%;background:${col}"></b></i>${n}</span>`;
 }
+/* 1.59.2: قبلاً بلاک مدت‌دار خورده، بلاکش تمام شده و دوباره در گزارش‌ها آمده ولی هنوز غیرمخرب است */
+function repeatTag() { return `<span class="tag warn" title="${esc(I18N.t("قبلاً بلاک مدت‌دار خورده و بعد از پایان بلاک دوباره در گزارش‌ها آمده؛ برای بلاک دائم انتخاب کنید"))}">${esc(I18N.t("غیرمخرب (تکرار)"))}</span>`; }
 function statusTag(s) {
   return { ABUSE: `<span class="tag err">مخرب</span>`, CLEAN: `<span class="tag ok">غیرمخرب</span>`, ERROR: `<span class="tag warn">خطا</span>` }[s] || `<span class="tag mute">${esc(s || "—")}</span>`;
 }
@@ -1454,7 +1521,6 @@ const IP_COLS = [
   ["ip", "IP", 1], ["abuse_status", "وضعیت", 1], ["score", "امتیاز", 1], ["reports", "گزارش‌ها", 1], ["country_code", "کشور", 1],
   ["isp", "ISP", 1], ["usage_type", "نوع کاربری", 0], ["domain", "دامنه", 0], ["asn", "ASN", 0], ["categories", "دسته‌ها", 1],
   ["is_tor", "Tor", 0], ["is_whitelisted", "Whitelist", 0], ["fw_status", "FortiGate", 1],
-  ["atk_runs", "حضور در گزارش‌ها (۳۰ روز)", 1], ["atk_days", "روز حمله (۳۰ روز)", 1],
   ["signatures", "Signatureها", 0], ["dest_ports", "پورت‌های مقصد", 0],
   ["checked_at", "زمان بررسی", 1], ["last_seen", "آخرین مشاهده", 0], ["first_seen", "اولین مشاهده", 0],
   ["seen_days", "روزهای بررسی", 1], ["intel_status", "بررسی تکمیلی", 1],
@@ -1483,7 +1549,6 @@ async function loadIps() {
   S.ips = ipRows(r); S.repeatDays = r.repeat_days || 0; renderIps();
 }
 /* 1.54 مدت بلاک: «rules» = طبق قاعده‌های تنظیمات؛ عدد = روز (۰ = دائم). خروجی null = انصراف */
-const BAN_PRESETS = [["rules", "طبق قاعده‌ها"], [0, "دائم"], [1, "۱ روز"], [7, "۷ روز"], [30, "۳۰ روز"], [90, "۹۰ روز"], ["custom", "دلخواه"]];
 function banDaysTxt(d) { return !Number(d) ? I18N.t("دائم") : `${num(d)} ${I18N.t("روز")}`; }
 function fwUntilTxt(r) {
   if (!r.fw_until || !["banned", "already"].includes(r.fw_status)) return "";
@@ -1491,27 +1556,34 @@ function fwUntilTxt(r) {
   if (!end) return "";
   return end <= Date.now() ? I18N.t("مدت تمام شده") : `${I18N.t("تا")} ${String(r.fw_until).slice(0, 10)}`;
 }
-function banDaysDlg(ips, listHtml) {
-  const known = ips.map((ip) => (S.ips || []).find((x) => x.ip === ip)).filter(Boolean);
-  const already = known.filter((x) => ["banned", "already"].includes(x.fw_status)).length;
-  let cur = "rules";
-  return openModal({
-    title: "بلاک در FortiGate",
-    body: `<p>برای ${num(ips.length)}‏ IP پیش‌نمایش ساخته می‌شود: رنج داخلی، Address و Banned بررسی می‌شوند و در صفحه‌ی «ابزارها» لیست نهایی را تأیید می‌کنید.</p>
-      <div class="field wide" style="margin:10px 0"><span>مدت بلاک</span><div class="seg" id="bdSeg" style="flex-wrap:wrap">${BAN_PRESETS.map(([v, t]) => `<button type="button" data-v="${v}" class="${v === cur ? "on" : ""}">${t}</button>`).join("")}</div>
-        <div class="row" id="bdCustom" hidden style="gap:8px;margin-top:8px;align-items:center"><input type="number" id="bdDays" min="1" max="3650" step="1" style="max-width:120px" placeholder="30"><span>روز</span></div>
+/* 1.59.2: بلاک مستقیم از صفحه‌ی آدرس‌ها با یک تأیید: مدت‌دار (روز) یا دائم */
+async function ipBanDlg(ips, listHtml) {
+  const c = await api("ips_ban_check", ips);
+  if (!c.ok) { toast(c.error, "error"); return null; }
+  const go = c.total - c.excluded;
+  if (!go) { toast("همه‌ی این IPها در رنج‌های مستثنا هستند و بلاک نمی‌شوند.", "warn"); return null; }
+  let cur = c.repeat && c.repeat === go ? 0 : 30;
+  const PRE = [[7, "۷ روز"], [30, "۳۰ روز"], [90, "۹۰ روز"], ["custom", "دلخواه"], [0, "دائم"]];
+  // قاعده‌های مدت بلاک (1.54) اگر تعریف شده‌اند: مدت هر IP طبق قاعده و تأیید در صفحه‌ی ابزارها (مثل قبل)
+  if (((S.settings.fortigate || {}).ban_rules || []).length) PRE.push(["rules", "طبق قاعده‌های مدت"]);
+  const facts = [c.malicious ? `${num(c.malicious)}‏ ${I18N.t("مخرب")}` : "", c.repeat ? `${num(c.repeat)}‏ ${I18N.t("غیرمخرب (تکرار)")}` : "",
+    c.excluded ? `${num(c.excluded)}‏ ${I18N.t("در رنج مستثنا — بلاک نمی‌شوند")}` : "",
+    c.banned ? `${num(c.banned)}‏ ${I18N.t("الان بلاک‌اند — با مدت تازه از امروز دوباره زده می‌شوند")}` : ""].filter(Boolean);
+  const v = await openModal({
+    title: `${I18N.t("بلاک در FortiGate")}: ${num(go)}‏ IP`,
+    body: `${facts.length ? `<ul class="hint" style="margin:0 0 8px;padding-inline-start:18px">${facts.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      <div class="field wide" style="margin:6px 0"><span>${esc(I18N.t("مدت بلاک"))}</span><div class="seg" id="bdSeg" style="flex-wrap:wrap">${PRE.map(([x, t]) => `<button type="button" data-v="${x}" class="${x === cur ? "on" : ""}">${esc(I18N.t(t))}</button>`).join("")}</div>
+        <div class="row" id="bdCustom" hidden style="gap:8px;margin-top:8px;align-items:center"><input type="number" id="bdDays" min="1" max="3650" step="1" style="max-width:120px" placeholder="30"><span>${esc(I18N.t("روز"))}</span></div>
         <small class="hint" id="bdHint"></small></div>
-      ${already ? `<p class="hint warn">${num(already)}‏ IP از این فهرست الان بلاک است. با انتخاب یک مدت مشخص، بلاک فعلی آن‌ها از FortiGate پاک و بلافاصله با مدت تازه (از امروز) دوباره زده می‌شود. با «طبق قاعده‌ها» بلاک‌های موجود دست نمی‌خورند.</p>` : ""}
-      ${listHtml}`,
-    foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn warn" data-r="1">ساخت پیش‌نمایش</button>`,
+      <details><summary class="muted" style="cursor:pointer">${esc(I18N.t("فهرست IPها"))} (${num(ips.length)})</summary>${listHtml}</details>`,
+    foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn warn" data-r="1">${esc(I18N.t("بلاک"))}</button>`,
     onOpen: (m, close) => {
       const hint = () => {
         $("#bdCustom", m).hidden = cur !== "custom";
-        $("#bdHint", m).textContent = I18N.t(cur === "rules" ? "مدت هر IP از قاعده‌های «تنظیمات ← FortiGate ← مدت بلاک» می‌آید؛ اگر قاعده‌ای جور نبود، پیش‌فرض همان دستگاه."
-          : cur === 0 ? "بلاک بدون انقضا." : "بعد از این مدت FortiGate خودش بلاک را برمی‌دارد. اگر همان IP دوباره دیده شود، از نو بررسی و بلاک می‌شود.");
+        $("#bdHint", m).textContent = I18N.t(cur === "rules" ? "مدت هر IP طبق قاعده‌های مدت بلاک (تنظیمات FortiGate)؛ فهرست نهایی در صفحه‌ی ابزارها تأیید می‌شود." : cur === 0 ? "بلاک بدون انقضا." : "بعد از این مدت FortiGate خودش بلاک را برمی‌دارد. از آن روز «روزهای بررسی» از صفر شمرده می‌شود؛ اگر IP دوباره در گزارش‌ها آمد، AbuseIPDB از نو بررسی می‌کند: مخرب ← طبق قانون اصلی بلاک؛ غیرمخرب ← با وضعیت «غیرمخرب (تکرار)» برای بلاک دائم نشان داده می‌شود.");
       };
       $$("#bdSeg button", m).forEach((b) => (b.onclick = () => {
-        cur = b.dataset.v === "rules" || b.dataset.v === "custom" ? b.dataset.v : Number(b.dataset.v);
+        cur = ["custom", "rules"].includes(b.dataset.v) ? b.dataset.v : Number(b.dataset.v);
         $$("#bdSeg button", m).forEach((x) => x.classList.toggle("on", x === b)); hint(); if (cur === "custom") $("#bdDays", m).focus();
       }));
       hint();
@@ -1523,19 +1595,20 @@ function banDaysDlg(ips, listHtml) {
         close(n);
       }));
     },
-  }).then((v) => (v === undefined ? null : v));
+  });
+  return v === undefined ? null : v;
 }
 /* 1.55: پیام‌های بلند رویدادهای زنده سه خط نشان داده می‌شوند؛ کلیک = باز/بسته */
 document.addEventListener("click", (e) => { const m = e.target.closest && e.target.closest(".ev .msg.clamp"); if (m && !String(getSelection())) m.classList.toggle("open"); });
 function cell(k, r) {
   const v = r[k];
   if (k === "ip") return `<td class="ltr"><span class="link ip" data-ipd="${esc(v)}">${esc(v)}</span></td>`;
-  if (k === "abuse_status") return `<td>${statusTag(v)}</td>`;
+  if (k === "abuse_status") return `<td>${r.repeat ? repeatTag() : statusTag(v)}</td>`;
   if (k === "score") return `<td>${scoreHtml(v)}</td>`;
   if (k === "fw_status") { const u = fwUntilTxt(r); return `<td>${v ? `<span class="tag ${(FW[v] || ["mute"])[0]}" title="${esc(r.fw_detail || "")}">${esc((FW[v] || [0, v])[1])}</span>${u ? ` <small class="muted nowrap" title="${esc(I18N.t("بلاک موقت"))}: ${esc(r.fw_days || "")} ${esc(I18N.t("روز"))}">${esc(u)}</small>` : ""}` : "—"}</td>`; }
   if (k === "seen_days") return `<td class="num">${v ? (isRepeat(r) ? `<span class="tag warn" title="IP غیرمخربی که بارها تکرار شده؛ بررسی مجدد">${num(v)}</span>` : num(v)) : "—"}</td>`;
   if (k === "intel_status") return `<td>${intelTag(r)}</td>`;
-  if (["reports", "attack_count", "atk_runs", "atk_days"].includes(k)) return `<td class="num">${num(v)}</td>`;
+  if (["reports", "attack_count"].includes(k)) return `<td class="num">${num(v)}</td>`;
   if (["asn", "domain", "dest_ports", "checked_at", "last_seen", "first_seen"].includes(k)) return `<td class="ltr">${esc(v ?? "—")}</td>`;
   const w = k === "categories" || k === "signatures" ? " w-lg" : k === "isp" || k === "usage_type" || k === "fw_detail" || k === "error" ? " w-md" : "";
   const t = esc(v === null || v === undefined || v === "" ? "—" : v);
@@ -1547,29 +1620,146 @@ function intelTag(r) {
   return `<span class="tag ${r.intel_status === "ABUSE" ? "err" : "ok"}" title="${esc([r.intel_source, r.intel_detail, r.intel_at].filter(Boolean).join(" — "))}">${r.intel_status === "ABUSE" ? "مخرب" : "پاک"}</span>`;
 }
 /* 1.59: فیلترهای جمع‌وجور (کشور چندتایی، روز حمله، امتیاز، حمله‌ی ۳۰ روزه، بررسی تکمیلی، ISP) */
-const IPF = { cc: new Set(), ccOp: "in", atkD: 0, atkT: 0, scMin: null, scMax: null, intel: "", text: "", days: 0 };
+const IPF = { cc: new Set(), ccOp: "in", scMin: null, scMax: null, intel: "", text: "", days: 0 };
 function ipfNum(id) { const v = $(id).value; return v === "" ? null : Number(String(v).replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d))); }
 function ipfRead() {
-  IPF.days = ipfNum("#ipDays") || 0; IPF.atkT = ipfNum("#ipAtkT") || 0; IPF.scMin = ipfNum("#ipScMin"); IPF.scMax = ipfNum("#ipScMax");
+  IPF.scMin = ipfNum("#ipScMin"); IPF.scMax = ipfNum("#ipScMax");
   IPF.text = $("#ipText").value.trim().toLowerCase();
-  const on = $("#ipAtkD button.on"); IPF.atkD = on && on.dataset.v === "c" ? ipfNum("#ipAtkDc") || 0 : Number(on ? on.dataset.v : 0) || 0;
+  const on = $("#ipDaysSeg button.on"); IPF.days = on && on.dataset.v === "c" ? ipfNum("#ipDaysC") || 0 : Number(on ? on.dataset.v : 0) || 0;
 }
-function ipfActive() { return IPF.cc.size || IPF.atkD || IPF.atkT || IPF.scMin !== null || IPF.scMax !== null || IPF.intel || IPF.text || IPF.days; }
-function filteredIps() {
+function ipfActive() { return IPF.cc.size || IPF.scMin !== null || IPF.scMax !== null || IPF.intel || IPF.text || IPF.days || Object.keys(IPXF).length; }
+
+/* ---- 1.59.5: فیلتر ستونی مثل اکسل (همه‌ی ستون‌ها جز IP) ----
+   IPXF[ستون] = {vals: Set کلیدهای مجاز | null، min، max}. با فیلترهای بالای صفحه با هم (AND). شمارش هر مقدار در پنجره روی
+   ردیف‌هایی است که از همه‌ی فیلترها جز همین ستون گذشته‌اند (مثل اکسل). فقط در حافظه‌ی همین صفحه. */
+const IPXF = {};
+const XF_MULTI = new Set(["categories", "signatures", "dest_ports"]);
+const XF_NUM = new Set(["score", "reports", "seen_days"]);
+const XF_DATE = new Set(["checked_at", "last_seen", "first_seen"]);
+const XF_LIST_MAX = 500;
+function ipxKeys(c, r) {
+  const v = r[c];
+  if (v === null || v === undefined || v === "") return [""];
+  if (XF_MULTI.has(c)) { const a = String(v).split(/\s*[|,]\s*/).filter(Boolean); return a.length ? a : [""]; }
+  if (XF_DATE.has(c)) return [String(v).slice(0, 10)];
+  if (c === "is_tor" || c === "is_whitelisted") return [v === true || v === 1 || v === "1" || v === "true" ? "1" : "0"];
+  if (c === "country_code") return [String(v).toUpperCase()];
+  return [String(v)];
+}
+function ipxLabel(c, k) {
+  if (k === "") return I18N.t("(خالی)");
+  if (c === "fw_status") return I18N.t((FW[k] || [0, k])[1]);
+  if (c === "abuse_status") return I18N.t({ ABUSE: "مخرب", CLEAN: "غیرمخرب", ERROR: "خطا" }[k] || k);
+  if (c === "intel_status") return I18N.t({ ABUSE: "مخرب", CLEAN: "پاک" }[k] || k);
+  if (c === "is_tor" || c === "is_whitelisted") return I18N.t(k === "1" ? "بله" : "خیر");
+  return k;
+}
+function ipxPass(r, skip) {
+  for (const c in IPXF) {
+    if (c === skip) continue;
+    const f = IPXF[c];
+    if (f.vals && !ipxKeys(c, r).some((k) => f.vals.has(k))) return false;
+    if (f.min !== null || f.max !== null) {
+      if (XF_DATE.has(c)) { const d = String(r[c] || "").slice(0, 10); if (!d || (f.min && d < f.min) || (f.max && d > f.max)) return false; }
+      else { const n = r[c] === null || r[c] === undefined || r[c] === "" ? NaN : Number(r[c]); if (isNaN(n) || (f.min !== null && n < f.min) || (f.max !== null && n > f.max)) return false; }
+    }
+  }
+  return true;
+}
+function ipxDesc(c) {
+  const f = IPXF[c], name = I18N.t((IP_COLS.find((x) => x[0] === c) || [0, c])[1]), p = [];
+  if (f.vals) { const a = [...f.vals].map((k) => ipxLabel(c, k)); p.push(a.slice(0, 3).join("، ") + (a.length > 3 ? ` +${num(a.length - 3)}` : "")); }
+  if (f.min !== null || f.max !== null) p.push(`${f.min !== null ? (XF_DATE.has(c) ? f.min : num(f.min)) : "…"} ${I18N.t("تا")} ${f.max !== null ? (XF_DATE.has(c) ? f.max : num(f.max)) : "…"}`);
+  return `${name}: ${p.join(" · ")}`;
+}
+function ipxChips() {
+  const ks = Object.keys(IPXF), box = $("#ipxChips");
+  box.hidden = !ks.length;
+  box.innerHTML = ks.length ? `<span class="muted">${esc(I18N.t("فیلتر ستون‌ها:"))}</span>${ks.map((c) => `<span class="ipx-chip" data-no-i18n><span>${esc(ipxDesc(c))}</span><button type="button" data-ipxxfx="${esc(c)}" title="${esc(I18N.t("حذف این فیلتر"))}">✕</button></span>`).join("")}<button type="button" class="btn sm ghost" id="ipxClrAll">${esc(I18N.t("پاک کردن همه"))}</button>` : "";
+}
+function ipxClose() { const p = $("#ipxPop"); if (p) p.remove(); }
+function ipxOpen(c, th) {
+  ipxClose();
+  const base = filteredIps(c), cnt = new Map();
+  base.forEach((r) => ipxKeys(c, r).forEach((k) => cnt.set(k, (cnt.get(k) || 0) + 1)));
+  const cur = IPXF[c] || { vals: null, min: null, max: null };
+  (cur.vals ? [...cur.vals] : []).forEach((k) => { if (!cnt.has(k)) cnt.set(k, 0); });    // مقدار انتخاب‌شده‌ای که الان ردیفی ندارد هم بماند
+  let keys = [...cnt.keys()];
+  if (XF_NUM.has(c)) keys.sort((a, b) => (a === "" ? 1 : b === "" ? -1 : Number(a) - Number(b)));
+  else if (XF_DATE.has(c)) keys.sort((a, b) => (a === "" ? 1 : b === "" ? -1 : b.localeCompare(a)));
+  else keys.sort((a, b) => (a === "" ? 1 : b === "" ? -1 : cnt.get(b) - cnt.get(a) || ipxLabel(c, a).localeCompare(ipxLabel(c, b))));
+  const sel = new Set(cur.vals || keys), rng = XF_NUM.has(c) || XF_DATE.has(c);
+  const m = document.createElement("div"); m.id = "ipxPop"; m.className = "ipx-pop"; m.dataset.col = c;
+  const ph = XF_DATE.has(c) ? "2026-11-01" : "";
+  m.innerHTML = `<div class="ipx-s"><button type="button" class="btn sm" data-ipxxs="1">${esc(I18N.t(XF_NUM.has(c) ? "کوچک به بزرگ ↑" : "صعودی ↑"))}</button><button type="button" class="btn sm" data-ipxxs="-1">${esc(I18N.t(XF_NUM.has(c) ? "بزرگ به کوچک ↓" : "نزولی ↓"))}</button></div>
+    ${rng ? `<div class="ipx-rng"><span>${esc(I18N.t("از"))}</span><input class="input ltr" id="ipxMin" placeholder="${ph}" value="${cur.min ?? ""}"><span>${esc(I18N.t("تا"))}</span><input class="input ltr" id="ipxMax" placeholder="${ph}" value="${cur.max ?? ""}"></div>` : ""}
+    <input class="input" id="ipxQ" placeholder="${esc(I18N.t("جستجو در مقدارها…"))}">
+    <div class="ipx-list" id="ipxList"></div>
+    <div class="ipx-f"><button type="button" class="btn sm ghost" id="ipxClr">${esc(I18N.t("پاک کردن فیلتر این ستون"))}</button><button type="button" class="btn sm ghost" id="ipxNo">${esc(I18N.t("انصراف"))}</button><button type="button" class="btn sm primary" id="ipxOk">${esc(I18N.t("اعمال"))}</button></div>`;
+  document.body.appendChild(m);
+  const draw = () => {
+    const q = $("#ipxQ", m).value.trim().toLowerCase();
+    const vis = keys.filter((k) => !q || ipxLabel(c, k).toLowerCase().includes(q) || k.toLowerCase().includes(q));
+    const shown = vis.slice(0, XF_LIST_MAX), all = shown.length && shown.every((k) => sel.has(k));
+    $("#ipxList", m).innerHTML = `<label class="ipx-all"><input type="checkbox" data-ipxxall ${all ? "checked" : ""}><b>${esc(I18N.t(q ? "(انتخاب همه‌ی نتیجه‌ها)" : "(انتخاب همه)"))}</b></label>` +
+      shown.map((k) => `<label><input type="checkbox" data-ipxxk="${esc(k)}" ${sel.has(k) ? "checked" : ""}><span class="${k === "" || ["fw_status", "abuse_status", "intel_status", "is_tor", "is_whitelisted"].includes(c) ? "" : "ltr"}" data-no-i18n>${esc(ipxLabel(c, k))}</span><span class="n">${num(cnt.get(k))}</span></label>`).join("") +
+      (vis.length > shown.length ? `<div class="muted">${esc(I18N.t("فقط {0} مقدار اول؛ جستجو کنید.").replace("{0}", num(XF_LIST_MAX)))}</div>` : "") +
+      (!vis.length ? `<div class="muted">${esc(I18N.t("پیدا نشد"))}</div>` : "");
+    m._vis = shown;
+  };
+  draw();
+  const r = th.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
+  m.style.top = Math.max(8, Math.min(r.bottom + 4, innerHeight - h - 8)) + "px";
+  m.style.left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8)) + "px";
+  $("#ipxQ", m).addEventListener("input", draw);
+  $("#ipxList", m).addEventListener("change", (e) => {
+    const t = e.target;
+    if (t.dataset.ipxxall !== undefined) (m._vis || []).forEach((k) => (t.checked ? sel.add(k) : sel.delete(k)));
+    else if (t.dataset.ipxxk !== undefined) t.checked ? sel.add(t.dataset.ipxxk) : sel.delete(t.dataset.ipxxk);
+    draw();
+  });
+  const apply = () => {
+    const rd = (id) => { const el = $(id, m); if (!el) return null; const v = el.value.trim().replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)); if (!v) return null;
+      if (XF_DATE.has(c)) return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined; const n = Number(v); return isNaN(n) ? undefined : n; };
+    const mn = rd("#ipxMin"), mx = rd("#ipxMax");
+    if (mn === undefined || mx === undefined) return toast(XF_DATE.has(c) ? "تاریخ را مثل 2026-11-01 بنویسید." : "عدد معتبر وارد کنید.", "err");
+    if (!sel.size && mn === null && mx === null) return toast("حداقل یک مقدار را انتخاب کنید.", "err");
+    const allKeys = keys.every((k) => sel.has(k));
+    if (allKeys && mn === null && mx === null) delete IPXF[c];
+    else IPXF[c] = { vals: allKeys ? null : new Set(sel), min: mn, max: mx };
+    ipxClose(); S.ipShow = IP_PAGE; renderIps();
+  };
+  $("#ipxOk", m).onclick = apply;
+  $("#ipxNo", m).onclick = ipxClose;
+  $("#ipxClr", m).onclick = () => { delete IPXF[c]; ipxClose(); S.ipShow = IP_PAGE; renderIps(); };
+  m.querySelectorAll("[data-ipxxs]").forEach((b) => (b.onclick = () => { S.ipSort = { k: c, d: Number(b.dataset.ipxxs) }; ipxClose(); renderIps(); }));
+  m.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.tagName === "INPUT" && e.target.type !== "checkbox") { e.preventDefault(); apply(); } });
+  $("#ipxQ", m).focus();
+}
+document.addEventListener("mousedown", (e) => { const p = $("#ipxPop"); if (p && !p.contains(e.target) && !e.target.closest(".ipx-btn")) ipxClose(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#ipxPop")) { e.stopPropagation(); e.preventDefault(); ipxClose(); } }, true);
+window.addEventListener("resize", ipxClose);
+$("#ipxChips").addEventListener("click", (e) => {
+  const x = e.target.closest("[data-ipxxfx]");
+  if (x) { delete IPXF[x.dataset.ipxxfx]; S.ipShow = IP_PAGE; return renderIps(); }
+  if (e.target.closest("#ipxClrAll")) { Object.keys(IPXF).forEach((k) => delete IPXF[k]); S.ipShow = IP_PAGE; renderIps(); }
+});
+
+function filteredIps(skipCol) {
   const q = $("#ipSearch").value.trim().toLowerCase(), f = S.ipFilter;
   ipfRead();
-  const F = IPF;
+  const F = IPF, hasXf = Object.keys(IPXF).length;
   let rows = S.ips.filter((r) => {
+    if (hasXf && !ipxPass(r, skipCol)) return false;
     if (F.cc.size) { const c = String(r.country_code || "").toUpperCase() || "-"; if (F.cc.has(c) !== (F.ccOp === "in")) return false; }
     if (F.days > 0 && (r.seen_days || 0) < F.days) return false;
-    if (F.atkD > 0 && (r.atk_days || 0) < F.atkD) return false;
-    if (F.atkT > 0 && (r.atk_runs || 0) < F.atkT) return false;
     if (F.scMin !== null || F.scMax !== null) { const sc = r.score === null || r.score === "" || r.score === undefined ? null : Number(r.score);
       if (sc === null || (F.scMin !== null && sc < F.scMin) || (F.scMax !== null && sc > F.scMax)) return false; }
     if (F.intel && (F.intel === "none" ? !!r.intel_status : r.intel_status !== F.intel)) return false;
     if (F.text && !`${r.isp || ""} ${r.usage_type || ""}`.toLowerCase().includes(F.text)) return false;
     if (f === "ABUSE" && r.abuse_status !== "ABUSE") return false;
     if (f === "CLEAN" && r.abuse_status !== "CLEAN") return false;
+    if (f === "repeat" && !r.repeat) return false;
     if (f === "unchecked" && r.abuse_status && r.abuse_status !== "ERROR") return false;
     if (f === "fw_pending" && !r.fw_pending) return false;
     if (f === "intel" && r.intel_status !== "ABUSE") return false;
@@ -1600,7 +1790,7 @@ function ipCountryOpts() {
   const b = $("#ipCcBtn");
   b.textContent = IPF.cc.size ? `${I18N.t(IPF.ccOp === "in" ? "کشور" : "کشور غیر از")}: ${[...IPF.cc].slice(0, 3).join(", ")}${IPF.cc.size > 3 ? " +" + num(IPF.cc.size - 3) : ""} ▾` : `${I18N.t("کشور: همه")} ▾`;
   b.classList.toggle("on", !!IPF.cc.size);
-  const mc = [IPF.scMin !== null || IPF.scMax !== null, IPF.atkT, IPF.intel, IPF.text, IPF.days].filter(Boolean).length;
+  const mc = [IPF.scMin !== null || IPF.scMax !== null, IPF.intel, IPF.text].filter(Boolean).length;
   $("#ipMoreBtn").textContent = `${I18N.t("فیلترهای بیشتر")}${mc ? ` (${num(mc)})` : ""} ▾`;
   $("#ipMoreBtn").classList.toggle("on", !!mc);
 }
@@ -1614,7 +1804,7 @@ function renderIps() {
   const colDef = Object.fromEntries(IP_COLS.map((c) => [c[0], c[1]]));
   const allSel = rows.length && rows.every((r) => S.ipSel.has(r.ip));
   $("#ipTable").innerHTML = `<thead><tr><th class="chk nosort"><input type="checkbox" id="ipAll" ${allSel ? "checked" : ""}></th>${cols.map((c) =>
-    `<th data-sort="${c}">${esc(colDef[c] || c)}${S.ipSort.k === c ? `<span class="arr">${S.ipSort.d > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}</tr></thead>
+    `<th data-sort="${c}">${esc(colDef[c] || c)}${S.ipSort.k === c ? `<span class="arr">${S.ipSort.d > 0 ? "▲" : "▼"}</span>` : ""}${c === "ip" ? "" : `<button type="button" class="ipx-btn${IPXF[c] ? " on" : ""}" data-ipxf="${c}" title="${esc(I18N.t("فیلتر این ستون"))}">▾</button>`}</th>`).join("")}</tr></thead>
     <tbody>${rows.length ? rows.map((r) => `<tr class="${S.ipSel.has(r.ip) ? "sel" : ""}"><td class="chk"><input type="checkbox" class="ipChk" value="${esc(r.ip)}" ${S.ipSel.has(r.ip) ? "checked" : ""}></td>${cols.map((c) => cell(c, r)).join("")}</tr>`).join("")
       : `<tr><td colspan="${cols.length + 1}"><div class="empty">${S.ips.length ? "با این فیلتر موردی پیدا نشد." : "هنوز IPای بررسی نشده است. یک اجرا از صفحه‌ی «ابزارها» انجام دهید."}</div></td></tr>`}</tbody>`;
   if (allRows.length > rows.length) {
@@ -1624,13 +1814,14 @@ function renderIps() {
   $("#ipCount").textContent = `${num(allRows.length)} ${I18N.t("از")} ${num(S.ips.length)}`;
   ipCountryOpts();
   const act = ipfActive() || (S.ipFilter && S.ipFilter !== "all");
-  $("#ipFiltBar").hidden = !act || !allRows.length;
+  $("#ipFiltBar").hidden = !act;              // 1.59.5: با نتیجه‌ی خالی هم «پاک کردن فیلترها» بماند
+  $("#ipFiltSel").hidden = !allRows.length;
   if (act) {
     $("#ipFiltN").textContent = `${num(allRows.length)}‏ IP ${I18N.t("با این فیلتر")}`;
-    const ruleOk = S.ipFilter === "CLEAN";
-    $("#ipFiltRule").disabled = !ruleOk;
-    $("#ipFiltHint").textContent = ruleOk ? "" : I18N.t("قاعده فقط برای غیرمخرب‌هاست؛ فیلتر «غیرمخرب» را بزنید.");
+    const all = allRows.every((r) => S.ipSel.has(r.ip));
+    $("#ipFiltSel").textContent = I18N.t(all ? "لغو انتخاب این‌ها" : "انتخاب همه‌ی این‌ها");
   }
+  ipxChips();
   updateSelBar();
 }
 function updateSelBar() {
@@ -1638,7 +1829,7 @@ function updateSelBar() {
   $("#selCount").textContent = `${num(S.ipSel.size)} مورد انتخاب شده`;
 }
 { let t = 0; const re = () => { clearTimeout(t); t = setTimeout(() => { S.ipShow = IP_PAGE; renderIps(); }, 150); };
-  ["#ipDays", "#ipAtkT", "#ipScMin", "#ipScMax", "#ipText", "#ipAtkDc"].forEach((id) => $(id).addEventListener("input", re));
+  ["#ipScMin", "#ipScMax", "#ipText", "#ipDaysC"].forEach((id) => $(id).addEventListener("input", re));
   const pop = (btn, el) => { $(btn).onclick = (e) => { e.stopPropagation(); const h = $(el).hidden; $$(".ipf-pop").forEach((x) => (x.hidden = true)); $(el).hidden = !h; if (!h) return; ipCountryOpts(); const f = $(el).querySelector("input"); if (f) f.focus(); }; };
   pop("#ipCcBtn", "#ipCcPop"); pop("#ipMoreBtn", "#ipMorePop");
   document.addEventListener("click", (e) => { if (!e.target.closest(".ipf-pop-w")) $$(".ipf-pop").forEach((x) => (x.hidden = true)); });
@@ -1648,71 +1839,33 @@ function updateSelBar() {
   $("#ipCcPop").addEventListener("click", (e) => { const b = e.target.closest("[data-ccop]"); if (!b) return;
     if (b.dataset.ccop === "clear") IPF.cc.clear(); else IPF.ccOp = b.dataset.ccop;
     $("#ipCcPop").hidden = true; S.ipShow = IP_PAGE; renderIps(); });
-  $("#ipAtkD").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return;
-    $$("#ipAtkD button").forEach((x) => x.classList.toggle("on", x === b)); $("#ipAtkDc").hidden = b.dataset.v !== "c"; if (b.dataset.v === "c") $("#ipAtkDc").focus(); re(); });
+  $("#ipDaysSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return;
+    $$("#ipDaysSeg button").forEach((x) => x.classList.toggle("on", x === b)); $("#ipDaysC").hidden = b.dataset.v !== "c"; if (b.dataset.v === "c") $("#ipDaysC").focus(); re(); });
   $("#ipIntel").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; IPF.intel = b.dataset.v; $$("#ipIntel button").forEach((x) => x.classList.toggle("on", x === b)); re(); });
   $("#ipFiltClr").onclick = () => {
-    IPF.cc.clear(); IPF.ccOp = "in"; IPF.intel = ""; ["#ipDays", "#ipAtkT", "#ipScMin", "#ipScMax", "#ipText", "#ipAtkDc", "#ipSearch"].forEach((id) => ($(id).value = ""));
-    $$("#ipAtkD button").forEach((x, i) => x.classList.toggle("on", i === 0)); $("#ipAtkDc").hidden = true; $$("#ipIntel button").forEach((x, i) => x.classList.toggle("on", i === 0));
+    IPF.cc.clear(); IPF.ccOp = "in"; IPF.intel = ""; ["#ipScMin", "#ipScMax", "#ipText", "#ipDaysC", "#ipSearch"].forEach((id) => ($(id).value = ""));
+    $$("#ipDaysSeg button").forEach((x, i) => x.classList.toggle("on", i === 0)); $("#ipDaysC").hidden = true; $$("#ipIntel button").forEach((x, i) => x.classList.toggle("on", i === 0));
+    Object.keys(IPXF).forEach((k) => delete IPXF[k]);
     S.ipFilter = "all"; $$("#ipFilter button").forEach((x) => x.classList.toggle("on", x.dataset.f === "all")); S.ipShow = IP_PAGE; renderIps();
   };
-  $("#ipFiltBan").onclick = () => ipFiltBan();
-  $("#ipFiltRule").onclick = () => ipFiltRule();
+  $("#ipFiltSel").onclick = () => { const rows = filteredIps(), all = rows.every((r) => S.ipSel.has(r.ip));
+    rows.forEach((r) => (all ? S.ipSel.delete(r.ip) : S.ipSel.add(r.ip))); renderIps(); };
 }
 function ipfSummary() {
   const p = [];
   if (S.ipFilter && S.ipFilter !== "all") p.push(I18N.t($(`#ipFilter button[data-f="${S.ipFilter}"]`).textContent));
-  if (IPF.atkD) p.push(`${I18N.t("روز حمله")} ≥ ${num(IPF.atkD)}`);
-  if (IPF.atkT) p.push(`${I18N.t("حضور در گزارش‌ها")} ≥ ${num(IPF.atkT)}`);
   if (IPF.scMin !== null || IPF.scMax !== null) p.push(`${I18N.t("امتیاز")} ${num(IPF.scMin ?? 0)}–${num(IPF.scMax ?? 100)}`);
   if (IPF.cc.size) p.push(`${I18N.t(IPF.ccOp === "in" ? "کشور" : "کشور غیر از")}: ${[...IPF.cc].join(", ")}`);
   if (IPF.intel) p.push(`${I18N.t("بررسی تکمیلی")}: ${I18N.t({ ABUSE: "مخرب", CLEAN: "پاک", none: "بررسی‌نشده" }[IPF.intel])}`);
   if (IPF.text) p.push(`ISP: ${IPF.text}`);
-  if (IPF.days) p.push(`${I18N.t("روز بررسی")} ≥ ${num(IPF.days)}`);
+  if (IPF.days) p.push(`${I18N.t("روزهای بررسی")} ≥ ${num(IPF.days)}`);
+  Object.keys(IPXF).forEach((c) => p.push(ipxDesc(c)));
   if ($("#ipSearch").value.trim()) p.push(`${I18N.t("جستجو")}: ${$("#ipSearch").value.trim()}`);
   return p.join(" · ");
 }
-function ipfRule() {
-  return { name: "", enabled: true, window: 30, days_min: IPF.atkD || 0, runs_min: IPF.atkT || (IPF.atkD ? 0 : 1), attacks_min: 0, score_min: IPF.scMin ?? 0, score_max: IPF.scMax ?? 100,
-    intel: IPF.intel || "any", countries: [...IPF.cc].filter((c) => c !== "-"), countries_op: IPF.ccOp, text: IPF.text, ban_days: 30 };
-}
-async function ipFiltBan() {
-  const rows = filteredIps(), done = rows.filter((r) => ["banned", "already"].includes(r.fw_status));
-  const ips = rows.filter((r) => !["banned", "already"].includes(r.fw_status)).map((r) => r.ip);
-  if (!ips.length) return toast("همه‌ی این IPها از قبل بلاک‌اند.", "info");
-  const canRule = S.ipFilter === "CLEAN" && isAdmin();
-  const v = await openModal({ title: `${I18N.t("بلاک در FortiGate")}: ${num(ips.length)}‏ IP`,
-    body: `<p class="hint">${esc(I18N.t("فیلتر"))}: ${esc(ipfSummary())}</p>
-      <div class="field"><span>${esc(I18N.t("مدت بلاک"))}</span><div class="row" style="gap:6px"><input type="number" id="ifbD" min="0" max="3650" value="30" class="ipf-num"> ${esc(I18N.t("روز"))} <span class="muted">${esc(I18N.t("(۰ = دائمی)"))}</span></div></div>
-      ${done.length ? `<p class="hint">${num(done.length)}‏ ${esc(I18N.t("IP از قبل بلاک‌اند و دوباره فرستاده نمی‌شوند."))}</p>` : ""}
-      <p class="hint">${esc(I18N.t("پیش از ارسال، رنج‌های مستثنا، Address و Banned بررسی می‌شوند و در صفحه‌ی «ابزارها» فهرست نهایی را تأیید می‌کنید."))}</p>
-      ${canRule ? `<label class="chk"><input type="checkbox" id="ifbR">${esc(I18N.t("این فیلتر را به‌عنوان قاعده هم ذخیره کن تا از این به بعد خودکار اعمال شود"))}</label>
-        <label class="field" id="ifbNw" hidden><span>${esc(I18N.t("نام قاعده"))}</span><input type="text" id="ifbN" maxlength="60"></label>` : ""}`,
-    foot: `<button class="btn ghost" data-x="0">انصراف</button><button class="btn warn" data-x="1">${esc(I18N.t("ادامه"))}</button>`,
-    onOpen: (m, close) => {
-      if ($("#ifbR", m)) $("#ifbR", m).onchange = (e) => { $("#ifbNw", m).hidden = !e.target.checked; if (e.target.checked) $("#ifbN", m).focus(); };
-      $("[data-x='0']", m).onclick = () => close(null);
-      $("[data-x='1']", m).onclick = () => { const d = Number($("#ifbD", m).value); if (!(d >= 0 && d <= 3650)) return toast("مدت باید بین ۰ و ۳۶۵۰ روز باشد.", "warn");
-        const r = $("#ifbR", m) && $("#ifbR", m).checked; if (r && !$("#ifbN", m).value.trim()) return toast("نام قاعده را وارد کنید.", "warn");
-        close({ days: Math.round(d), rule: r ? $("#ifbN", m).value.trim() : "" }); };
-    } });
-  if (!v) return;
-  if (v.rule) { const rr = await api("clean_rule_add", { ...ipfRule(), name: v.rule, ban_days: v.days }); if (!rr.ok) return toast(rr.error, "error"); crSync(rr.rules); toast(`${I18N.t("قاعده ذخیره شد")}: ${v.rule}`, "ok"); }
-  const r = await api("ips_action", "ban", ips, { days: v.days });
-  if (!r.ok) return toast(r.error, "error");
-  toast(r.message || "انجام شد", "ok");
-  if (r.run_id) { S.resultTab = "fw"; go("run"); }
-}
-function crSync(rules) {          // قاعده‌ها مستقیم ذخیره شد ← نسخه‌ی تنظیمات و پیش‌نویس هم‌سان شوند
-  [S.settings, S.draft].forEach((o) => { if (o && o.fortigate) o.fortigate.clean_rules = clone(rules); });
-}
-async function ipFiltRule() {
-  if (S.ipFilter !== "CLEAN") return;
-  const base = ipfRule();
-  ruleEdit(base, async (rule) => { const r = await api("clean_rule_add", rule); if (!r.ok) { toast(r.error, "error"); return false; } crSync(r.rules);
-    toast(`${I18N.t("قاعده ذخیره شد")}: ${rule.name}`, "ok"); return true; });
-}
 $("#ipTable").addEventListener("click", (e) => {
+  const xb = e.target.closest(".ipx-btn");
+  if (xb) { e.stopPropagation(); if ($("#ipxPop") && $("#ipxPop").dataset.col === xb.dataset.ipxf) return ipxClose(); return ipxOpen(xb.dataset.ipxf, xb.closest("th")); }
   const th = e.target.closest("th[data-sort]");
   if (th) { const k = th.dataset.sort; S.ipSort = { k, d: S.ipSort.k === k ? -S.ipSort.d : 1 }; renderIps(); }
 });
@@ -1780,8 +1933,8 @@ $("#selBar").addEventListener("click", async (e) => {
   if (act === "copy") { copyText(ips.join("\n"), `${num(ips.length)} IP`); return; }
   const list = `<div class="path ltr" style="max-height:180px;overflow:auto">${ips.map(esc).join("<br>")}</div>`;
   if (act === "ban") {          // 1.54: انتخاب مدت بلاک (روز)؛ برای IPهای از قبل بلاک‌شده = تغییر مدت
-    const days = await banDaysDlg(ips, list); if (days === null) return;
-    const r = await api("ips_action", "ban", ips, { days });
+    const days = await ipBanDlg(ips, list); if (days === null) return;
+    const r = await api("ips_action", "ban", ips, { days, confirmed: true });
     if (!r.ok) return toast(r.error, "error");
     toast(r.message || "انجام شد", "ok"); S.ipSel.clear();
     if (r.run_id) { S.resultTab = "fw"; go("run"); }
@@ -1789,7 +1942,6 @@ $("#selBar").addEventListener("click", async (e) => {
   }
   const cfg = {
     recheck: { title: "چک مجدد در AbuseIPDB", body: `<p>${ips.length}‏ IP دوباره بررسی می‌شوند (سهمیه مصرف می‌شود).</p>${list}`, confirm: "بررسی" },
-    ban: { title: "بلاک در FortiGate", body: `<p>برای ${ips.length}‏ IP پیش‌نمایش ساخته می‌شود: رنج داخلی، Address و Banned بررسی می‌شوند و در صفحه‌ی «ابزارها» لیست نهایی را تأیید می‌کنید.</p>${list}`, confirm: "ساخت پیش‌نمایش" },
     delete: { title: "حذف از فهرست آدرس‌ها", body: `<p>این ${ips.length}‏ IP از فهرست حذف می‌شوند و دفعه‌ی بعد که از Splunk یا ورودی دیگری بیایند، از نو در AbuseIPDB و بررسی تکمیلی بررسی می‌شوند. آمار و تاریخچه‌ی گذشته می‌ماند. بلاک موجود در FortiGate برداشته نمی‌شود.</p>${list}`, confirm: "حذف", danger: true },
     ignore: { title: "افزودن به رنج‌های مستثنا", body: `<p>این IPها به‌صورت /32 به فهرست مستثنای FortiGate اضافه می‌شوند و از این پس بررسی و بلاک نمی‌شوند.</p>${list}`, confirm: "افزودن" },
   }[act];
@@ -1912,12 +2064,13 @@ async function showIp(ip) {
   const r = await api("ip_detail", ip);
   if (!r.ok) return toast(r.error, "error");
   const d = r.ip;
-  const rows = [["وضعیت AbuseIPDB", statusTag(d.abuse_status), 1], ["امتیاز", scoreHtml(d.score), 1], ["تعداد گزارش", num(d.reports)], ["آخرین گزارش", isoTxt(d.last_reported)],
+  const rows = [["وضعیت AbuseIPDB", d.repeat ? repeatTag() : statusTag(d.abuse_status), 1], ["امتیاز", scoreHtml(d.score), 1], ["تعداد گزارش", num(d.reports)], ["آخرین گزارش", isoTxt(d.last_reported)],
     ["کشور", `${d.country || "—"} (${d.country_code || "—"})`], ["شهر", d.city], ["ISP", d.isp], ["نوع کاربری", d.usage_type], ["دامنه", d.domain], ["ASN", d.asn],
     ["Tor", ynTxt(d.is_tor)], ["Whitelisted", ynTxt(d.is_whitelisted)], ["دسته‌ها", d.categories], ["خطا", d.error],
     ["FortiGate", d.fw_status ? `${esc((FW[d.fw_status] || [0, d.fw_status])[1])} — ${esc(d.fw_detail || "")}` : "—", 1],
     ...(["banned", "already"].includes(d.fw_status) && d.fw_until ? [["مدت بلاک", `${banDaysTxt(d.fw_days)} — ${fwUntilTxt(d)}`]] : []),
-    ["حضور در گزارش‌ها (۳۰ روز)", num(d.atk_runs || 0)], ["روز حمله (۳۰ روز)", num(d.atk_days || 0)], ["Signatureها", d.signatures], ["پورت‌های مقصد", d.dest_ports],
+    ...(Number(d.tban_count) > 0 ? [["بلاک مدت‌دار قبلی", `${num(d.tban_count)} ${esc(I18N.t("بار"))}${d.attack_reset ? ` — ${esc(I18N.t("روزهای بررسی از"))} <span class="ltr">${esc(d.attack_reset)}</span> ${esc(I18N.t("به بعد شمرده می‌شود"))}` : ""}`, 1]] : []),
+    ["Signatureها", d.signatures], ["پورت‌های مقصد", d.dest_ports],
     ["زمان بررسی", d.checked_at], ["اولین / آخرین مشاهده", `${d.first_seen || "—"} / ${d.last_seen || "—"}`], ["آخرین اجرا", d.last_run],
     ["روزهای بررسی در AbuseIPDB", d.seen_days ? `${num(d.seen_days)} روز مختلف` : "—"],
     ["بررسی تکمیلی", d.intel_status ? `${intelTag(d)} ${esc(d.intel_source || "")} — ${esc(d.intel_detail || "")} <span class="muted ltr">${esc(d.intel_at || "")}</span>` : "—", 1]];
@@ -2328,73 +2481,6 @@ function brBind(body, D) {
   if (add) add.onclick = () => { if (rules().length >= 50) return toast("حداکثر ۵۰ قاعده.", "warn"); rules().push({ field: "country", op: "in", value: [], days: 30 }); redraw(); };
   wire();
 }
-/* ---------------------------------------------------------------- 1.59: قاعده‌های بلاک غیرمخرب (fortigate.clean_rules) */
-function crSummary(r) {
-  const p = [`${I18N.t("در")} ${num(r.window)} ${I18N.t("روز اخیر")}`];
-  if (r.runs_min) p.push(`${I18N.t("حضور در گزارش‌ها")} ≥ ${num(r.runs_min)} ${I18N.t("بار")}`);
-  if (r.days_min) p.push(`${I18N.t("روز حمله")} ≥ ${num(r.days_min)}`);
-  if (r.attacks_min) p.push(`${I18N.t("حمله")} ≥ ${num(r.attacks_min)}`);
-  if (Number(r.score_min) !== 0 || Number(r.score_max) !== 100) p.push(`${I18N.t("امتیاز")} ${num(r.score_min)}–${num(r.score_max)}`);
-  if (r.intel && r.intel !== "any") p.push(`${I18N.t("بررسی تکمیلی")}: ${I18N.t({ ABUSE: "مخرب", CLEAN: "پاک", none: "بررسی‌نشده" }[r.intel])}`);
-  if ((r.countries || []).length) p.push(`${I18N.t(r.countries_op === "not_in" ? "کشور غیر از" : "کشور")}: <span class="ltr">${esc(r.countries.join(", "))}</span>`);
-  if (r.text) p.push(`ISP/${I18N.t("نوع")}: ${esc(r.text)}`);
-  return p.join(" · ");
-}
-function crBind(body, D) {
-  const L = () => (D.fortigate.clean_rules = D.fortigate.clean_rules || []);
-  let prev = {};
-  const draw = () => {
-    const tb = $("#crList", body); if (!tb) return;
-    tb.innerHTML = L().length ? L().map((r, i) => `<tr><td><label class="switch"><input type="checkbox" data-cron="${i}" ${r.enabled !== false ? "checked" : ""}><span class="track"><span class="thumb"></span></span></label></td>
-      <td><b>${esc(r.name)}</b></td><td class="wrap">${crSummary(r)}</td><td>${r.ban_days ? `${num(r.ban_days)} ${esc(I18N.t("روز"))}` : esc(I18N.t("دائم"))}</td>
-      <td>${r.id && prev[r.id] ? `${num(prev[r.id].match)}‏ IP <span class="muted">(${num(prev[r.id].new)} ${esc(I18N.t("بلاک تازه"))})</span>` : "—"}</td>
-      <td><div class="row" style="gap:4px;flex-wrap:nowrap"><button class="btn sm ghost" data-crm="${i}" data-d="-1" ${i ? "" : "disabled"}>↑</button><button class="btn sm ghost" data-crm="${i}" data-d="1" ${i < L().length - 1 ? "" : "disabled"}>↓</button>
-        <button class="btn sm ghost" data-cred="${i}">ویرایش</button><button class="btn sm ghost" data-crx="${i}">حذف</button></div></td></tr>`).join("")
-      : `<tr><td colspan="6"><div class="empty">${esc(I18N.t("قاعده‌ای نیست؛ غیرمخرب‌ها بلاک نمی‌شوند."))}</div></td></tr>`;
-    $$("[data-cron]", tb).forEach((c) => (c.onchange = () => { L()[Number(c.dataset.cron)].enabled = c.checked; }));
-    $$("[data-crm]", tb).forEach((b) => (b.onclick = () => { const i = Number(b.dataset.crm), j = i + Number(b.dataset.d), a = L(); [a[i], a[j]] = [a[j], a[i]]; draw(); }));
-    $$("[data-crx]", tb).forEach((b) => (b.onclick = () => { L().splice(Number(b.dataset.crx), 1); draw(); }));
-    $$("[data-cred]", tb).forEach((b) => (b.onclick = () => { const i = Number(b.dataset.cred);
-      ruleEdit(L()[i], (r) => { if (L().some((x, j) => j !== i && x.name.toLowerCase() === r.name.toLowerCase())) { toast("نام قاعده تکراری است.", "warn"); return false; } L()[i] = r; draw(); return true; }); }));
-  };
-  $("#crAdd", body).onclick = () => { if (L().length >= 30) return toast("حداکثر ۳۰ قاعده.", "warn");
-    ruleEdit({ name: "", enabled: true, window: 30, days_min: 0, runs_min: 3, attacks_min: 0, score_min: 0, score_max: 100, intel: "any", countries: [], countries_op: "in", text: "", ban_days: 30 },
-      (r) => { if (L().some((x) => x.name.toLowerCase() === r.name.toLowerCase())) { toast("نام قاعده تکراری است.", "warn"); return false; } L().push(r); draw(); return true; }); };
-  draw();
-  api("clean_rules_preview").then((r) => { if (r.ok) { prev = r.rules || {}; draw(); } });
-}
-function ruleEdit(r0, onSave) {
-  const r = { ...r0 };
-  openModal({ title: r.name ? `ویرایش قاعده «${r.name}»` : "قاعده‌ی بلاک غیرمخرب", wide: true,
-    body: `<div class="form-grid">
-      <label class="field"><span>نام</span><input type="text" id="crN" maxlength="60" value="${esc(r.name || "")}" autofocus></label>
-      <label class="field"><span>مدت بلاک (روز؛ ۰ = دائم)</span><input type="number" id="crB" min="0" max="3650" value="${esc(r.ban_days ?? 30)}"></label>
-      <label class="field"><span>بازه</span><div class="row" style="gap:6px">${esc(I18N.t("در"))} <input type="number" id="crW" min="1" max="365" value="${esc(r.window)}" class="ipf-num"> ${esc(I18N.t("روز اخیر"))}</div></label>
-      <label class="field"><span>حضور در گزارش‌ها ≥ (چند اجرای Splunk؛ ۰ = مهم نیست)</span><div class="row" style="gap:6px"><input type="number" id="crR" min="0" max="100000" value="${esc(r.runs_min || 0)}" class="ipf-num"> ${esc(I18N.t("بار"))}</div></label>
-      <label class="field"><span>روز حمله ≥ (روزهای مختلف؛ ۰ = مهم نیست)</span><input type="number" id="crD" min="0" max="365" value="${esc(r.days_min || 0)}" class="ipf-num"></label>
-      <label class="field"><span>امتیاز AbuseIPDB</span><div class="row" style="gap:6px"><input type="number" id="crS1" min="0" max="100" value="${esc(r.score_min ?? 0)}" class="ipf-num"> ${esc(I18N.t("تا"))} <input type="number" id="crS2" min="0" max="100" value="${esc(r.score_max ?? 100)}" class="ipf-num"></div></label>
-      <label class="field"><span>بررسی تکمیلی</span><select id="crI">${[["any", "مهم نیست"], ["ABUSE", "مخرب"], ["CLEAN", "پاک"], ["none", "بررسی‌نشده"]].map(([k, t]) => `<option value="${k}" ${r.intel === k ? "selected" : ""}>${esc(I18N.t(t))}</option>`).join("")}</select></label>
-      <label class="field"><span>کشور (کد دوحرفی، خالی = همه)</span><div class="row" style="gap:6px"><select id="crCo" style="width:auto"><option value="in" ${r.countries_op !== "not_in" ? "selected" : ""}>${esc(I18N.t("یکی از"))}</option><option value="not_in" ${r.countries_op === "not_in" ? "selected" : ""}>${esc(I18N.t("هیچ‌کدام از"))}</option></select><input type="text" id="crC" class="ltr" value="${esc((r.countries || []).join(", "))}" placeholder="RU, CN"></div></label>
-      <label class="field"><span>ISP یا نوع استفاده شامل (اختیاری)</span><input type="text" id="crT" value="${esc(r.text || "")}" placeholder="Data Center"></label>
-      <div class="field wide" id="crPv"></div></div>`,
-    foot: `<button class="btn ghost" id="crPrev">پیش‌نمایش</button><span style="flex:1"></span><button class="btn ghost" data-x="0">انصراف</button><button class="btn primary" data-x="1">تأیید</button>`,
-    onOpen: (m, close) => {
-      const val = () => ({ ...r, name: $("#crN", m).value.trim(), ban_days: Number($("#crB", m).value) || 0, days_min: Number($("#crD", m).value) || 0, window: Number($("#crW", m).value) || 30,
-        runs_min: Number($("#crR", m).value) || 0, attacks_min: 0, score_min: Number($("#crS1", m).value) || 0, score_max: $("#crS2", m).value === "" ? 100 : Number($("#crS2", m).value),
-        intel: $("#crI", m).value, countries_op: $("#crCo", m).value, countries: $("#crC", m).value.toUpperCase().split(/[\s,\u060c]+/).filter(Boolean), text: $("#crT", m).value.trim() });
-      const pv = async () => { const r2 = await api("clean_rules_preview", { ...val(), name: val().name || "x" });
-        $("#crPv", m).innerHTML = r2.ok ? `<p class="hint">${esc(I18N.t("پیش‌نمایش"))}: ${num(r2.match)}‏ IP ${esc(I18N.t("الان منطبق‌اند"))} — <b>${num(r2.new)}</b> ${esc(I18N.t("بلاک تازه"))}${r2.banned ? `، ${num(r2.banned)} ${esc(I18N.t("از قبل بلاک‌اند"))}` : ""}${r2.excluded ? `، ${num(r2.excluded)} ${esc(I18N.t("در رنج مستثنا"))}` : ""}.</p>
-          ${r2.sample.length ? `<div class="ltr muted" style="font-size:12px">${r2.sample.map(esc).join(", ")}</div>` : ""}` : `<p class="hint warn">${esc(r2.error)}</p>`; };
-      $("#crPrev", m).onclick = (e) => withSpin(e.currentTarget, pv);
-      $("[data-x='0']", m).onclick = () => close();
-      $("[data-x='1']", m).onclick = async () => { const y = val(); if (!y.name) return toast("نام را وارد کنید.", "warn");
-        if (y.days_min > y.window) return toast("روز حمله نمی‌تواند از بازه بیشتر باشد.", "warn");
-        if (!y.days_min && !y.runs_min) return toast("حداقل یکی از «حضور در گزارش‌ها» یا «روز حمله» را بیشتر از صفر بگذارید.", "warn");
-        if (y.score_min > y.score_max) return toast("کمترین امتیاز از بیشترین بزرگ‌تر است.", "warn");
-        if (await onSave(y)) close(); };
-      pv();
-    } });
-}
 /* ---------------------------------------------------------------- 1.59: منابع بررسی تکمیلی */
 const ISRC_KIND = { url: "آدرس اینترنتی", path: "فایل روی کامپیوتر", upload: "آپلود (رمزشده)" };
 const ISRC_FMT = { lines: "خط‌به‌خط (IP/CIDR)", csv: "CSV", ipsum: "IPsum (IP و تعداد فهرست)" };
@@ -2520,10 +2606,6 @@ function renderFgSettings(body, D) {
       <p class="hint">قاعده‌ها از بالا بررسی می‌شوند؛ اولین قاعده‌ای که با IP جور باشد مدت بلاک را تعیین می‌کند. اگر هیچ‌کدام جور نبود، «مدت بلاک پیش‌فرض» همان دستگاه به کار می‌رود. قاعده‌ها برای اجرای دستی و خودکار یکسان‌اند و برای همه‌ی دستگاه‌ها مشترک. اطلاعات هر IP (کشور، امتیاز، ISP) از فهرست «آدرس‌ها» می‌آید؛ اگر برای IP ثبت نشده باشد، قاعده‌ی آن شرط جور نمی‌شود. بعد از تمام شدن مدت، FortiGate خودش بلاک را برمی‌دارد و اگر IP دوباره دیده شود از نو بررسی و بلاک می‌شود.</p>
       <div id="brList">${brRows(D.fortigate.ban_rules || [])}</div>
       <div class="form-foot"><button class="btn" id="brAdd">افزودن قاعده</button><span class="hint">مثال: کشور یکی از IR ← ۳۰ روز. مدت به روز است؛ ۰ یعنی دائم.</span></div></div>
-    <div class="form" id="crForm"><h3>قاعده‌های بلاک غیرمخرب‌ها</h3>
-      <p class="hint">قانون اصلی عوض نمی‌شود (فقط مخرب‌ها بلاک می‌شوند). این قاعده‌ها IP غیرمخربی را که شرط‌هایشان را دارد هم برای بلاک می‌آورند — درست مثل مخرب‌ها: اگر بلاک خودکار روشن است بلاک می‌شود، وگرنه به فهرست تأیید می‌رود؛ رنج‌های مستثنا همه‌جا معتبرند. «روز حمله» = روزهای مختلفی که IP در خروجی Splunk بوده. بعد از پایان بلاکی که قاعده زده، شمارش از صفر شروع می‌شود. اولین قاعده‌ی منطبق مدت را تعیین می‌کند.</p>
-      <div class="table-wrap inner"><table class="grid nosort"><thead><tr><th></th><th>نام</th><th>شرط‌ها (همه با هم)</th><th>مدت بلاک</th><th>الان منطبق</th><th></th></tr></thead><tbody id="crList"></tbody></table></div>
-      <div class="form-foot"><button class="btn" id="crAdd">قاعده‌ی تازه</button><span class="hint">تغییرها با «ذخیره‌ی تنظیمات» ذخیره می‌شوند.</span></div></div>
     <div class="form"><h3>تسک‌ها</h3>
       <p class="hint">تسک = کد پایتون با تابع plan(fg, rows, ctx). کد فقط می‌خواند و «کار» پیشنهاد می‌کند؛ برنامه فهرست کارها را نشان می‌دهد و فقط کارهای تأییدشده را به همان دستگاه می‌فرستد (حالت تست: هیچ). در کارهای خودکار، با تیک «FortiGate بدون تأیید» بدون پنجره‌ی تأیید اجرا می‌شود.</p>
       <p class="hint warn">${WEB ? "کد پایتون روی همین سرور اجرا می‌شود و قابل محصورسازی کامل نیست؛ فقط ادمین تسک می‌سازد و هر تغییر کد با diff در تاریخچه ثبت می‌شود. کدی را که نمی‌شناسید اجرا نکنید."
@@ -2534,7 +2616,6 @@ function renderFgSettings(body, D) {
       <div class="form-foot"><button class="btn" id="scNew">افزودن تسک…</button><span class="hint">تغییرها با «ذخیره‌ی تنظیمات» ذخیره می‌شوند.</span></div></div>`;
   $$("[data-fgdev]", body).forEach((b) => (b.onclick = () => { S.fgDev = b.dataset.fgdev; renderSettings(); }));
   brBind(body, D);
-  crBind(body, D);
   const add = $("#fgAdd", body);
   if (add) add.onclick = async () => {
     const r = await api("fg_device_add", ""); if (!r.ok) return toast(r.error, "error");
@@ -3459,6 +3540,27 @@ async function certUpload(box) {
       });
     } });
 }
+// 1.59.3: وضعیت قانون‌های فایروال ویندوز (تغییرش فقط روی خود سرور با UAC؛ سرور بدون دسترسی Administrator اجرا می‌شود)
+function winFwHtml(f) {
+  if (!f) return "";
+  const st = f.synced ? `<b class="ok">${I18N.t("به‌روز")}</b>` : `<b class="warn">${I18N.t(f.has ? "با تنظیمات فعلی هم‌خوان نیست" : "قانونی ساخته نشده")}</b>`;
+  const ev = [f.udp.length ? "UDP " + f.udp.join(", ") : "", f.tcp.length ? "TCP " + f.tcp.join(", ") : ""].filter(Boolean).join(" · ");
+  return `<div class="winfw ${f.synced ? "" : "bad"}"><div><span>${I18N.t("فایروال ویندوز:")}</span> ${st}</div>
+    <div class="hint">${I18N.t("وب:")} ${f.nets ? `${num(f.nets)} ${I18N.t("شبکه‌ی مجاز")}` : I18N.t("همه‌ی آدرس‌ها")} · Trap/Syslog: <span class="ltr">${esc(ev || I18N.t("خاموش"))}</span></div>
+    ${f.synced ? "" : `<div class="hint">${I18N.t("برای به‌روزرسانی، روی خود ویندوز سرور پنجره‌ی «AutoKRP — سرور» را باز کنید و «به‌روزرسانی فایروال ویندوز» را بزنید (دسترسی Administrator). قانون وب به خود برنامه بسته است، پس عوض کردن پورت آن را از کار نمی‌اندازد.")}</div>`}</div>`;
+}
+
+// 1.59.6: هشدارهای امنیتی تنظیمات سرور
+function srvWarnHtml(c) {
+  const w = [];
+  if ((c.broad_networks || []).length) w.push(c.broad_networks[0] === "*"
+    ? esc(I18N.t("شبکه‌های مجاز خالی است: از هر آدرسی می‌شود به صفحه‌ی ورود رسید. در محیط عملیاتی فقط رنج ادمین‌ها و NOC را بگذارید."))
+    : esc(I18N.t("این رنج‌ها خیلی بزرگ‌اند: {0} — در محیط عملیاتی فقط رنج ادمین‌ها و NOC را بگذارید.")).replace("{0}", `<span class="ltr" dir="ltr">${esc(c.broad_networks.join(", "))}</span>`));
+  if (!(c.allowed_hosts || []).length) w.push(esc(I18N.t("نام‌های مجاز تنظیم نشده: برنامه با IP و هر نامی باز می‌شود.")));
+  if (c.proxy_seen) w.push(esc(I18N.t("درخواستی از خود سیستم سرور با هدر proxy رسید ({0}). AutoKRP را پشت reverse proxy (IIS/nginx) روی همان سیستم نگذارید؛ این درخواست‌ها «محلی» حساب نمی‌شوند.")).replace("{0}", esc(fmtDate(c.proxy_seen.at))));
+  return w.length ? `<div class="sec">${w.map((x) => `<p class="hint warn">⚠ ${x}</p>`).join("")}</div>` : "";
+}
+
 function drawServerCfg(box, c) {
   const me = (S.state && S.state.me && S.state.me.username) || "";
   box.innerHTML = `<h3>سرور وب</h3><div class="form-grid">
@@ -3471,7 +3573,11 @@ function drawServerCfg(box, c) {
       <label class="field"><span>حداکثر اتصال هم‌زمان (کل)</span><input type="number" min="10" max="5000" id="scMx" value="${esc(c.max_connections || 200)}"></label>
       <label class="field"><span>حداکثر اتصال هم‌زمان هر IP</span><input type="number" min="4" max="1000" id="scMxIp" value="${esc(c.max_connections_per_ip || 40)}"></label>
       <label class="field wide"><span>شبکه‌های مجاز (هر خط یک IP یا رنج؛ خالی = همه). خود سیستم سرور همیشه مجاز است.</span>
-        <textarea class="ltr" id="scNets" style="min-height:90px" placeholder="10.10.0.0/16&#10;192.168.1.20">${esc((c.allowed_networks || []).join("\n"))}</textarea></label></div>
+        <textarea class="ltr" id="scNets" style="min-height:90px" placeholder="10.10.0.0/16&#10;192.168.1.20">${esc((c.allowed_networks || []).join("\n"))}</textarea></label>
+      <label class="field wide"><span>نام‌های مجاز (هر خط یک نام دامنه، مثلاً mon.test.com؛ خالی = هر نام و IP). باز کردن با IP یا نام دیگر همان ابتدای اتصال قطع می‌شود؛ localhost فقط روی خود سیستم سرور کار می‌کند.</span>
+        <textarea class="ltr" id="scHosts" style="min-height:60px" placeholder="mon.test.com">${esc((c.allowed_hosts || []).join("\n"))}</textarea></label></div>
+    ${srvWarnHtml(c)}
+    ${winFwHtml(c.winfw)}
     <div class="form-foot"><button class="btn primary" id="scSave">ذخیره</button><span class="hint">تغییر پورت و bind بعد از اجرای دوباره‌ی سرور اعمال می‌شود. پورت را در فایروال ویندوز باز کنید. اجرای خودکار با روشن شدن ویندوز: از پنجره‌ی وضعیت سرور روی خود سیستم.</span></div>
     <div class="sec"><h3>گواهی HTTPS</h3>${c.cert ? `<dl class="kv"><dt>نوع</dt><dd>${c.cert.self_signed ? "ساخته‌شده توسط برنامه (self-signed) — مرورگر بار اول هشدار می‌دهد" : "صادرشده (گواهی شرکت)"}</dd>
       <dt>موضوع</dt><dd class="ltr" style="text-align:start">${esc(c.cert.subject)}</dd>
@@ -3490,9 +3596,12 @@ function drawServerCfg(box, c) {
     const r = await api("server_save", { port: Number($("#scPort", box).value), bind: $("#scBind", box).value.trim(), session_timeout_minutes: Number($("#scIdle", box).value),
       ad_session_hours: Number($("#scAdH", box).value), lockout_threshold: Number($("#scTh", box).value), lockout_minutes: Number($("#scLm", box).value),
       max_connections: Number($("#scMx", box).value), max_connections_per_ip: Number($("#scMxIp", box).value),
-      allowed_networks: $("#scNets", box).value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean) });
+      allowed_networks: $("#scNets", box).value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
+      allowed_hosts: $("#scHosts", box).value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean) });
     if (!r.ok) return toast(r.error, "error");
+    (r.warnings || []).forEach((w) => toast(w, "warn"));
     toast(r.restart ? "ذخیره شد؛ پورت/bind بعد از اجرای دوباره‌ی سرور اعمال می‌شود" : "ذخیره شد", "ok"); drawServerCfg(box, r.server);
+    if (r.server.winfw && !r.server.winfw.synced) toast("فایروال ویندوز با این تنظیمات هم‌خوان نیست؛ روی خود ویندوز سرور «به‌روزرسانی فایروال ویندوز» را بزنید.", "warn");
   });
   $("#scCertUp", box).onclick = () => certUpload(box);
   if ($("#scCertSelf", box)) $("#scCertSelf", box).onclick = async () => {

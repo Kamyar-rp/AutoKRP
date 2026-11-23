@@ -97,7 +97,7 @@ def _quota_map(raw):
 
 CACHED_KEYS = ("ip", "isp", "usage_type", "asn", "domain", "country_code", "country", "city", "score", "reports",
                "last_reported", "is_whitelisted", "is_tor", "categories", "error", "checked_at")
-APPROVED_TXT = {"auto": "تأیید خودکار", "manual": "تأیید دستی"}
+APPROVED_TXT = {"auto": "تأیید خودکار", "manual": "تأیید دستی", "confirmed": "تأیید در صفحه‌ی آدرس‌ها"}
 FW_DONE = ("banned", "already", "address", "ignored")
 
 
@@ -389,6 +389,8 @@ class Pipeline:
                     and self.settings.get("automation", "daily", key, default=False))
 
     def _wait_approval(self, run, step, preview, auto):
+        if auto and (run.data.get("approved_by") or {}).get(step) == "confirmed":
+            return {"approve": True, "payload": {}}
         if auto:
             self._log(run, f"{STEP_TITLES[step]}: تأیید خودکار (کلید «بدون تأیید» روشن است)", "warn")
             run.data.setdefault("approved_by", {})[step] = "auto"
@@ -1089,6 +1091,7 @@ class Pipeline:
                  "abuse": 0, "clean": 0, "error": 0, "whitelisted": 0}
         todo, records = [], []
         cutoff = datetime.min if cache_mode == "forever" else datetime.now() - timedelta(days=cache_days)
+        now_s = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for ip in ips:
             if ab.should_skip_ip(ip):
                 stats["private"] += 1
@@ -1097,6 +1100,9 @@ class Pipeline:
                 stats["ignored"] += 1
                 continue
             cached = self.store.get_ip(ip) if use_cache else None
+            fu = str((cached or {}).get("fw_until") or "")
+            if cached and cached.get("attack_reset") and fu and str(cached.get("checked_at") or "") < fu <= now_s:
+                cached = None        # 1.59.2: بلاک مدت‌دار تمام شده و دوباره آمده ← AbuseIPDB از نو (نه از کش)
             if cached and cached.get("abuse_status") in ("ABUSE", "CLEAN") and cached.get("checked_at"):
                 try:
                     if datetime.strptime(cached["checked_at"], "%Y-%m-%d %H:%M:%S") >= cutoff:
@@ -1335,8 +1341,8 @@ class Pipeline:
             if d < n or d < (done.get(ip) or 0) + n:
                 continue
             cur = self.store.get_ip(ip) or {}
-            if cur.get("fw_status") in ("banned", "already"):
-                continue
+            if cur.get("fw_status") in ("banned", "already") and (not cur.get("fw_until") or str(cur["fw_until"]) > time.strftime("%Y-%m-%d %H:%M:%S")):
+                continue            # 1.59.2: بلاک مدت‌دار تمام‌شده دیگر «بلاک» حساب نمی‌شود
             hits.append((ip, d))
         if not hits:
             return 0
@@ -1473,8 +1479,7 @@ class Pipeline:
             if run.data.get("abuse_errors"):
                 self._log(run, f"FortiGate: {len(run.data['abuse_errors'])}\u200f IP که بررسی‌شان خطا داد ارسال نمی‌شوند", "warn")
             run.data["fw_origin"] = {ip: "abuse" for ip in run.data["malicious"]}
-            extra = self._clean_rule_hits(run, set(run.data["malicious"]))
-            return list(run.data["malicious"]) + extra, [], "IPهای مخرب AbuseIPDB" + (" + قاعده‌های غیرمخرب" if extra else "")
+            return list(run.data["malicious"]), [], "IPهای مخرب AbuseIPDB"
         if src == "db":
             cfg = self.settings.conn_config("abuseipdb")
             origin, skipped = {}, 0
@@ -1487,8 +1492,7 @@ class Pipeline:
             run.data["fw_origin"] = origin
             self._log(run, f"FortiGate: از کل دیتابیس {len(origin)}\u200f IP مخرب انتخاب شد؛ "
                            f"{skipped} مورد طبق قانون فعلی بلاک‌شدنی نیست (غیرمخرب/Whitelisted)")
-            extra = self._clean_rule_hits(run, set(origin))
-            return list(origin) + extra, [], "کل دیتابیس"
+            return list(origin), [], "کل دیتابیس"
         if src == "list":
             values = [v for line in (inp.get("text") or "").splitlines() for v in line.replace(",", " ").split()]
             t, notes = fg.expand_targets(values, max_expand)
@@ -1502,28 +1506,6 @@ class Pipeline:
             t, notes = fg.expand_targets(values, max_expand)
             return t, notes, f"فایل {Path(path).name} (ستون اول)"
         raise ConnectorError("منبع ورودی FortiGate نامعتبر است.")
-
-    def _clean_rule_hits(self, run, have):
-        """1.59: IPهای غیرمخربی که قاعده‌های بلاک غیرمخرب (تنظیمات FortiGate) با آن‌ها جورند — همان مسیر تأیید مخرب‌ها."""
-        from . import cleanrules
-        rules = self.settings.get("fortigate", "clean_rules", default=[]) or []
-        if not any(r.get("enabled") for r in rules):
-            return []
-        try:
-            hits = cleanrules.evaluate(self.store, rules, self.settings.conn_config("abuseipdb"))
-        except Exception as e:
-            log.exception("clean rules")
-            self._log(run, f"FortiGate: قاعده‌های بلاک غیرمخرب بررسی نشد: {e}", "warn")
-            return []
-        hits = {ip: h for ip, h in hits.items() if ip not in have}
-        run.data.setdefault("fw_origin", {}).update({ip: "rule" for ip in hits})
-        run.data["fw_rule"] = hits
-        by = {}
-        for h in hits.values():
-            by[h["rule"]] = by.get(h["rule"], 0) + 1
-        if hits:
-            self._log(run, "FortiGate: قاعده‌های بلاک غیرمخرب — " + "، ".join(f"«{k}»: {v}\u200f IP" for k, v in by.items()), "warn")
-        return list(hits)
 
     def _fw_target(self, run):
         """1.28: دستگاه و تسک انتخاب‌شده در گام FortiGate. خروجی: (conn, نام دستگاه, تسک یا None, چند دستگاهی؟)"""
@@ -1800,11 +1782,7 @@ class Pipeline:
             info = self.store.ips_info(targets) if rules else {}
             hits = {}
 
-            rule_hits = run.data.get("fw_rule") or {}
-
             def days_of(ip):
-                if ip in rule_hits:          # 1.59: مدت بلاک قاعده‌ی غیرمخرب
-                    return rule_hits[ip]["days"]
                 d, n = banrules.days_for(rules, info.get(ip), origin.get(ip, "manual"), def_days)
                 if n:
                     hits[n] = hits.get(n, 0) + 1
@@ -1848,6 +1826,12 @@ class Pipeline:
                 auto = False
                 self._log(run, f"FortiGate: {len(to_ban)} آدرس برای بلاک/تبدیل، بیشتر از سقف بلاک بدون تأیید ({cap})؛ "
                                "اجرا منتظر تأیید دستی می‌ماند", "warn")
+            if run.trigger == "ban" and run.options.get("confirmed"):
+                # 1.59.2: بلاک از صفحه‌ی آدرس‌ها؛ کاربر همین الان IPها و مدت را دیده و تأیید کرده (فقط از ips_action با trigger «ban»).
+                # رنج‌های مستثنا، Address و Banned بالا در classify کنار گذاشته شده‌اند.
+                auto = True
+                run.data.setdefault("approved_by", {})["fortigate"] = "confirmed"
+                self._log(run, f"FortiGate: {len(to_ban)}\u200f IP با تأیید کاربر در صفحه‌ی آدرس‌ها بلاک می‌شود", "warn")
             self._st(run)["message"] = f"پیش‌نمایش آماده است: {len(to_ban)} آدرس برای بلاک"
             test_pv = self._test_mode()
             run.data["fw_test_pv"] = test_pv
@@ -1894,6 +1878,8 @@ class Pipeline:
                            f"بلاک {p.get('source') or 'خودکار'} به Administrative ({banrules.label(days)}) تبدیل شد") + (f" — تا {until}" if until else "")
                     self._log(run, f"{ip} → {msg}", "ok", "ban")
                     up(ip, fw_status="banned", fw_detail=msg, fw_at=now, fw_until=until, fw_days=str(days) if days else "")
+                    if db and until:
+                        self.store.note_timed_ban(ip, until[:10])
                     self.store.add_history("ban", ip, "ok", f"{msg} ({APPROVED_TXT.get(run.data.get('approved_by', {}).get('fortigate'), 'تأیید دستی')}){tag}", run.id)
                     self.store.add_stat("ban", "ok", ip, src=p.get("origin", ""))
                 else:
@@ -1923,11 +1909,8 @@ class Pipeline:
                     until = _until(days)
                     dur = f" — {banrules.label(days)}" + (f"، تا {until}" if until else "")
                     self._log(run, f"{ip} → بلاک شد{dur}", "ok", "ban")
-                    rh = (run.data.get("fw_rule") or {}).get(ip)
-                    if rh:       # 1.59: بعد از پایان این بلاک، شمارش روزهای حمله از صفر
-                        from .cleanrules import reset_day
-                        up(ip, fw_rule=rh["rule"], attack_reset=reset_day(days))
-                        dur += f" — قاعده‌ی «{rh['rule']}» ({rh.get('atk_runs', 0)} بار در گزارش‌ها، {rh['atk_days']} روز)"
+                    if db and until:     # 1.59.2: بعد از پایان این بلاک «روزهای بررسی» از نو و AbuseIPDB دوباره
+                        self.store.note_timed_ban(ip, until[:10])
                     up(ip, fw_status="banned", fw_detail="در این اجرا بلاک شد" + dur, fw_at=now, fw_until=until, fw_days=str(days) if days else "")
                     self.store.add_history("ban", ip, "ok", f"افزوده شد به Banned IP{dur} ({APPROVED_TXT.get(run.data.get('approved_by', {}).get('fortigate'), 'تأیید دستی')}){tag}", run.id)
                     self.store.add_stat("ban", "ok", ip, src=p.get("origin", ""))

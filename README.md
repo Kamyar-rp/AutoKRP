@@ -42,7 +42,7 @@ A typical SOC chore: take the source IPs from IDS alerts, check them on AbuseIPD
 
 **Monitoring and assets**
 - Ping / TCP / HTTP monitoring with sound, browser and email alerts, maintenance windows, reports and a NOC view.
-- **Block rules for non-malicious IPs** (attack days in a window, total attacks, score range, supplementary check, country, ISP) with their own block duration, the same approval path as malicious IPs and a fresh count after each block ends; filter the address list and block the result or save it as a rule.
+- **Timed blocks for non-malicious IPs from the Addresses page**: filter by review days, status and country, select the result and block it for a number of days after one confirmation. After the block ends, review days count from zero and AbuseIPDB checks the IP again; an IP that comes back still non-malicious is marked "Non-malicious (repeat)" for a permanent block.
 - **Supplementary check sources** are editable: internet lists, a file on this computer or an uploaded file, line-by-line, CSV or IPsum format, with a test before saving.
 - **Widget dashboards** like OpManager/Zabbix: several pages per dashboard, drag-and-resize widgets (status, problems, traffic and value charts, gauges, Top-N, availability, services table, response-time chart, status tiles, availability bar, SNMP table, maps, traps/syslog, clock, text); click a Ping/HTTP/TCP service for its chart and add it to a dashboard, shared or personal, slideshow and fullscreen.
 - Hand-drawn **network maps** (no LLDP needed): port-to-port links coloured by load, red when a port or device is down, submaps, problems-only view and a wall-display mode.
@@ -98,7 +98,7 @@ run.bat           &rem normal start
 | `build.bat portable` | Full build, portable exe only |
 | `build.bat monitor` | Monitoring-only build: `dist\AutoKRP-Monitor.exe` (see "Modular builds") |
 
-Command-line options: `AutoKRP.exe --help` (`--server`, `--client`, `--demo`, `--install-service`, `--local-db`, `--memdiag`, …).
+Command-line options: `AutoKRP.exe --help` (`--server`, `--client`, `--demo`, `--install-service`, `--firewall-apply`, `--local-db`, `--memdiag`, …).
 
 ### Installer (build it yourself)
 
@@ -151,7 +151,7 @@ The working tree is never changed: the source is staged in `build\stage\`. Detai
 
 - All data is encrypted at rest: AES-256-GCM for settings and secrets, an SQLCipher database, encrypted run files and backups.
 - Client mode protects the key with Windows DPAPI or a master password (with an optional recovery code); with a master password nothing — settings, database, backups or secrets — can be opened without it. Server mode wraps a master key per user; no DPAPI.
-- HTTPS-only web mode with CSRF protection, strict CSP, lockouts and allowed networks.
+- HTTPS-only web mode with CSRF protection, strict CSP, lockouts, allowed networks and allowed host names (open only via e.g. `https://mon.example.com`, not by IP).
 - Nothing is blocked, ticketed or pushed to a device without approval unless you explicitly allow it for a scheduled job.
 
 Details and how to report a vulnerability: [SECURITY.md](SECURITY.md).

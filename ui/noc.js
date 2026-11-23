@@ -70,7 +70,7 @@ function nocClose() {
   const el = $("#noc"); if (el) el.remove();
   document.body.classList.remove("noc-on");
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-  try { if (/^#noc/.test(location.hash)) history.replaceState(null, "", location.pathname + location.search); } catch (_) { /* */ }
+  try { if (/^#noc/.test(location.hash)) history.replaceState(null, "", location.pathname + location.search + (WEB ? routeHash() : "")); } catch (_) { /* */ }
 }
 function nocFull() {
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -207,7 +207,7 @@ async function nocDashboards(reopen) {
       ${r.dashboards.map((d) => `<tr><td><b>${esc(d.name)}</b> <span class="muted ltr">#noc/${d.id}</span></td><td>${esc(LAY[d.data.layout])}</td>
         <td>${esc(d.data.scope.all ? "همه" : [...d.data.scope.groups.map((g) => `گروه «${g}»`), d.data.scope.ids.length ? `${num(d.data.scope.ids.length)} هدف` : ""].filter(Boolean).join("، "))}</td>
         <td>${d.data.rotate_sec ? `${num(d.data.rotate_sec)} ثانیه` : "—"}</td>
-        <td class="row" style="gap:4px"><button class="btn sm" data-dopen="${d.id}">باز کردن</button>${r.can_edit ? `<button class="btn sm" data-de="${d.id}">ویرایش</button><button class="btn sm danger-ghost" data-dd="${d.id}">حذف</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`
+        <td class="row" style="gap:4px"><button class="btn sm" data-dopen="${d.id}" data-href="#noc/${d.id}" title="${esc(I18N.t(WEB ? "کلیک راست: باز کردن در تب جدید" : "باز کردن"))}">باز کردن</button>${r.can_edit ? `<button class="btn sm" data-de="${d.id}">ویرایش</button><button class="btn sm danger-ghost" data-dd="${d.id}">حذف</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`
       : `<div class="empty">هنوز داشبوردی ساخته نشده است.</div>`}`,
     foot: `<button class="btn ghost" data-r="0">بستن</button>${r.can_edit ? `<button class="btn primary" id="ndAdd">+ داشبورد تازه</button>` : ""}`,
     onOpen: (m, close) => {

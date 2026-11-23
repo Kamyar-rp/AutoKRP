@@ -4,7 +4,7 @@
 - تسک با همان کاربر ویندوزی که نصب می‌کند و نوع ورود S4U اجرا می‌شود: رمز ویندوز ذخیره نمی‌شود و دسترسی
   اضافه‌ای (SYSTEM/Administrator) نمی‌گیرد؛ پوشه‌ی داده همان پوشه‌ی فعلی است (--data-root).
 - نصب و حذف به دسترسی Administrator نیاز دارد؛ در صورت نیاز برنامه خودش با UAC دوباره اجرا می‌شود.
-- قانون فایروال ورودی برای سرور هم‌زمان ساخته/حذف می‌شود.
+- قانون فایروال ورودی برای سرور هم‌زمان ساخته/حذف می‌شود (1.59.3: fw_apply؛ نام قانون برای هر نسخه جدا).
 - داده‌ها تا اولین ورود یک کاربر در وب قفل می‌مانند (کلید فقط از رمز کاربر می‌آید).
 """
 import logging
@@ -18,7 +18,8 @@ from xml.sax.saxutils import escape
 log = logging.getLogger(__name__)
 
 TASK = "AutoKRP Server"
-FW_RULE = "AutoKRP Server"
+FW_LEGACY = "AutoKRP Server"       # نام قانون پیش از 1.59.3 (برای همه‌ی نسخه‌ها یکی بود)
+FW_STATE = ".fw_applied"
 NO_WINDOW = 0x08000000
 
 
@@ -151,21 +152,141 @@ def task_xml(user, data_root):
 """
 
 
-def _firewall_add(port):
+def fw_names():
+    """نام قانون‌ها برای همین نسخه‌ی برنامه (کامل، مانیتورینگ، …) تا قانون نسخه‌ی دیگر را پاک نکند."""
+    import ntpath            # مسیر ویندوز (\\ یا /)
+    stem = ntpath.splitext(ntpath.basename(program()[0]))[0] if getattr(sys, "frozen", False) else "AutoKRP"
+    return {"web": f"{stem} Server (web)", "udp": f"{stem} Server (Trap/Syslog UDP)", "tcp": f"{stem} Server (Syslog TCP)"}
+
+
+def fw_clean_nets(nets):
+    """شبکه‌های مجاز سرور ← فهرست مرتب برای remoteip (هر مورد نامعتبر کنار گذاشته می‌شود)."""
+    import ipaddress
+    out = set()
+    for n in nets or []:
+        t = str(n).split("#", 1)[0].strip()
+        if not t:
+            continue
+        try:
+            out.add(str(ipaddress.ip_network(t, strict=False)))
+        except ValueError:
+            continue
+    return sorted(out)
+
+
+def _ports(v):
+    out = set()
+    for x in v or []:
+        try:
+            n = int(x)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= n <= 65535:
+            out.add(n)
+    return sorted(out)
+
+
+def fw_state(nets, udp=(), tcp=()):
+    """امضای حالت مطلوب (پورت وب در آن نیست: قانون وب به خود برنامه بسته است و با عوض شدن پورت کار می‌کند)."""
+    import hashlib
+    import json
+    d = {"nets": fw_clean_nets(nets), "udp": _ports(udp), "tcp": _ports(tcp)}
+    return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()
+
+
+def fw_applied():
+    """امضای آخرین قانون‌های ساخته‌شده یا None. فقط یک hash است (بدون آدرس) و بدون کلید خوانده می‌شود."""
+    from . import paths
+    try:
+        return (paths.data_dir() / FW_STATE).read_text(encoding="ascii").strip() or None
+    except OSError:
+        return None
+
+
+def _fw_delete_all():
     exe, base, _ = program()
-    _run([_sys32("netsh.exe"), "advfirewall", "firewall", "delete", "rule", f"name={FW_RULE}"], timeout=30)
-    args = [_sys32("netsh.exe"), "advfirewall", "firewall", "add", "rule", f"name={FW_RULE}", "dir=in", "action=allow",
-            "protocol=TCP", "enable=yes"]
-    # فایل اجرایی: قانون به برنامه بسته است (تغییر پورت بعداً هم کار می‌کند). حالت توسعه (python.exe): فقط پورت.
-    args += [f"program={exe}"] if not base else [f"localport={int(port)}"]
-    r = _run(args, timeout=30)
+    ns = _sys32("netsh.exe")
+    for n in fw_names().values():
+        _run([ns, "advfirewall", "firewall", "delete", "rule", f"name={n}"], timeout=30)
+    if not base:     # قانون قدیمی هم‌نام فقط اگر مال همین فایل برنامه باشد
+        _run([ns, "advfirewall", "firewall", "delete", "rule", f"name={FW_LEGACY}", f"program={exe}"], timeout=30)
+    else:
+        _run([ns, "advfirewall", "firewall", "delete", "rule", f"name={FW_LEGACY}"], timeout=30)
+
+
+def fw_apply(nets=(), udp=(), tcp=(), port=8443):
+    """قانون‌های ورودی (به دسترسی Administrator نیاز دارد):
+      وب: TCP، به خود فایل برنامه (هر پورتی که سرور گوش بدهد)، فقط از شبکه‌های مجاز (خالی = همه)؛
+      Trap/Syslog: UDP (و TCP برای Syslog) روی همان پورت‌ها، از هر آدرسی (فیلتر منبع در خود برنامه است).
+    حالت توسعه (python.exe): قانون وب فقط روی پورت."""
+    if not supported():
+        raise SvcError("فقط روی ویندوز.")
+    if not is_admin():
+        raise SvcError("برای تغییر فایروال ویندوز دسترسی Administrator لازم است.")
+    exe, base, _ = program()
+    ns, N = _sys32("netsh.exe"), fw_names()
+    nl, up, tp = fw_clean_nets(nets), _ports(udp), _ports(tcp)
+    _fw_delete_all()
+    add = [ns, "advfirewall", "firewall", "add", "rule", "dir=in", "action=allow", "enable=yes", "profile=any"]
+    web = add + [f"name={N['web']}", "protocol=TCP"] + ([f"program={exe}"] if not base else [f"localport={int(port)}"])
+    if nl:
+        web.append("remoteip=" + ",".join(nl))
+    errs = []
+    r = _run(web, timeout=30)
     if r.returncode != 0:
-        log.warning("قانون فایروال ساخته نشد: %s", _out(r))
+        errs.append(_out(r) or f"code {r.returncode}")
+    for key, proto, pp in (("udp", "UDP", up), ("tcp", "TCP", tp)):
+        if pp:
+            r = _run(add + [f"name={N[key]}", f"protocol={proto}", "localport=" + ",".join(map(str, pp))]
+                     + ([f"program={exe}"] if not base else []), timeout=30)
+            if r.returncode != 0:
+                errs.append(_out(r) or f"code {r.returncode}")
+    if errs:
+        log.warning("قانون فایروال ساخته نشد: %s", "; ".join(errs))
+        return {"ok": False, "error": "; ".join(errs)[:400]}
+    from . import paths
+    try:
+        (paths.data_dir() / FW_STATE).write_text(fw_state(nl, up, tp), encoding="ascii")   # nosec — فقط hash، بدون داده
+    except OSError:
+        pass
+    log.info("قانون‌های فایروال ویندوز ساخته شد (شبکه‌ها %d، UDP %s، TCP %s)", len(nl), up, tp)
+    return {"ok": True, "nets": nl, "udp": up, "tcp": tp}
+
+
+def fw_live():
+    """پورت‌های Trap/Syslog همین فرایند (اگر بخش مانیتورینگ در بیلد نیست: هیچ)."""
+    try:
+        from . import devevents
+        L = getattr(devevents, "LISTEN", None)
+    except Exception:  # noqa — بیلد بدون مانیتورینگ
+        L = None
+    if not isinstance(L, dict):
+        return {"udp": [], "tcp": [], "known": True}
+    return {"udp": _ports(L.get("udp")), "tcp": _ports(L.get("tcp")), "known": bool(L.get("known"))}
+
+
+def fw_status(nets, live=None):
+    """آیا قانون‌های فایروال ویندوز با شبکه‌های مجاز و پورت‌های Trap/Syslog فعلی هم‌خوان‌اند؟"""
+    live = live or fw_live()
+    applied = fw_applied()
+    return {"windows": supported(), "has": applied is not None, "nets": len(fw_clean_nets(nets)),
+            "synced": applied is not None and applied == fw_state(nets, live.get("udp"), live.get("tcp")),
+            "udp": _ports(live.get("udp")), "tcp": _ports(live.get("tcp")), "known": bool(live.get("known", True))}
+
+
+def fw_remove():
+    if not supported() or not is_admin():
         return False
+    _fw_delete_all()
+    from . import paths
+    try:
+        (paths.data_dir() / FW_STATE).unlink()
+    except OSError:
+        pass
     return True
 
 
-def install(user, data_root, port):
+def install(user, data_root, port, nets=(), udp=(), tcp=()):
     if not supported():
         raise SvcError("فقط روی ویندوز.")
     if not is_admin():
@@ -185,7 +306,7 @@ def install(user, data_root, port):
             os.remove(tmp)
         except OSError:
             pass
-    fw = _firewall_add(port)
+    fw = fw_apply(nets, udp, tcp, port).get("ok")
     log.info("اجرای خودکار سرور نصب شد (کاربر %s)", user)
     return {"firewall": fw}
 
@@ -198,7 +319,7 @@ def remove():
     sch = _sys32("schtasks.exe")
     _run([sch, "/end", "/tn", TASK], timeout=30)
     r = _run([sch, "/delete", "/tn", TASK, "/f"], timeout=30)
-    _run([_sys32("netsh.exe"), "advfirewall", "firewall", "delete", "rule", f"name={FW_RULE}"], timeout=30)
+    # 1.59.3: قانون‌های فایروال جدا مدیریت می‌شوند (دکمه‌ی پنجره‌ی سرور، حذف برنامه)؛ سرور ممکن است بدون اجرای خودکار هم اجرا شود
     if r.returncode != 0 and installed():
         raise SvcError("حذف تسک ویندوز ناموفق بود: " + (_out(r) or f"کد {r.returncode}"))
     log.info("اجرای خودکار سرور حذف شد")

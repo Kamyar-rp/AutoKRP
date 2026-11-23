@@ -52,9 +52,9 @@ FEATURES = [f for f in FEATURES if buildcfg.has(KEY_SECTION[f])]
 SEC_API = {"test_connection", "fg_device_add", "fg_device_delete", "fg_task_dryrun", "fg_task_templates", "forget_cert_pin",
            "splunk_diagnose", "splunk_optimize", "splunk_check_fields", "splunk_save_mapping", "redmine_load_meta", "redmine_discover",
            "preview_template", "start_run", "start_full_sync", "cancel_run", "decide", "intel_status", "intel_list_update",
-           "intel_feed_update", "intel_local_upload", "intel_local_clear", "repeat_ips", "ips_action", "import_preview", "import_commit",
+           "intel_feed_update", "intel_local_upload", "intel_local_clear", "repeat_ips", "ips_action", "ips_ban_check", "import_preview", "import_commit",
            "add_manual", "export_ips", "export_run_files", "pick_csv", "list_ips", "ip_detail",
-           "clean_rules_preview", "clean_rule_add", "intel_sources", "intel_source_update", "intel_source_test", "intel_source_upload"}         # 1.59: قاعده‌های بلاک غیرمخرب (فقط ادمین)
+           "intel_sources", "intel_source_update", "intel_source_test", "intel_source_upload"}         # 1.59: قاعده‌های بلاک غیرمخرب (فقط ادمین)
 AUTO_API = {"jobs_list", "job_save", "job_delete", "job_run", "set_master"}      # کارهای خودکار: امنیت یا ارتباط با دستگاه‌ها
 
 
@@ -145,7 +145,7 @@ TODO_API = {"todo_state", "todo_badge", "todo_save", "todo_delete", "todo_mark",
 READ |= TODO_API
 # اپراتور (به‌علاوه‌ی READ). چک ابزار داخل خود متدها یا در check_tools انجام می‌شود.
 OPERATOR = {"net_oui", "net_rdap", "net_trace_start", "net_locate_targets", "net_locate_start", "net_job", "net_job_cancel",
-            "start_run", "cancel_run", "decide", "job_run", "pick_csv", "ips_action",
+            "start_run", "cancel_run", "decide", "job_run", "pick_csv", "ips_action", "ips_ban_check",
             "export_ips", "export_run_files", "save_export", "save_export_many", "open_folder", "asset_save",
             "api_conn_save", "api_conn_delete", "api_req_save", "api_req_delete", "api_send"}      # 1.40: سطح «اجرا»ی ابزار API لازم است
 # اپراتوری که دسترسی «مانیتورینگ» دارد (هدف‌ها و پروفایل‌های شخصی خودش؛ هدف مشترک فقط ادمین)

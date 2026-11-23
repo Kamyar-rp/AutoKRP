@@ -31,6 +31,8 @@ from .store import ACTOR
 WEB_USER = contextvars.ContextVar("web_user", default=None)   # کاربر هر درخواست در حالت سرور
 WEB_IP = contextvars.ContextVar("web_ip", default="")
 WEB_SID = contextvars.ContextVar("web_sid", default="")
+WEB_HOST = contextvars.ContextVar("web_host", default="")      # 1.59.6: نام میزبان درخواست (بدون پورت)
+WEB_LOCAL = contextvars.ContextVar("web_local", default=False)  # 1.59.6: از خود سیستم سرور (نه از پشت proxy)
 from .pipeline import CONN, FW_DONE
 
 log = logging.getLogger(__name__)
@@ -926,7 +928,30 @@ class Api:
         cfg["sessions"] = self._server.active_sessions() if self._server else []
         cfg["me"] = (self._current_user() or {}).get("username", "")
         cfg["cert"] = self._cert_info()
+        # 1.59.6: هشدارهای امنیتی تنظیمات (نمایش در صفحه)
+        ps = getattr(self._server, "proxy_seen", None) if self._server else None
+        cfg["proxy_seen"] = {"at": ps[0], "fwd": ps[1]} if ps else None
+        cfg["broad_networks"] = self._broad_nets(cfg.get("allowed_networks") or [])
+        cfg["host_now"] = WEB_HOST.get()
+        from . import winsvc
+        cfg["winfw"] = winsvc.fw_status(cfg.get("allowed_networks") or []) if winsvc.supported() and not self._demo else None
         return {"server": cfg}
+
+    @staticmethod
+    def _broad_nets(nets):
+        """شبکه‌های مجاز خیلی باز (خالی = همه، یا رنجی بزرگ‌تر از /16)؛ loopback حساب نمی‌شود."""
+        import ipaddress as _ip
+        if not nets:
+            return ["*"]
+        out = []
+        for n in nets:
+            try:
+                net = _ip.ip_network(str(n), strict=False)
+            except ValueError:
+                continue
+            if not net.is_loopback and net.num_addresses > 65536:
+                out.append(str(net))
+        return out
 
     def _cert_info(self):
         from . import certs
@@ -1038,13 +1063,56 @@ class Api:
             if nets and ip and not _ip.ip_address(ip).is_loopback and not any(_ip.ip_address(ip) in _ip.ip_network(n) for n in nets):
                 raise ConnectorError(f"IP فعلی شما ({ip}) در رنج‌های مجاز نیست؛ با ذخیره‌ی این فهرست دسترسی خودتان قطع می‌شود.")
             out["allowed_networks"] = nets
+        warns = []
+        if "allowed_hosts" in c:
+            out["allowed_hosts"], warns = self._check_hosts(c["allowed_hosts"])
         before = serverauth.config()
         serverauth.set_config(out)
         if self._server is not None:
             self._server.reload_cfg()
         restart = any(k in out and out[k] != before.get(k) for k in ("port", "bind"))
         self._store.add_history("security", "سرور", "ok", "تنظیمات سرور تغییر کرد" + ("؛ پورت/bind بعد از اجرای دوباره" if restart else ""))
-        return {**self.server_config(), "restart": restart}
+        return {**self.server_config(), "restart": restart, "warnings": warns}
+
+    def _check_hosts(self, raw):
+        """1.59.6: «نام‌های مجاز» سرور: نام دامنه (نه IP)؛ نام فعلی مرورگر باید در فهرست باشد تا دسترسی خود ادمین قطع نشود."""
+        import ipaddress as _ip
+        from urllib.parse import urlsplit
+        from .server import HOST_RE, LOCAL_NAMES, host_only
+        hosts = []
+        for h in raw if isinstance(raw, list) else str(raw or "").splitlines():
+            h = str(h).split("#", 1)[0].strip()
+            if not h:
+                continue
+            if "://" in h:
+                h = urlsplit(h).netloc
+            h = host_only(h.split("/", 1)[0])
+            try:
+                _ip.ip_address(h)
+                raise ConnectorError(f"«{h}» یک IP است؛ در «نام‌های مجاز» فقط نام دامنه بنویسید (محدود کردن IP: «شبکه‌های مجاز»).")
+            except ValueError:
+                pass
+            if h in LOCAL_NAMES:
+                continue                       # localhost همیشه فقط از خود سیستم سرور مجاز است
+            if not HOST_RE.match(h):
+                raise ConnectorError(f"نام نامعتبر: {h}")
+            if h not in hosts:
+                hosts.append(h)
+        if len(hosts) > 20:
+            raise ConnectorError("حداکثر ۲۰ نام.")
+        cur = WEB_HOST.get()
+        if hosts and not WEB_LOCAL.get() and cur not in hosts:
+            raise ConnectorError(f"این صفحه را با «{cur or '—'}» باز کرده‌اید که در فهرست نیست؛ با ذخیره‌ی آن دسترسی خودتان قطع می‌شود. "
+                                 "اول با یکی از نام‌های فهرست وارد شوید یا آن را اضافه کنید.")
+        warns = []
+        names = [n.lower() for n in ((self._cert_info() or {}).get("names") or [])]
+
+        def covered(h):
+            return h in names or any(n.startswith("*.") and h.endswith(n[1:]) and h.count(".") == n.count(".") for n in names)
+        miss = [h for h in hosts if not covered(h)]
+        if miss:
+            warns.append(f"گواهی فعلی شامل این نام‌ها نیست و مرورگر هشدار می‌دهد: {', '.join(miss)} — گواهی شرکت را برای همین نام بارگذاری کنید.")
+        return hosts, warns
 
     @_safe
     def server_kill_session(self, session_id):
@@ -1491,10 +1559,9 @@ class Api:
         if (confirm or "").strip().upper() != "RESET":
             raise VaultError("برای پاک کردن، کلمه‌ی RESET را دقیق تایپ کنید.")
         if paths.is_server():
-            from .server import is_local
             from . import serverauth
             me = self._current_user() or {}
-            if me.get("role") != "admin" or not is_local(WEB_IP.get()):
+            if me.get("role") != "admin" or not WEB_LOCAL.get():
                 raise VaultError("در حالت سرور، پاک‌سازی کامل فقط برای ادمین و فقط از خود سیستم سرور (localhost) ممکن است.")
             rec = serverauth.find(serverauth.load(), me.get("username", "")) or {}
             if rec.get("source") != "ad":            # رمز کاربر AD را خود AD بررسی می‌کند (ورود همین نشست)
@@ -1899,13 +1966,8 @@ class Api:
                 if sid not in {x["id"] for x in ip_["sources"]}:
                     self._store.add_history("intel", o["name"], "ok", "منبع حذف شد")
         fgp = p.get("fortigate")
-        if isinstance(fgp, dict) and "clean_rules" in fgp:      # 1.59: قاعده‌های بلاک غیرمخرب
-            from . import cleanrules
-            try:
-                fgp["clean_rules"] = cleanrules.clean(fgp["clean_rules"])
-            except cleanrules.RuleError as e:
-                raise ConnectorError(str(e))
-            self._clean_rules_hist(fgp["clean_rules"])
+        if isinstance(fgp, dict):
+            fgp.pop("clean_rules", None)        # 1.59.2: قاعده‌های بلاک غیرمخرب حذف شد
         if "fg_scenarios" in p:           # 1.29: تسک‌های پایتونی FortiGate (فقط ادمین؛ هر تغییر کد در تاریخچه)
             from . import fgtask
             try:
@@ -2438,6 +2500,17 @@ class Api:
         return {}
 
     # ------------------------------------------------------------ data
+    @staticmethod
+    def _is_repeat(status, malicious, tban, seen_days, fw_status, fw_until, now):
+        """1.59.2 «غیرمخرب (تکرار)»: قبلاً بلاک مدت‌دار خورده، بلاکش تمام شده، بعد از آن دوباره در گزارش‌ها آمده و هنوز غیرمخرب است."""
+        try:
+            tban = int(tban or 0)
+        except (TypeError, ValueError):
+            tban = 0
+        if status != "CLEAN" or malicious or tban <= 0 or seen_days < 1:
+            return False
+        return not (fw_status in ("banned", "already") and (not fw_until or str(fw_until) > now))
+
     @_safe
     def list_ips(self, compact=False):
         """compact (رابط): {"cols": [...], "data": [[...], ...]} — نام ستون‌ها یک بار، نه برای هر ردیف (با ۵۰ هزار IP
@@ -2446,72 +2519,21 @@ class Api:
         cols, raw = self._store.list_ips_raw()
         acfg = self._settings.get("abuseipdb") or {}
         seen = self._store.seen_days()
-        from datetime import datetime as _dt, timedelta as _td
-        atk = self._store.attack_stats((_dt.now() - _td(days=29)).strftime("%Y-%m-%d"))      # 1.59: ۳۰ روز اخیر
         ix = {c: i for i, c in enumerate(cols)}
         i_ip, i_st, i_sc, i_wl, i_fw = ix["ip"], ix["abuse_status"], ix["score"], ix.get("is_whitelisted"), ix["fw_status"]
+        i_tb, i_fu = ix.get("tban_count"), ix.get("fw_until")
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
         data = []
         for t in raw:
             sb = bool(block_reason_v(t[i_st], t[i_sc], t[i_wl] if i_wl is not None else None, acfg))
-            a = atk.get(t[i_ip])
-            data.append(t + (sb, sb and t[i_fw] not in FW_DONE, (seen.get(t[i_ip]) or (0,))[0], a[0] if a else 0, a[2] if a else 0))
-        cols = cols + ["should_block", "fw_pending", "seen_days", "atk_days", "atk_runs"]
+            sd = (seen.get(t[i_ip]) or (0,))[0]
+            data.append(t + (sb, sb and t[i_fw] not in FW_DONE, sd, self._is_repeat(t[i_st], sb, t[i_tb] if i_tb is not None else 0, sd,
+                                                                                  t[i_fw], t[i_fu] if i_fu is not None else "", now)))
+        cols = cols + ["should_block", "fw_pending", "seen_days", "repeat"]
         rd = int(acfg.get("repeat_days") or 0)
         if compact:
             return {"repeat_days": rd, **_pack_rows(cols, data)}
         return {"rows": [dict(zip(cols, t)) for t in data], "repeat_days": rd}
-
-    # ------------------------------------------------------------ 1.59: قاعده‌های بلاک غیرمخرب
-    def _clean_rules_hist(self, new):
-        from . import cleanrules
-        old = {r["id"]: r for r in self._settings.get("fortigate", "clean_rules", default=[]) or []}
-        nn = {r["id"]: r for r in new}
-        for rid, r in nn.items():
-            if rid not in old:
-                self._store.add_history("security", "قاعده‌ی بلاک غیرمخرب", "ok", f"افزوده شد: «{r['name']}» — {cleanrules.summary(r)} ← {r['ban_days'] or 'دائم'} روز")
-            elif old[rid] != r:
-                self._store.add_history("security", "قاعده‌ی بلاک غیرمخرب", "ok", f"تغییر کرد: «{r['name']}» — {cleanrules.summary(r)} ← {r['ban_days'] or 'دائم'} روز"
-                                        + ("" if r["enabled"] else " (خاموش)"))
-        for rid, r in old.items():
-            if rid not in nn:
-                self._store.add_history("security", "قاعده‌ی بلاک غیرمخرب", "ok", f"حذف شد: «{r['name']}»")
-
-    @_safe
-    def clean_rules_preview(self, rule=None):
-        """تعداد IPهایی که الان با قاعده(ها) جورند. rule: یک قاعده (فرم ویرایش) یا None = همه‌ی قاعده‌های ذخیره‌شده (هر کدام جدا)."""
-        from . import cleanrules
-        cfg = self._settings.conn_config("abuseipdb")
-        from .connectors import fortigate as fg
-        nets, _ = fg.parse_ignore(self._settings.get("fortigate", "ignore_networks", default=[]))
-
-        def one(r):
-            hits = cleanrules.evaluate(self._store, [{**r, "enabled": True}], cfg, include_banned=True)
-            info = self._store.ips_info(list(hits), "ip, fw_status") if hits else {}
-            excl = [ip for ip in hits if fg.is_excluded(ip, nets)]
-            banned = [ip for ip in hits if (info.get(ip) or {}).get("fw_status") in cleanrules.FW_DONE]
-            ex_new = [ip for ip in excl if ip not in set(banned)]
-            return {"match": len(hits), "excluded": len(ex_new), "banned": len(banned), "new": len(hits) - len(banned) - len(ex_new),
-                    "sample": sorted(hits, key=lambda ip: (-hits[ip].get("atk_runs", 0), -hits[ip]["atk_days"]))[:20]}
-        try:
-            if rule is not None:
-                return one(cleanrules.clean_one(rule))
-            rules = self._settings.get("fortigate", "clean_rules", default=[]) or []
-            return {"rules": {r["id"]: one(r) for r in rules}}
-        except cleanrules.RuleError as e:
-            raise ConnectorError(str(e))
-
-    @_safe
-    def clean_rule_add(self, rule):
-        """«ذخیره به‌عنوان قاعده» از صفحه‌ی آدرس‌ها (فقط ادمین)."""
-        from . import cleanrules
-        rules = list(self._settings.get("fortigate", "clean_rules", default=[]) or [])
-        try:
-            new = cleanrules.clean(rules + [rule])
-        except cleanrules.RuleError as e:
-            raise ConnectorError(str(e))
-        self._clean_rules_hist(new)
-        self._settings.update({"fortigate": {"clean_rules": new}})
-        return {"rules": new}
 
     # ------------------------------------------------------------ بررسی تکمیلی (فید و لیست داخلی؛ فقط ادمین)
     @_safe
@@ -2685,10 +2707,34 @@ class Api:
             raise ConnectorError("این IP در داده‌ها نیست.")
         hist = self._store.history_query(target=ip, limit=30)[0]
         row["seen_days"] = (self._store.seen_days([ip]).get(ip) or (0,))[0]
-        from datetime import datetime as _dt, timedelta as _td
-        a = self._store.attack_stats((_dt.now() - _td(days=29)).strftime("%Y-%m-%d"), [ip]).get(ip) or (0, 0, 0)
-        row["atk_days"], row["atk_runs"] = a[0], a[2]
+        from .pipeline import block_reason_v
+        mal = bool(block_reason_v(row.get("abuse_status"), row.get("score"), row.get("is_whitelisted"), self._settings.get("abuseipdb") or {}))
+        row["repeat"] = self._is_repeat(row.get("abuse_status"), mal, row.get("tban_count"), row["seen_days"], row.get("fw_status"),
+                                        row.get("fw_until"), time.strftime("%Y-%m-%d %H:%M:%S"))
         return {"ip": row, "history": hist}
+
+    @_safe
+    def ips_ban_check(self, ips):
+        """1.59.2: خلاصه برای پنجره‌ی تأیید بلاک: چندتا در رنج مستثناست، چندتا الان بلاک است، چندتا مخرب و چندتا «غیرمخرب (تکرار)»."""
+        ips = [str(i).strip() for i in (ips or []) if str(i).strip()][:200000]
+        self._need_tools(["fortigate"])
+        ex = self._excluded_fn()
+        excluded = [ip for ip in ips if ex(ip)]
+        info = self._store.ips_info(ips, "ip, abuse_status, score, is_whitelisted, fw_status, fw_until, tban_count") if ips else {}
+        seen = self._store.seen_days(ips) if ips else {}
+        from .pipeline import block_reason_v
+        acfg = self._settings.get("abuseipdb") or {}
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        banned = malicious = repeat = 0
+        for ip in ips:
+            r = info.get(ip) or {}
+            mal = bool(block_reason_v(r.get("abuse_status"), r.get("score"), r.get("is_whitelisted"), acfg))
+            if r.get("fw_status") in ("banned", "already") and (not r.get("fw_until") or str(r["fw_until"]) > now):
+                banned += 1
+            malicious += mal
+            repeat += self._is_repeat(r.get("abuse_status"), mal, r.get("tban_count"), (seen.get(ip) or (0,))[0], r.get("fw_status"),
+                                      r.get("fw_until"), now)
+        return {"total": len(ips), "excluded": len(excluded), "banned": banned, "malicious": malicious, "repeat": repeat}
 
     @_safe
     def ips_action(self, action, ips, opts=None):
@@ -2718,14 +2764,18 @@ class Api:
             # با همین مدت دوباره بلاک می‌شوند (تغییر مدت)، همه با پیش‌نمایش و تأیید.
             o = {"steps": {"fortigate": True}, "user": self._who(), "fortigate_input": {"source": "list", "text": "\n".join(ips)}}
             days = (opts or {}).get("days") if isinstance(opts, dict) else None
+            # 1.59.2: بلاک مستقیم از صفحه‌ی آدرس‌ها — کاربر IPها و مدت را در پنجره‌ی تأیید دیده؛ اجرا دیگر منتظر تأیید نمی‌ماند
+            direct = isinstance(opts, dict) and bool(opts.get("confirmed")) and days not in (None, "", "rules")
+            if direct:
+                o["confirmed"] = True
             if days not in (None, "", "rules"):
                 from . import banrules
                 try:
                     o["ban_days"] = banrules.clean_days(days)
                 except banrules.RuleError as e:
                     raise ConnectorError(str(e))
-            run = self._worker.pipeline.start(o, "manual")
-            return {"run_id": run.id, "message": "پیش‌نمایش بلاک آماده می‌شود"}
+            run = self._worker.pipeline.start(o, "ban" if direct else "manual")
+            return {"run_id": run.id, "message": f"بلاک {len(ips)}\u200f IP شروع شد" if direct else "پیش‌نمایش بلاک آماده می‌شود"}
         if action in ("reviewed", "pending"):
             for ip in ips:
                 self._store.upsert_ip(ip, review=action)

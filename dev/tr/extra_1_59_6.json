@@ -1,0 +1,14 @@
+{
+ "«{0}» یک IP است؛ در «نام‌های مجاز» فقط نام دامنه بنویسید (محدود کردن IP: «شبکه‌های مجاز»).": "“{0}” is an IP address; enter only domain names under “Allowed names” (to restrict IPs use “Allowed networks”).",
+ "اتصال از %s با نام نامجاز رد شد (%s: %s)": "Connection from %s refused: name not allowed (%s: %s)",
+ "این رنج‌ها خیلی بزرگ‌اند: {0} — در محیط عملیاتی فقط رنج ادمین‌ها و NOC را بگذارید.": "These ranges are very large: {0} — in production allow only the admin and NOC ranges.",
+ "این صفحه را با «{0}» باز کرده‌اید که در فهرست نیست؛ با ذخیره‌ی آن دسترسی خودتان قطع می‌شود. اول با یکی از نام‌های فهرست وارد شوید یا آن را اضافه کنید.": "You opened this page with “{0}”, which is not in the list; saving it would cut off your own access. First sign in with one of the listed names, or add this one.",
+ "حداکثر ۲۰ نام.": "At most 20 names.",
+ "درخواستی از خود سیستم سرور با هدر proxy رسید ({0}). AutoKRP را پشت reverse proxy (IIS/nginx) روی همان سیستم نگذارید؛ این درخواست‌ها «محلی» حساب نمی‌شوند.": "A request with proxy headers arrived from the server machine itself ({0}). Do not put AutoKRP behind a reverse proxy (IIS/nginx) on the same machine; such requests are not treated as local.",
+ "شبکه‌های مجاز خالی است: از هر آدرسی می‌شود به صفحه‌ی ورود رسید. در محیط عملیاتی فقط رنج ادمین‌ها و NOC را بگذارید.": "Allowed networks is empty: the sign-in page is reachable from any address. In production allow only the admin and NOC ranges.",
+ "نام‌های مجاز (هر خط یک نام دامنه، مثلاً mon.test.com؛ خالی = هر نام و IP). باز کردن با IP یا نام دیگر همان ابتدای اتصال قطع می‌شود؛ localhost فقط روی خود سیستم سرور کار می‌کند.": "Allowed names (one domain name per line, e.g. mon.test.com; empty = any name and IP). Opening with an IP or another name is dropped at the start of the connection; localhost works only on the server machine itself.",
+ "نام‌های مجاز تنظیم نشده: برنامه با IP و هر نامی باز می‌شود.": "Allowed names not set: the app opens with an IP and any name.",
+ "ورود کاربر دامنه از %s رد شد: سرور هنوز باز نشده است": "Domain user sign-in from %s refused: the server is not unlocked yet",
+ "گواهی فعلی شامل این نام‌ها نیست و مرورگر هشدار می‌دهد: {0} — گواهی شرکت را برای همین نام بارگذاری کنید.": "The current certificate does not include these names, so browsers will warn: {0} — upload a company certificate for this name.",
+ "نام نامعتبر: {0}": "Invalid name: {0}"
+}

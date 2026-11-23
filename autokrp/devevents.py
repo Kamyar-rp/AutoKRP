@@ -56,6 +56,10 @@ def cfg_of(settings):
     return c
 
 
+
+# 1.59.3: پورت‌هایی که گیرنده‌ی Trap/Syslog روی آن‌ها گوش می‌دهد (برای قانون فایروال ویندوز در پنجره‌ی سرور)
+LISTEN = {"udp": [], "tcp": [], "known": False}
+
 class EventsError(Exception):
     pass
 
@@ -400,6 +404,8 @@ class DevEvents:
                 except OSError as e:
                     self.status["syslog"] += f"؛ TCP: {e}"
         self.stats["started"] = time.time()
+        LISTEN.update(udp=sorted({p for p, on in ((c["trap_port"], c["trap_enabled"]), (c["syslog_port"], c["syslog_enabled"])) if on}),
+                      tcp=[c["syslog_port"]] if c["syslog_enabled"] and c["syslog_tcp"] else [], known=True)
 
     def stop(self):
         self.stop_ev.set()
@@ -415,6 +421,7 @@ class DevEvents:
             except OSError:
                 pass
         self._socks, self._tcp, self._threads = [], None, []
+        LISTEN.update(udp=[], tcp=[])
         self.status = {"trap": "off", "syslog": "off"}
 
     def _udp(self, kind, bind, port, handler):

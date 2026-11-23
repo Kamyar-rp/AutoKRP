@@ -28,7 +28,9 @@ INTEL_FIELDS = ["intel_status", "intel_source", "intel_detail", "intel_at"]
 FW_FIELDS = ["fw_until", "fw_days"]
 # 1.59 قاعده‌های بلاک غیرمخرب: attack_reset = روزی که شمارش روزهای حمله بعد از آن از نو شروع می‌شود (پایان آخرین بلاک قاعده)؛
 # fw_rule = نام قاعده‌ای که IP را بلاک کرد
-RULE_FIELDS = ["attack_reset", "fw_rule"]
+# 1.59.2: attack_reset = روزی که شمارش «روزهای بررسی» بعد از آن از نو شروع می‌شود (پایان بلاک مدت‌دار)؛
+# tban_count = چند بار بلاک مدت‌دار خورده (برای «غیرمخرب (تکرار)»)؛ fw_rule از 1.59 (دیگر استفاده نمی‌شود)
+RULE_FIELDS = ["attack_reset", "fw_rule", "tban_count"]
 IP_FIELDS = _IP_FIELDS_V2 + INTEL_FIELDS + FW_FIELDS + RULE_FIELDS
 
 
@@ -372,8 +374,15 @@ def _m27(c):
         c.execute("ALTER TABLE ip_attack_day ADD COLUMN runs INTEGER DEFAULT 1")
 
 
+def _m28(c):
+    """1.59.2: tban_count (تعداد بلاک مدت‌دار)."""
+    have = {r[1] for r in c.execute("PRAGMA table_info(ips)")}
+    if "tban_count" not in have:
+        c.execute("ALTER TABLE ips ADD COLUMN tban_count TEXT")
+
+
 MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17, _m18, _m19, _m20, _m21, _m22, _m23, _m24, _m25,
-              _m26, _m27]
+              _m26, _m27, _m28]
 # ستون‌هایی که مهاجرت‌ها اضافه می‌کنند؛ هر بار باز شدن بررسی می‌شود و اگر نباشد اضافه می‌شود
 # (پایگاه داده‌ای که شماره‌ی نسخه‌اش جلوتر از ستون‌هایش است، مثلاً بازگردانی فایل قدیمی، دیگر خطا نمی‌دهد)
 REQUIRED_COLUMNS = {
@@ -1101,6 +1110,13 @@ class Store:
         with self._lock:
             return self.db.execute("SELECT abuse_status, score, is_whitelisted, fw_status, checked_at, review FROM ips").fetchall()
 
+    def note_timed_ban(self, ip, reset_day):
+        """1.59.2: بلاک مدت‌دار زده شد ← شمارنده یکی بیشتر و «روزهای بررسی» بعد از reset_day (پایان بلاک) از نو."""
+        with self._lock:
+            self.db.execute("UPDATE ips SET tban_count = CAST(COALESCE(NULLIF(tban_count, ''), '0') AS INTEGER) + 1, attack_reset = ? "
+                            "WHERE ip = ?", (reset_day, ip))
+            self._seen_cache = None
+
     def fw_timed(self):
         """{ip: روز} برای بلاک‌های موقتی که خود برنامه زده و هنوز تمام نشده‌اند (1.54)."""
         now = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1455,15 +1471,17 @@ class Store:
             c = self._seen_cache
             if ips is None and c and c[0] == (id(self.db), self._stat_ver):
                 return c[1]
-            q = "SELECT ip, COUNT(*), MIN(seen_first), MAX(seen_last) FROM stat_ip_day WHERE seen = 1"
+            # 1.59.2: بعد از پایان بلاک مدت‌دار، فقط روزهای بعد از ips.attack_reset شمرده می‌شوند (شمارش از نو)
+            q = ("SELECT s.ip, COUNT(*), MIN(s.seen_first), MAX(s.seen_last) FROM stat_ip_day s LEFT JOIN ips i ON i.ip = s.ip "
+                 "WHERE s.seen = 1 AND (COALESCE(i.attack_reset, '') = '' OR s.day > i.attack_reset)")
             if ips is None:
-                out = {r[0]: (r[1], r[2], r[3]) for r in self.db.execute(q + " GROUP BY ip")}
+                out = {r[0]: (r[1], r[2], r[3]) for r in self.db.execute(q + " GROUP BY s.ip")}
                 self._seen_cache = ((id(self.db), self._stat_ver), out)
                 return out
             out, ips = {}, list(dict.fromkeys(ips))
             for i in range(0, len(ips), 500):
                 part = ips[i:i + 500]
-                for r in self.db.execute(q + f" AND ip IN ({','.join('?' * len(part))}) GROUP BY ip", part):  # nosec B608 — فقط ? ها
+                for r in self.db.execute(q + f" AND s.ip IN ({','.join('?' * len(part))}) GROUP BY s.ip", part):  # nosec B608 — فقط ? ها
                     out[r[0]] = (r[1], r[2], r[3])
             return out
 

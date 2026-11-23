@@ -226,6 +226,7 @@ function renderMon() {
   $("#monMaint").onclick = () => monMaintList();
   if ($("#monPol")) $("#monPol").onclick = () => monPolicies();
   if ($("#monNoc")) $("#monNoc").onclick = () => nocOpen();
+  if ($("#monNoc")) $("#monNoc").dataset.href = "#noc";        // 1.59.4: کلیک راست ← تب جدید (وب)
   if ($("#monNocD")) $("#monNocD").onclick = () => nocDashboards();
   $("#monMute").onclick = () => monSetMute(!MON.muted);
   $("#monTest").onclick = () => { const m = MON.muted; MON.muted = false; monPlay("down", 1).finally(() => (MON.muted = m)); };

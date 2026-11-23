@@ -101,7 +101,13 @@ if not defined ISCC (
   goto :done
 )
 if exist "dist\%EXENAME%-Setup-%VER%.exe" del "dist\%EXENAME%-Setup-%VER%.exe"
-"%ISCC%" /Q "/DAppVer=%VER%" "/DSrcDir=%INSTDIR%" "/DExeName=%EXENAME%" "/DAppGuid=%APPGUID%" "/O%CD%\dist" installer\AutoKRP.iss
+rem 1.59.4: Inno Setup accepts only a clean .ico; convert assets\app.ico (or app.png) to build\setup.ico first
+set "SETUPICON="
+for /f "delims=" %%I in ('call "%PY%" dev\mkicon.py "%CD%\build\setup.ico"') do set "SETUPICON=%%I"
+rem (no parenthesised block here: a ")" in the folder path would break it)
+set "ICONARG=/DNoSetupIcon=1"
+if defined SETUPICON set "ICONARG=/DSetupIcon=%SETUPICON%"
+"%ISCC%" /Q "/DAppVer=%VER%" "/DSrcDir=%INSTDIR%" "/DExeName=%EXENAME%" "/DAppGuid=%APPGUID%" "%ICONARG%" "/O%CD%\dist" installer\AutoKRP.iss
 if errorlevel 1 (
   set "SETUPNOTE=(FAILED: Inno Setup reported an error above)"
   goto :done

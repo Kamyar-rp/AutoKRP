@@ -40,7 +40,7 @@ SHORT = {"sec": "Sec", "dev": "Dev", "monitor": "Monitor", "asset": "Asset", "of
 # any of them is built. Everything not listed here is core and is always built.
 ENGINES = {
     "sec": ["pipeline", "connectors/abuseipdb", "connectors/demo", "connectors/fortigate",
-            "connectors/redmine", "connectors/splunk", "importer", "intel", "splq", "dnstool", "fgtask", "fgtask_child", "banrules", "cleanrules",
+            "connectors/redmine", "connectors/splunk", "importer", "intel", "splq", "dnstool", "fgtask", "fgtask_child", "banrules",
             "jobs", "netscan"],
     "dev": ["ssh", "sshtemplate", "telnet", "term", "xfer", "tftp", "nettools", "apitool", "backup", "jobs", "textedit", "fbackup"],
     "monitor": ["monitor", "snmp", "snmppool", "snmpworker", "monviews", "devevents", "topology", "tsdb", "netscan", "icmp", "mibs",
@@ -267,7 +267,7 @@ def pyi_args(mods, mode, name, stage_dir):
     if os.path.exists(os.path.join(stage_dir, "assets", "app.ico")):
         a += ["--icon", os.path.join("assets", "app.ico")]
     for m in ("dbpg", "fgtask_child", "snmpworker", "snmppool", "tsdb", "icmp", "monviews", "netmap", "terms", "apitool", "cfgpack",
-              "dashboards", "mapdisc", "auditlog", "todo", "clientgate", "absent", "buildcfg", "textedit", "fbackup", "cleanrules"):
+              "dashboards", "mapdisc", "auditlog", "todo", "clientgate", "absent", "buildcfg", "textedit", "fbackup"):
         a += ["--hidden-import", "autokrp." + m]            # stubs included: tiny and harmless
     if "snmp" in keep:
         a += ["--add-data", os.path.join("assets", "mibs") + SEP + os.path.join("assets", "mibs"),

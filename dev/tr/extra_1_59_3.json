@@ -1,0 +1,12 @@
+{
+ "با تنظیمات فعلی هم‌خوان نیست": "Out of date with the current settings",
+ "برای به‌روزرسانی، روی خود ویندوز سرور پنجره‌ی «AutoKRP — سرور» را باز کنید و «به‌روزرسانی فایروال ویندوز» را بزنید (دسترسی Administrator). قانون وب به خود برنامه بسته است، پس عوض کردن پورت آن را از کار نمی‌اندازد.": "To update it, open the “AutoKRP — Server” window on the Windows server itself and click “Update Windows Firewall” (Administrator access). The web rule is tied to the program itself, so changing the port does not break it.",
+ "برای تغییر فایروال ویندوز دسترسی Administrator لازم است.": "Changing Windows Firewall requires Administrator access.",
+ "شبکه‌ی مجاز": "allowed network(s)",
+ "فایروال ویندوز با این تنظیمات هم‌خوان نیست؛ روی خود ویندوز سرور «به‌روزرسانی فایروال ویندوز» را بزنید.": "Windows Firewall does not match these settings; click “Update Windows Firewall” on the Windows server itself.",
+ "فایروال ویندوز:": "Windows Firewall:",
+ "قانونی ساخته نشده": "No rule yet",
+ "قانون‌های فایروال ویندوز ساخته شد (شبکه‌ها %d، UDP %s، TCP %s)": "Windows Firewall rules created (networks %d, UDP %s, TCP %s)",
+ "همه‌ی آدرس‌ها": "any address",
+ "وب:": "Web:"
+}

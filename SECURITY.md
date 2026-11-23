@@ -31,8 +31,9 @@ A full description in Persian is in [docs/security-design.fa.md](docs/security-d
 - Two lock levels: UI lock (key stays in memory for scheduled jobs) and full lock (keys removed from memory, jobs stop). Failed unlock attempts back off exponentially and are logged.
 
 ### Web (server mode)
-- HTTPS only (TLS ≥ 1.2) with a self-signed or organisation certificate.
-- `HttpOnly; Secure; SameSite=Strict` session cookie, CSRF tokens, Origin and Content-Type checks, strict CSP without inline scripts, HSTS, `X-Frame-Options: DENY`.
+- HTTPS only (TLS ≥ 1.2; TLS 1.2 limited to ECDHE with AES-GCM/ChaCha20) with a self-signed or organisation certificate.
+- Optional allowed names: when set, connections using an IP address or any other host name are dropped during the TLS handshake (SNI) and by `Host` header; `localhost` works only on the server machine itself. Requests carrying reverse-proxy headers are never treated as local.
+- `__Host-` prefixed `HttpOnly; Secure; SameSite=Strict` session cookie, CSRF tokens, Origin and Content-Type checks, strict CSP without inline scripts, HSTS, `X-Frame-Options: DENY`.
 - Lockout after failed sign-ins (per IP+user, per IP and per account), idle session timeout, an allowed-networks list (private ranges by default), connection and body-size limits.
 - Roles: admin / operator / read-only; operators only get the tools the admin grants. Non-admins never see server addresses, credentials, recipients, queries or scripts.
 

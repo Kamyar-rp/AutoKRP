@@ -29,8 +29,10 @@ from pathlib import Path
 from . import atrest, certs, paths, serverauth
 
 log = logging.getLogger(__name__)
-COOKIE = "akrp_sid"
-PRE_COOKIE = "akrp_pre"       # توکن پیش از ورود (CSRF صفحه‌ی ورود؛ double-submit)
+# 1.59.6: پیشوند __Host- (فقط HTTPS، بدون Domain، مسیر /) تا زیردامنه یا میزبان دیگری نتواند کوکی نشست را بگذارد یا جایگزین کند؛
+# کوکی پیش از ورود مسیر /auth دارد، پس پیشوند __Secure-
+COOKIE = "__Host-akrp_sid"
+PRE_COOKIE = "__Secure-akrp_pre"       # توکن پیش از ورود (CSRF صفحه‌ی ورود؛ double-submit)
 CSRF_HEADER = "X-AKRP-CSRF"
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "application/javascript; charset=utf-8",
          ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf", ".svg": "image/svg+xml", ".png": "image/png",
@@ -51,6 +53,8 @@ SEC_HEADERS = [
     ("Cache-Control", "no-store"),
     ("Strict-Transport-Security", "max-age=31536000"),
     ("Cross-Origin-Opener-Policy", "same-origin"),
+    ("Cross-Origin-Resource-Policy", "same-origin"),
+    ("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()"),
     # بدون 'unsafe-inline' برای اسکریپت: هیچ اسکریپت درون‌خطی‌ای اجرا نمی‌شود (XSS تزریق‌شده بی‌اثر است).
     # استایل: فقط فایل‌های خود برنامه؛ ویژگی style روی عناصر (برای چیدمان) مجاز است، تگ <style> تزریق‌شده نه.
     ("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; style-src-elem 'self'; "
@@ -66,6 +70,23 @@ def _eq(a, b):
 
 def is_local(ip):
     return ip in LOCAL_IPS
+
+
+# 1.59.6: نام‌های مجاز (Host/SNI)
+LOCAL_NAMES = {"localhost", "127.0.0.1", "::1"}
+HOST_RE = re.compile(r"^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$")
+# هدرهایی که یک reverse proxy اضافه می‌کند؛ درخواست از خود سیستم با این هدرها «محلی» حساب نمی‌شود
+PROXY_HEADERS = ("X-Forwarded-For", "Forwarded", "X-Real-IP", "X-Forwarded-Host", "X-Forwarded-Proto")
+
+
+def host_only(h):
+    """«Mon.Test.com:8443» ← «mon.test.com»؛ «[::1]:8443» ← «::1»."""
+    h = str(h or "").strip().lower()
+    if h.startswith("["):
+        h = h[1:h.find("]")] if "]" in h else ""
+    elif h.count(":") == 1:
+        h = h.split(":", 1)[0]
+    return h.rstrip(".")
 
 
 _CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
@@ -92,6 +113,8 @@ class _Ctx:
         self.master = None            # کلید اصلی (فقط در حافظه؛ برای ساخت کاربر و تغییر رمز)
         self.cfg = serverauth.config()
         self.started_at = time.time()
+        self.proxy_seen = None        # (زمان، IP مبدأ اعلام‌شده) — آخرین درخواست از خود سیستم با هدر proxy
+        self._host_log = {}           # ip -> زمان آخرین ثبت رد نام (لاگ کم‌حجم)
 
     def reload_cfg(self):
         self.cfg = serverauth.config()
@@ -102,8 +125,28 @@ class _Ctx:
             certs.load_into(self.tls)
 
     # -------------------------------------------------- شبکه‌ی مجاز (از لحظه‌ی روشن شدن، بدون نیاز به کلید)
-    def ip_allowed(self, ip):
-        if is_local(ip):
+    def host_ok(self, name, ip, local=None):
+        """1.59.6: وقتی «نام‌های مجاز» تنظیم شده، فقط همان نام‌ها؛ localhost فقط از خود سیستم سرور (نه از پشت proxy)."""
+        hosts = self.cfg.get("allowed_hosts") or []
+        if not hosts:
+            return True
+        n = host_only(name)
+        if n and n in hosts:
+            return True
+        return n in LOCAL_NAMES and (is_local(ip) if local is None else local)
+
+    def host_reject(self, ip, name, where):
+        now = time.time()
+        with self.lock:
+            if now - self._host_log.get(ip, 0) < 600:
+                return
+            if len(self._host_log) > 5000:
+                self._host_log.clear()
+            self._host_log[ip] = now
+        log.warning("اتصال از %s با نام نامجاز رد شد (%s: %s)", ip, where, _log_safe(name or "—"))
+
+    def ip_allowed(self, ip, local=None):
+        if is_local(ip) if local is None else local:
             return True
         nets = self.cfg.get("allowed_networks") or []
         if not nets:
@@ -136,19 +179,19 @@ class _Ctx:
     # چند رمز غلط از هر جایی حساب ادمین را قفل می‌کرد.
     IP_FACTOR, USER_FACTOR = 3, 10
 
-    def _keys(self, ip, name):
+    def _keys(self, ip, name, local=None):
         n = (name or "").strip().lower()
         keys = [(f"ip:{ip}", self.IP_FACTOR)]
         if n:
             keys.append((f"pair:{ip}|{n}", 1))
-            if not is_local(ip):
+            if not (is_local(ip) if local is None else local):
                 keys.append((f"user:{n}", self.USER_FACTOR))
         return keys
 
-    def begin_attempt(self, ip, name):
+    def begin_attempt(self, ip, name, local=None):
         """خروجی: ثانیه‌های انتظار (قفل است) یا ۰ (تلاش ثبت شد)."""
         th, now, win = int(self.cfg.get("lockout_threshold") or 0), time.time(), self._win()
-        keys = self._keys(ip, name)
+        keys = self._keys(ip, name, local)
         locked_user = None
         with self.lock:
             wait = max(self._locked(k, now) for k, _ in keys)
@@ -518,6 +561,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def parse_request(self):
         ok = super().parse_request()
         DEADLINES.disarm(self)                  # هدرها کامل رسید؛ بدنه مهلت جدا دارد، پاسخ مهلت ندارد
+        if not ok:
+            return ok
+        ip = self._ip()
+        proxied = any(self.headers.get(h) is not None for h in PROXY_HEADERS)
+        self._loc = is_local(ip) and not proxied
+        if proxied and is_local(ip):
+            CTX.proxy_seen = (time.time(), _log_safe(self.headers.get("X-Forwarded-For") or self.headers.get("Forwarded") or ""))
+        # 1.59.6: نام نامجاز (IP یا اسم دیگر) ← بدون هیچ پاسخی بسته می‌شود
+        if not CTX.host_ok(self.headers.get("Host"), ip, self._loc):
+            CTX.host_reject(ip, self.headers.get("Host"), "Host")
+            self.close_connection = True
+            return False
         return ok
     protocol_version = "HTTP/1.1"
     server_version = "AutoKRP"
@@ -529,6 +584,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # -------------------------------------------------- helpers
     def _ip(self):
         return self.client_address[0]
+
+    def _local(self):
+        """خود سیستم سرور، و نه درخواستی که از پشت reverse proxy روی همین سیستم آمده."""
+        return getattr(self, "_loc", False)
 
     def _cookies(self):
         out = {}
@@ -604,7 +663,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # -------------------------------------------------- GET
     def do_GET(self):
-        if not CTX.ip_allowed(self._ip()):
+        if not CTX.ip_allowed(self._ip(), self._local()):
             return self._send(403, "دسترسی از این شبکه مجاز نیست.", "text/plain; charset=utf-8")
         path = urllib.parse.urlparse(self.path).path
         if path in ("/login", "/login/"):
@@ -713,7 +772,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ip = self._ip()
         path = urllib.parse.urlparse(self.path).path
         # همه‌ی بررسی‌های ارزان پیش از خواندن بدنه؛ بدنه‌ی بزرگ فقط از کاربر واردشده و با CSRF درست پذیرفته می‌شود
-        if not CTX.ip_allowed(ip):
+        if not CTX.ip_allowed(ip, self._local()):
             return self._reject(403, "دسترسی از این شبکه مجاز نیست.")
         if not self._same_origin():
             return self._reject(403, "درخواست از مبدأ نامعتبر")
@@ -752,7 +811,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self._body is None:
             return self._reject(413, "درخواست بیش از حد بزرگ است")
         if path == "/auth/status":
-            return self._json({"mode": "server", "initialized": serverauth.exists(), "local": is_local(ip)})
+            # 1.59.6: وضعیت راه‌اندازی فقط به خود سیستم سرور گفته می‌شود؛ بقیه همیشه فرم ورود را می‌بینند
+            loc = self._local()
+            return self._json({"mode": "server", "initialized": serverauth.exists() or not loc, "local": loc})
         if path in ("/auth/setup", "/auth/login", "/auth/recover"):
             pre = self._cookies().get(PRE_COOKIE, "")
             if not pre or not _eq(pre, self.headers.get(CSRF_HEADER, "")):
@@ -780,7 +841,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _setup(self):
         if serverauth.exists():
             return self._json({"ok": False, "error": "سرور از قبل راه‌اندازی شده است."})
-        if not is_local(self._ip()):
+        if not self._local():
             return self._json({"ok": False, "error": "راه‌اندازی اولیه فقط از خود سیستم سرور ممکن است."}, 403)
         b = self._json_body()
         b = b if isinstance(b, dict) else {}
@@ -807,7 +868,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         b = self._json_body()
         b = b if isinstance(b, dict) else {}
         name = str(b.get("username") or "").strip()[:64]
-        wait = CTX.begin_attempt(ip, "recovery:" + name.lower())
+        wait = CTX.begin_attempt(ip, "recovery:" + name.lower(), self._local())
         if wait:
             return self._json({"ok": False, "error": f"به‌خاطر تلاش‌های ناموفق، {wait} ثانیه صبر کنید."}, 429)
         t0 = time.time()
@@ -834,13 +895,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         b = self._json_body()
         b = b if isinstance(b, dict) else {}
         name = str(b.get("username") or "").strip()[:64]
-        wait = CTX.begin_attempt(ip, name)
+        wait = CTX.begin_attempt(ip, name, self._local())
         if wait:
             return self._json({"ok": False, "error": f"به‌خاطر تلاش‌های ناموفق، {wait} ثانیه صبر کنید."}, 429)
         t0 = time.time()
         try:
+            if not serverauth.exists():
+                serverauth._derive("x", b"0" * 16)
+                raise serverauth.AuthError("نام کاربری یا رمز اشتباه است.")
             if not serverauth.is_local(name):
-                master, rec = self._login_ad(name, str(b.get("password") or ""), ip)
+                master, rec = self._login_ad(name, str(b.get("password") or ""), ip, self._local())
             else:
                 master, rec = serverauth.login(name, str(b.get("password") or ""))
         except serverauth.AuthError as e:
@@ -862,11 +926,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self._json({"ok": True}, extra=self._cookie(sid))
 
     @staticmethod
-    def _login_ad(name, pw, ip):
+    def _login_ad(name, pw, ip, local=False):
         """ورود کاربر دامنه (1.24). فقط وقتی سرور باز است (کلید اصلی در حافظه: ورود یک کاربر محلی یا «باز شدن خودکار»)."""
         from . import adauth
         if CTX.api is None or CTX.master is None:
             serverauth._derive("x", b"0" * 16)        # زمان پاسخ نزدیک به نام ناموجود
+            if not local:                              # 1.59.6: قفل بودن سرور فقط به خود سیستم سرور گفته می‌شود
+                log.warning("ورود کاربر دامنه از %s رد شد: سرور هنوز باز نشده است", ip)
+                raise serverauth.AuthError("نام کاربری یا رمز اشتباه است.")
             raise serverauth.AuthError("نام کاربری یا رمز اشتباه است. (کاربر دامنه: سرور هنوز باز نشده است؛ یک ادمین محلی "
                                        "باید وارد شود یا «باز شدن خودکار» روشن باشد.)")
         cfg = adauth.cfg_of(CTX.settings)
@@ -916,8 +983,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         args = self._json_body()
         if not isinstance(args, list):
             args = []
-        from .api import WEB_IP, WEB_SID, WEB_USER
-        tokens = (WEB_USER.set(sess["user"]), WEB_IP.set(self._ip()), WEB_SID.set(sid))
+        from .api import WEB_HOST, WEB_IP, WEB_LOCAL, WEB_SID, WEB_USER
+        cvs = (WEB_USER, WEB_IP, WEB_SID, WEB_HOST, WEB_LOCAL)
+        tokens = [v.set(x) for v, x in zip(cvs, (sess["user"], self._ip(), sid, host_only(self.headers.get("Host")), self._local()))]
         try:
             out = fn(*args)
         except TypeError:
@@ -926,7 +994,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             log.exception("api %s", method)
             out = {"ok": False, "error": "خطای داخلی سرور"}
         finally:
-            for v, t in zip((WEB_USER, WEB_IP, WEB_SID), tokens):
+            for v, t in zip(cvs, tokens):
                 v.reset(t)
         return self._json(out)
 
@@ -988,6 +1056,24 @@ class _Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
         log.debug("خطای اتصال از %s", client_address, exc_info=True)
 
 
+def _sni_check(sock, server_name, _ctx):
+    """1.59.6: نام نامجاز در همان دست‌دادن TLS رد می‌شود (مرورگر فقط «اتصال برقرار نشد» می‌بیند، نه صفحه‌ای از برنامه).
+    باز کردن با IP نام (SNI) نمی‌فرستد؛ فقط از خود سیستم سرور پذیرفته می‌شود. بررسی Host در HTTP جدا انجام می‌شود."""
+    try:
+        if CTX is None or not CTX.cfg.get("allowed_hosts"):
+            return None
+        ip = sock.getpeername()[0]
+        if server_name is None:
+            if is_local(ip):
+                return None
+        elif CTX.host_ok(server_name, ip):
+            return None
+        CTX.host_reject(ip, server_name, "SNI")
+    except Exception:  # noqa — fail-closed
+        log.debug("sni check", exc_info=True)
+    return ssl.ALERT_DESCRIPTION_UNRECOGNIZED_NAME
+
+
 def _auto_unseal():
     """1.24: «باز شدن خودکار» روشن باشد ← کلید اصلی از DPAPI و راه‌اندازی بدون ورود (مانیتورینگ و کارها بعد از ری‌استارت)."""
     from . import autounseal
@@ -1020,6 +1106,10 @@ def run(demo=False, on_ready=None, stop_event=None):
     # SSLContext جایگزین‌شده‌ی truststore روی سوکت سرور گواهی کلاینت را بررسی می‌کند و خطا می‌دهد.
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     tls.minimum_version = ssl.TLSVersion.TLSv1_2
+    # 1.59.6: در TLS 1.2 فقط تبادل کلید ECDHE (forward secrecy) با رمز AEAD؛ TLS 1.3 مجموعه‌ی خودش را دارد
+    tls.set_ciphers("ECDHE+AESGCM:ECDHE+CHACHA20")
+    tls.options |= ssl.OP_CIPHER_SERVER_PREFERENCE | ssl.OP_NO_COMPRESSION | getattr(ssl, "OP_NO_RENEGOTIATION", 0)
+    tls.sni_callback = _sni_check
     certs.load_into(tls)
     CTX.tls = tls
     # handshake در رشته‌ی هر اتصال انجام می‌شود، نه در حلقه‌ی accept؛ وگرنه یک کلاینت کند کل سرور را معطل می‌کرد

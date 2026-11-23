@@ -72,8 +72,9 @@ def start_control(info, stop, on_show=None):
                     if not hmac.compare_digest(t.encode("ascii", "replace"), tok.encode("ascii")):
                         continue
                     if cmd == "INFO":
+                        from autokrp import winsvc
                         c.sendall(json.dumps({"headless": bool(info.get("headless")), "url": info.get("url"),
-                                              "port": info.get("port")}).encode("utf-8"))
+                                              "port": info.get("port"), "fw": winsvc.fw_live()}).encode("utf-8"))
                     elif cmd == "SHOW" and on_show:
                         c.sendall(b"OK")
                         on_show()
@@ -376,6 +377,17 @@ def _start_tray(api, title):
         return None
 
 
+def _srv_urls(port):
+    """آدرس‌های نمایش در پنجره‌ی سرور. 1.59.6: با «نام‌های مجاز» همان نام‌ها (IPها دیگر باز نمی‌شوند)."""
+    try:
+        from autokrp import serverauth
+        hosts = serverauth.config().get("allowed_hosts") or []
+    except Exception:  # noqa
+        hosts = []
+    sfx = "" if int(port) == 443 else f":{port}"
+    return [f"https://localhost{sfx}/"] + [f"https://{h}{sfx}/" for h in (hosts or _lan_ips())]
+
+
 def _lan_ips():
     ips = []
     try:
@@ -419,7 +431,14 @@ function draw(s){const e=document.getElementById("svc");if(!e||!s)return;
   (s.stale?'<p class="h err">'+T('اجرای خودکار هنوز نسخه‌ی قبلی را اجرا می‌کند: ','Auto-start still runs the previous copy: ')+'<span dir=ltr>'+s.task_exe.replace(/[<>&"]/g,'')+'</span></p><button onclick="call(\'svc_install\')">'+T('به‌روزرسانی به همین نسخه','Update to this copy')+'</button>':'')+
   (s.installed?'<button class="g" onclick="call(\'svc_remove\')">'+T('حذف اجرای خودکار','Remove auto-start')+'</button>'+(s.background?'':'<button onclick="call(\'svc_background\')">'+T('انتقال به پس‌زمینه و بستن پنجره','Move to background and close')+'</button>')
    :'<button onclick="call(\'svc_install\')">'+T('فعال کردن','Enable')+'</button>')+
-  '<p class="h">'+T('نیاز به دسترسی Administrator (پنجره‌ی UAC). سرور با همین کاربر ویندوز اجرا می‌شود و داده‌ها تا اولین ورود در وب قفل می‌مانند.','Requires Administrator access (UAC prompt). The server runs as this Windows user and data stays locked until the first web sign-in.')+'</p>';}
+  '<p class="h">'+T('نیاز به دسترسی Administrator (پنجره‌ی UAC). سرور با همین کاربر ویندوز اجرا می‌شود و داده‌ها تا اولین ورود در وب قفل می‌مانند.','Requires Administrator access (UAC prompt). The server runs as this Windows user and data stays locked until the first web sign-in.')+'</p>'+fwHtml(s.fw,T);}
+function fwHtml(f,T){if(!f)return "";
+ const st=f.synced?'<b class="ok">'+T('به‌روز','Up to date')+'</b>':f.has?'<b class="no">'+T('با تنظیمات فعلی هم‌خوان نیست','Out of date')+'</b>':'<b class="no">'+T('قانونی ساخته نشده','No rule yet')+'</b>';
+ const web=f.nets?T(f.nets+' شبکه‌ی مجاز (تنظیمات ← امنیت ← سرور وب)',f.nets+' allowed network(s) (Settings → Security → Web server)'):T('همه‌ی آدرس‌ها (شبکه‌ی مجازی تعریف نشده)','any address (no allowed networks set)');
+ const ev=(f.udp.length?'UDP '+f.udp.join(', '):'')+(f.tcp.length?(f.udp.length?' · ':'')+'TCP '+f.tcp.join(', '):'');
+ return '<div class="sv"><div class="st">'+T('فایروال ویندوز: ','Windows Firewall: ')+st+'</div><p class="h">'+T('وب (هر پورتی که سرور گوش بدهد): ','Web (whatever port the server listens on): ')+web+'<br>Trap/Syslog: '+(ev||T('خاموش','off'))+
+  (f.known?'':'<br>'+T('پورت‌های Trap/Syslog بعد از اولین ورود در وب معلوم می‌شوند.','Trap/Syslog ports are known after the first web sign-in.'))+'</p>'+
+  '<button onclick="call(\'svc_fw\')">'+T('به‌روزرسانی فایروال ویندوز','Update Windows Firewall')+'</button></div>';}
 window.addEventListener("pywebviewready",async()=>draw(await A().svc_status()));"""
 
 
@@ -439,9 +458,10 @@ def _status_html(title, urls, fp, note):
 class _SvcApi:
     """دکمه‌های اجرای خودکار در پنجره‌ی وضعیت سرور."""
 
-    def __init__(self, urls, demo, background=False, on_background=None, on_stopped=None):
+    def __init__(self, urls, demo, background=False, on_background=None, on_stopped=None, fw_live=None):
         self.urls, self.demo, self.background = urls, demo, background
         self.on_background, self.on_stopped = on_background, on_stopped
+        self.fw_live = fw_live           # 1.59.3: پورت‌های Trap/Syslog سرور در حال اجرا
 
     def open(self, i=0):
         import webbrowser
@@ -452,15 +472,31 @@ class _SvcApi:
         from autokrp import winsvc
         inst = winsvc.installed()
         task_exe = winsvc.task_program() if inst else None
+        from autokrp import serverauth
+        fw = winsvc.fw_status(serverauth.config().get("allowed_networks") or [], self._live()) if winsvc.supported() else None
         return {"supported": winsvc.supported() and not self.demo, "installed": inst,
                 "background": self.background, "stale": bool(task_exe and not winsvc.same_program(task_exe)),
-                "task_exe": task_exe or ""}
+                "task_exe": task_exe or "", "fw": fw}
+
+    def _live(self):
+        from autokrp import winsvc
+        try:
+            v = self.fw_live() if self.fw_live else None
+        except Exception:  # noqa — سرور پس‌زمینه پاسخ نداد
+            v = None
+        return v if isinstance(v, dict) else winsvc.fw_live()
+
+    def svc_fw(self):
+        """قانون‌های فایروال ویندوز با شبکه‌های مجاز و پورت‌های Trap/Syslog فعلی (با UAC)."""
+        live = self._live()
+        ok, msg = _svc_elevated("firewall", live)
+        return self._r(ok, msg)
 
     def _r(self, ok, msg):
         return {"ok": ok, "msg": msg, "svc": self.svc_status()}
 
     def svc_install(self):
-        ok, msg = _svc_elevated("install")
+        ok, msg = _svc_elevated("install", self._live())
         return self._r(ok, msg)
 
     def svc_remove(self):
@@ -485,18 +521,37 @@ class _SvcApi:
         return self._r(False, "")
 
 
-def _svc_elevated(action):
-    """نصب/حذف اجرای خودکار با UAC. خروجی: (موفق؟، پیام)."""
+def _fw_args(live):
+    live = live or {}
+    out = []
+    if live.get("udp"):
+        out += ["--fw-udp", ",".join(str(int(x)) for x in live["udp"])]
+    if live.get("tcp"):
+        out += ["--fw-tcp", ",".join(str(int(x)) for x in live["tcp"])]
+    return out
+
+
+def _csv_ports(v):
+    out = []
+    for x in str(v or "").split(","):
+        x = x.strip()
+        if x.isdigit() and 1 <= int(x) <= 65535:
+            out.append(int(x))
+    return out
+
+
+def _svc_elevated(action, live=None):
+    """نصب/حذف اجرای خودکار یا قانون‌های فایروال (action = install | remove | firewall) با UAC. خروجی: (موفق؟، پیام)."""
     from autokrp import winsvc
     res = paths.data_dir() / ".svc_result"
     try:
         res.unlink()
     except OSError:
         pass
-    args = ["--install-service" if action == "install" else "--remove-service", "--quiet",
-            "--svc-user", winsvc.current_user(), "--data-root", str(paths.root())]
+    flag = {"install": "--install-service", "remove": "--remove-service", "firewall": "--firewall-apply"}[action]
+    args = [flag, "--quiet", "--svc-user", winsvc.current_user(), "--data-root", str(paths.root())] + _fw_args(live)
     if winsvc.is_admin():
-        code = _svc_do(action, winsvc.current_user())
+        code = _svc_do(action, winsvc.current_user(), live=live)
         ok = code == 0
     else:
         ok = winsvc.elevate(args)
@@ -508,14 +563,37 @@ def _svc_elevated(action):
     return ok, msg
 
 
-def _svc_do(action, user, quiet=True):
-    """اجرای واقعی نصب/حذف (با دسترسی Administrator). نتیجه در .svc_result برای پنجره‌ی والد."""
+def _fw_msg(r):
+    if r.get("ok"):
+        parts = [paths.L("قانون‌های فایروال ویندوز به‌روز شد: وب از ", "Windows Firewall rules updated: web from ")
+                 + (", ".join(r["nets"]) if r.get("nets") else paths.L("همه‌ی آدرس‌ها", "any address"))]
+        if r.get("udp"):
+            parts.append("UDP " + ", ".join(map(str, r["udp"])))
+        if r.get("tcp"):
+            parts.append("Syslog TCP " + ", ".join(map(str, r["tcp"])))
+        return paths.L("؛ ", "; ").join(parts) + "."
+    return paths.L("قانون فایروال ساخته نشد: ", "The firewall rule was not created: ") + str(r.get("error") or "")
+
+
+def _svc_do(action, user, quiet=True, live=None):
+    """اجرای واقعی نصب/حذف/فایروال (با دسترسی Administrator). نتیجه در .svc_result برای پنجره‌ی والد."""
     from autokrp import serverauth, winsvc
+    live = live or {}
     try:
-        if action == "install":
+        cfg = serverauth.config()
+        if action == "firewall":
+            r = winsvc.fw_apply(cfg.get("allowed_networks") or [], live.get("udp"), live.get("tcp"), cfg.get("port") or 8443)
+            msg = _fw_msg(r)
+            if not r.get("ok"):
+                raise winsvc.SvcError(msg)
+        elif action == "fwremove":
+            winsvc.fw_remove()
+            msg = paths.L("قانون‌های فایروال ویندوز حذف شد.", "Windows Firewall rules removed.")
+        elif action == "install":
             if paths.saved_mode() != "server":
                 raise winsvc.SvcError(paths.L("اجرای خودکار فقط برای حالت سرور است.", "Auto-start is only for server mode."))
-            r = winsvc.install(user, paths.root(), serverauth.config().get("port") or 8443)
+            r = winsvc.install(user, paths.root(), cfg.get("port") or 8443, cfg.get("allowed_networks") or [],
+                               live.get("udp"), live.get("tcp"))
             msg = paths.L("اجرای خودکار فعال شد؛ سرور از روشن شدن بعدی ویندوز در پس‌زمینه اجرا می‌شود.",
                           "Auto-start enabled; from the next Windows start the server runs in the background.") + (
                 "" if r.get("firewall") else paths.L(" (قانون فایروال ساخته نشد؛ پورت را دستی باز کنید.)",
@@ -594,7 +672,7 @@ def _run_server(args):
             stop.set()
             message_box(info["error"] + paths.L("\nپورت در حال استفاده است یا دسترسی ندارد.", "\nThe port is in use or access is denied."))
             return 1
-        urls = [info["url"]] + [f"https://{ip}:{info['port']}/" for ip in _lan_ips()]
+        urls = _srv_urls(info["port"])
 
         def to_background():
             from autokrp import winsvc
@@ -607,11 +685,12 @@ def _run_server(args):
                 w.destroy()
             return {"ok": True, "msg": "", "svc": api.svc_status()}
 
-        api = _SvcApi(urls, args.demo, on_background=to_background)
+        from autokrp import winsvc as _ws
+        api = _SvcApi(urls, args.demo, on_background=to_background, fw_live=_ws.fw_live)
         status = _status_html(paths.L("سرور AutoKRP در حال اجراست", "AutoKRP server is running"), urls, _cert_fp(),
                               paths.L("اولین حساب ادمین فقط از همین سیستم (localhost) ساخته می‌شود.<br>با بستن این پنجره سرور متوقف می‌شود.",
                                       "The first admin account can only be created from this machine (localhost).<br>Closing this window stops the server."))
-        webview.create_window(paths.L("AutoKRP — سرور", "AutoKRP — Server"), html=status, js_api=api, width=620, height=560, background_color="#0b1622")
+        webview.create_window(paths.L("AutoKRP — سرور", "AutoKRP — Server"), html=status, js_api=api, width=620, height=700, background_color="#0b1622")
         webview.start(gui="edgechromium" if sys.platform == "win32" else None)
         return 0
     finally:
@@ -642,18 +721,25 @@ def _background_window(args):
         print(f"AutoKRP server is running in the background on {info.get('url')}.")
         return 0
     port = info.get("port") or 8443
-    urls = [f"https://localhost:{port}/"] + [f"https://{ip}:{port}/" for ip in _lan_ips()]
+    urls = _srv_urls(port)
 
     def stopped():
         for w in webview.windows:
             w.evaluate_js("document.getElementById('bgStop')&&document.getElementById('bgStop').remove()")
 
-    api = _SvcApi(urls, args.demo, background=True, on_stopped=stopped)
+    def bg_live():
+        raw2 = control("INFO", args.demo)
+        try:
+            return (json.loads(raw2.decode("utf-8")) or {}).get("fw") if raw2 else None
+        except ValueError:
+            return None
+
+    api = _SvcApi(urls, args.demo, background=True, on_stopped=stopped, fw_live=bg_live)
     note = (paths.L('سرور در پس‌زمینه (اجرای خودکار ویندوز) در حال اجراست؛ بستن این پنجره آن را متوقف نمی‌کند.',
                     'The server is running in the background (Windows auto-start); closing this window does not stop it.')
             + '<br><button class="g" id="bgStop" onclick="call(\'svc_stop_bg\')">' + paths.L('توقف سرور پس‌زمینه', 'Stop background server') + '</button>')
     status = _status_html(paths.L("سرور AutoKRP در پس‌زمینه", "AutoKRP server in the background"), urls, _cert_fp(), note)
-    webview.create_window(paths.L("AutoKRP — سرور (پس‌زمینه)", "AutoKRP — Server (background)"), html=status, js_api=api, width=620, height=560,
+    webview.create_window(paths.L("AutoKRP — سرور (پس‌زمینه)", "AutoKRP — Server (background)"), html=status, js_api=api, width=620, height=700,
                           background_color="#0b1622")
     webview.start(gui="edgechromium" if sys.platform == "win32" else None)
     return 0
@@ -682,6 +768,30 @@ def _svc_cli(args):
     return 0 if ok else 1
 
 
+def _fw_cli(args):
+    """--firewall-apply / --firewall-remove (نصب‌کننده، پنجره‌ی سرور با UAC، یا دستی)."""
+    from autokrp import winsvc
+    if not winsvc.supported():
+        print("Windows only.")
+        return 1
+    from autokrp import buildcfg
+    if args.firewall_apply and buildcfg.MODE == "client":
+        return 0                   # بیلد فقط کلاینت: سروری نیست که قانون بخواهد
+    action = "firewall" if args.firewall_apply else "fwremove"
+    live = {"udp": _csv_ports(args.fw_udp), "tcp": _csv_ports(args.fw_tcp)}
+    if winsvc.is_admin():
+        return _svc_do(action, args.svc_user or winsvc.current_user(), quiet=args.quiet, live=live)
+    if args.quiet:
+        return 1
+    if action == "fwremove":
+        ok = winsvc.elevate(["--firewall-remove", "--quiet", "--data-root", str(paths.root())])
+        message_box(paths.L("انجام شد.", "Done.") if ok else paths.L("انجام نشد.", "Failed."))
+        return 0 if ok else 1
+    ok, msg = _svc_elevated("firewall", live)
+    message_box(msg or (paths.L("انجام شد.", "Done.") if ok else paths.L("انجام نشد.", "Failed.")))
+    return 0 if ok else 1
+
+
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == "--fgtask":     # 1.29: اجرای plan تسک FortiGate در فرایند جدا
         from autokrp import fgtask_child
@@ -699,6 +809,10 @@ def main():
     ap.add_argument("--install-service", action="store_true", help="start the server automatically with Windows")
     ap.add_argument("--remove-service", action="store_true", help="remove server auto-start")
     ap.add_argument("--svc-user", help=argparse.SUPPRESS)
+    ap.add_argument("--firewall-apply", action="store_true", help="create the Windows Firewall rules for server mode (web, Trap/Syslog)")
+    ap.add_argument("--firewall-remove", action="store_true", help="remove this edition's Windows Firewall rules")
+    ap.add_argument("--fw-udp", help=argparse.SUPPRESS)
+    ap.add_argument("--fw-tcp", help=argparse.SUPPRESS)
     ap.add_argument("--quiet", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--quit-running", action="store_true", help="close a running AutoKRP (used by the installer before updating)")
     ap.add_argument("--local-db", action="store_true", help="ignore the MySQL settings and use the local database")
@@ -725,6 +839,8 @@ def main():
         return _quit_running()
     if args.install_service or args.remove_service:
         return _svc_cli(args)
+    if args.firewall_apply or args.firewall_remove:
+        return _fw_cli(args)
     if args.headless and paths.saved_mode() != "server":
         return 1               # پس از RESET یا نصب کلاینت: تسک قدیمی کاری نمی‌کند
 

@@ -36,7 +36,10 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputBaseFilename={#ExeName}-Setup-{#AppVer}
-SetupIconFile=..\assets\app.ico
+; 1.59.4: build.bat passes a clean icon made by dev\mkicon.py (default Inno icon when there is none)
+#ifdef SetupIcon
+SetupIconFile={#SetupIcon}
+#endif
 UninstallDisplayIcon={app}\{#ExeName}.exe
 UninstallDisplayName={#ExeName} {#AppVer}
 LicenseFile=..\LICENSE
@@ -51,6 +54,8 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+; 1.59.3: inbound Windows Firewall rule for server (web) mode; tied to the program file, so changing the port later still works
+Name: "firewall"; Description: "Allow the web server through Windows Firewall (server mode)"; GroupDescription: "Windows Firewall:"
 
 [Files]
 Source: "{#SrcDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -66,8 +71,14 @@ Name: "{autodesktop}\{#ExeName}"; Filename: "{app}\{#ExeName}.exe"; Tasks: deskt
 [Run]
 ; close a running copy (for example the portable exe in the tray) of the user who started the setup
 Filename: "{app}\{#ExeName}.exe"; Parameters: "--quit-running"; Flags: runhidden waituntilterminated runasoriginaluser; StatusMsg: "Closing a running AutoKRP..."
+; Windows Firewall rule (as Administrator); allowed networks and Trap/Syslog ports are applied later from the server window
+Filename: "{app}\{#ExeName}.exe"; Parameters: "--firewall-apply --quiet"; Flags: runhidden waituntilterminated; Tasks: firewall; StatusMsg: "Windows Firewall rule..."
 ; start as the user who started the setup (not as Administrator): the data folder belongs to that user
 Filename: "{app}\{#ExeName}.exe"; Description: "{cm:LaunchProgram,{#ExeName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
+
+[UninstallRun]
+; 1.59.3: remove this edition's Windows Firewall rules (data is never deleted)
+Filename: "{app}\{#ExeName}.exe"; Parameters: "--firewall-remove --quiet"; Flags: runhidden waituntilterminated; RunOnceId: "AutoKRPFirewall"
 
 [UninstallDelete]
 Type: dirifempty; Name: "{app}"

@@ -2,6 +2,57 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.59.6] — 2026-11-23
+
+### Added
+- **Allowed names (server mode).** Settings → Security → Web server has a new "Allowed names" list (e.g. `mon.test.com`). When it is set, the server only answers that name: opening it with an IP address or any other name is dropped during the TLS handshake (the browser just shows a connection error, no page from the app). `localhost` keeps working only on the server machine itself (first setup, password recovery). Saving a list that does not include the name you are using is refused so you cannot lock yourself out, and you are warned when the current certificate does not cover a name. The server window shows these names instead of IP addresses.
+- Security warnings in the web server settings: allowed networks empty or very large ranges (bigger than /16), no allowed names, and requests from a reverse proxy on the same machine.
+
+### Security
+- Session cookie renamed to `__Host-akrp_sid` (and `__Secure-akrp_pre` before sign-in), so another host or subdomain cannot set or replace it. Everyone signs in once more after the update.
+- TLS 1.2 now only allows ECDHE key exchange with AES-GCM/ChaCha20 (forward secrecy; no CBC or static RSA); TLS 1.3 unchanged. Compression and renegotiation are off.
+- Requests from the server machine that carry reverse-proxy headers (`X-Forwarded-For`, `Forwarded`, …) are no longer treated as local (no setup, full reset or lockout exemption through a proxy).
+- Before sign-in, remote users can no longer tell whether the server is set up or still locked (only the server machine itself is told).
+- Extra response headers: `Cross-Origin-Resource-Policy` and `Permissions-Policy`.
+
+ — 2026-11-22
+
+### Added
+- **Excel-style column filters on the Addresses page.** Every column except IP has a ▾ button that opens a list of its values with counts, which you can tick (with search, select all, sort, and from–to ranges for numbers and dates). For example, in the FortiGate column you can show only "Already Banned", "Blocked" or "Address". Column filters work together with the filters at the top (such as "Non-malicious"). Active filters appear as removable chips above the table, and "Select all of these" selects the result.
+
+### Fixed
+- "Clear filters" stayed hidden when a filter left no rows.
+
+## [1.59.4] — 2026-11-22
+
+### Added
+- **Open in a new tab (server mode, in the browser).** Right-click a menu item, the dashboard selector, a dashboard page tab, "NOC view" or a NOC dashboard to get "Open in new tab" and "Copy address"; middle-click and Ctrl/Shift+click also open a new tab. Every page has its own address (`#p/monitor`, `#p/dash/<id>/<page>`, `#noc/<id>`), so a new tab opens in the same place and stays signed in.
+
+### Fixed
+- Installer build failed at `SetupIconFile` (installer script line 39) when your own icon was put in `assets`: Inno Setup only accepts a clean .ico, while the portable build converts any image. `build.bat` now converts `assets\app.ico` (or `app.png`, or another .ico/.png in `assets`) to a standard multi-size `build\setup.ico` first; with no usable icon, the installer uses the default icon instead of failing.
+
+## [1.59.3] — 2026-11-22
+
+### Added
+- **Windows Firewall rules for server mode.** The installer has a "Allow the web server through Windows Firewall" option (on by default) and uninstalling removes the rules. The server window shows whether the rules match the current settings and has an "Update Windows Firewall" button (UAC):
+  - Web: TCP, tied to the program file, so changing the port does not break it; only from the server's allowed networks (any address when none are set).
+  - Trap/Syslog: UDP on the enabled ports, plus TCP for Syslog when TCP is on.
+- Settings → Security → Web server shows the Windows Firewall status and warns after saving when the rules no longer match.
+- Command line: `--firewall-apply` and `--firewall-remove`.
+
+### Fixed
+- The full and monitoring editions used the same firewall rule name and removed each other's rule. Each edition now has its own rule names; the old shared rule is removed only for the same program file.
+- Removing server auto-start no longer removes the firewall rule.
+
+## [1.59.2] — 2026-11-22
+
+### Changed
+- **Blocking non-malicious IPs is now done directly from the Addresses page.** Filter by "Review days ≥" (quick buttons 2, 4, 7 or a custom number), status and country; "Select all of these" selects the filtered IPs; "Block in FortiGate" asks for the duration (7, 30, 90 days, custom or permanent) once and blocks right away. The confirmation shows how many are malicious, already blocked or in excluded ranges; excluded ranges are never blocked. When block duration rules exist, "By duration rules" keeps the previous behaviour, with the final list confirmed on the Tools page.
+- **After a timed block ends**, "Review days" count from zero, and when the IP shows up in the reports again AbuseIPDB checks it again instead of using the cached result. A malicious result is blocked by the main rule as before. A still non-malicious IP that already had a timed block is shown as **"Non-malicious (repeat)"** (with its own filter button) so you can decide on a permanent block. IP details show how many timed blocks it had.
+
+### Removed
+- Block rules for non-malicious IPs (Settings → FortiGate and "Save as block rule") and the attack-days and attacks filters on the Addresses page. Existing rules are ignored and no longer block anything.
+
 ## [1.59.1] — 2026-11-18
 
 ### Changed

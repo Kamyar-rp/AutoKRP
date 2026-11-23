@@ -52,11 +52,13 @@ async function dashRender() {
   if (!r.ok) { el.innerHTML = `<div class="empty">${esc(r.error || "")}</div>`; return; }
   DB.list = r.dashboards; DB.canShared = r.can_shared; DB.personalOk = r.personal_ok;
   if (DB.edit) return;           // ویرایش در جریان است؛ فهرست تازه شد ولی کپی دست نمی‌خورد
-  const want = DB.cur ? DB.cur.id : Number(dbLs("cur")) || 0;
+  const want = DB.cur ? DB.cur.id : DB.want || Number(dbLs("cur")) || 0;
   DB.cur = DB.list.find((d) => d.id === want) || DB.list[0] || null;
+  if (DB.want) { DB.page = DB.cur && DB.cur.id === DB.want ? DB.wantPage || 0 : 0; DB.want = 0; }   // 1.59.4: آدرس ‎#p/dash/…‎
   if (DB.cur && DB.page >= DB.cur.data.pages.length) DB.page = 0;
   if (DB.cur && DB.rangeFor !== DB.cur.id) { DB.range = DB.cur.data.range; DB.rangeFor = DB.cur.id; }
   dbShell();
+  routeSync();
   await dbData(true);
   dbDraw();
   dbStart();
@@ -168,7 +170,10 @@ function dbShell() {
       <button class="btn primary" id="dbNew2">+ ساخت داشبورد</button></div>`;
     $("#dbNew2").onclick = dbNew;
   }
-  if ($("#dbSel")) { $("#dbSel").value = String(D ? D.id || "" : ""); $("#dbSel").onchange = (e) => dbOpen(Number(e.target.value)); }
+  if ($("#dbSel")) {
+    $("#dbSel").value = String(D ? D.id || "" : ""); $("#dbSel").onchange = (e) => dbOpen(Number(e.target.value));
+    if (!DB.edit) { $("#dbSel").dataset.href = "1"; $("#dbSel")._href = () => `#p/dash/${$("#dbSel").value}`; }    // 1.59.4: کلیک راست ← تب جدید
+  }
   if ($("#dbRange")) {
     $("#dbRange").value = DB.edit ? D.data.range : DB.range || D.data.range;
     $("#dbRange").onchange = (e) => {
@@ -186,7 +191,7 @@ function dbShell() {
 function dbTabs() {
   const el = $("#dbTabs"), D = dbD(); if (!el || !D) return;
   const P = D.data.pages;
-  el.innerHTML = P.map((p, i) => `<button class="db-tab${i === DB.page ? " on" : ""}" data-pg="${i}" data-no-i18n>${esc(p.name)}${DB.edit && P.length > 1 ? `<span class="db-tx" data-pdel="${i}" title="${esc(I18N.t("حذف صفحه"))}">×</span>` : ""}</button>`).join("")
+  el.innerHTML = P.map((p, i) => `<button class="db-tab${i === DB.page ? " on" : ""}" data-pg="${i}"${!DB.edit && DB.cur && DB.cur.id ? ` data-href="#p/dash/${DB.cur.id}/${i}"` : ""} data-no-i18n>${esc(p.name)}${DB.edit && P.length > 1 ? `<span class="db-tx" data-pdel="${i}" title="${esc(I18N.t("حذف صفحه"))}">×</span>` : ""}</button>`).join("")
     + (DB.edit ? `<button class="db-tab add" id="dbPgAdd" title="صفحه‌ی تازه">+</button>` : "");
   $$("[data-pg]", el).forEach((b) => {
     b.onclick = (e) => { if (e.target.closest("[data-pdel]")) return; dbPage(Number(b.dataset.pg)); };
@@ -213,11 +218,12 @@ function dbPage(i, auto) {
   DB.page = i; if (!auto) DB.rotAt = Date.now(); else DB.rotAt = Date.now();
   $$("#dbTabs [data-pg]").forEach((b) => b.classList.toggle("on", Number(b.dataset.pg) === i));
   dbDraw();
+  if (!auto) routeSync();
 }
 function dbOpen(id) {
   const d = DB.list.find((x) => x.id === id); if (!d) return;
   DB.cur = d; DB.page = 0; DB.rot = false; DB.range = d.data.range; DB.rangeFor = d.id; dbLs("cur", String(id));
-  dbShell(); dbDraw(); dbStart();
+  dbShell(); dbDraw(); dbStart(); routeSync();
 }
 function dbFull() {
   const w = $("#dbWrap");

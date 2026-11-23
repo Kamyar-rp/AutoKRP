@@ -30,7 +30,7 @@ AUTH_FILE = ".server_auth.json"
 DEFAULT_CONFIG = {"port": 8443, "bind": "0.0.0.0", "session_timeout_minutes": 30,  # nosec B104
                   "allowed_networks": ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
                   "lockout_threshold": 5, "lockout_minutes": 15, "max_connections": 200, "max_connections_per_ip": 40,
-                  "ad_session_hours": 12}
+                  "ad_session_hours": 12, "allowed_hosts": []}
 AAD = b"autokrp-server-user:"
 ROLES = ("admin", "operator", "readonly")
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{2,32}$")
@@ -86,13 +86,14 @@ def config():
     if exists():
         try:
             got = load().get("config") or {}
-            if not isinstance(got, dict) or not isinstance(got.get("allowed_networks", []), list):
+            if (not isinstance(got, dict) or not isinstance(got.get("allowed_networks", []), list)
+                    or not isinstance(got.get("allowed_hosts", []), list)):
                 raise AuthError("پیکربندی سرور نامعتبر است.")
             cfg.update(got)
         except AuthError as e:
             import logging
             logging.getLogger(__name__).error("پیکربندی سرور خوانده نشد (%s)؛ فقط دسترسی localhost", e)
-            cfg.update(bind="127.0.0.1", allowed_networks=["127.0.0.0/8"], config_error=str(e)[:200])
+            cfg.update(bind="127.0.0.1", allowed_networks=["127.0.0.0/8"], allowed_hosts=[], config_error=str(e)[:200])
     return cfg
 
 
