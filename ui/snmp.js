@@ -473,25 +473,31 @@ function snBlkInfo(L) {
   const ex = L.extra || {}, s = L.sys || {};
   return `<div class="hint ltr" style="white-space:normal">${esc(s.descr || "")}${s.location ? ` · ${esc(s.location)}` : ""}${ex.version ? ` · ${esc(ex.version)}` : ""}</div>`;
 }
+/** 1.59.10: دکمه‌ی + برای ویجت‌های SNMP همین دستگاه */
+function snPlus(D, type, cfg, w = 6, h = 4, title = "") { return dashPlus({ type, title, w, h, cfg: Object.assign({ tid: D.t.id }, cfg) }); }
+function snPlusM(D, keys, rng, oid) { return snPlus(D, "metric", Object.assign({ keys, range: rng }, oid ? { keys: [], okeys: [oid.oid], onames: [oid.name] } : {})); }
 function snSum(D, b, L) {
   const blocks = (D.t.tpl_eff && D.t.tpl_eff.blocks) || ["kpi", "alarms", "info"];
   const R = { kpi: snBlkKpi, health: snBlkHealth, modules: snBlkModules, top_ports: snBlkTop, err_ports: snBlkErr, alarms: snBlkAlarms, info: snBlkInfo };
+  const P = { top_ports: () => snPlus(D, "snmptab", { tab: "ports", pf: "top", n: 10 }, 6, 5), health: () => snPlus(D, "snmptab", { tab: "hw", n: 50 }, 6, 5) };
   b.innerHTML = blocks.filter((k) => R[k]).map((k) => k === "kpi" || k === "info" ? R[k](L)
-      : `<div class="sn-blk"><h3>${SN_BLOCKS[k]}</h3>${R[k](L)}</div>`).join("")
+      : `<div class="sn-blk">${P[k] ? `<div class="chart-head"><h3>${SN_BLOCKS[k]}</h3>${P[k]()}</div>` : `<h3>${SN_BLOCKS[k]}</h3>`}${R[k](L)}</div>`).join("")
     + (L.errors.length ? `<div class="hint" style="color:var(--warn);margin-top:8px">بخش‌هایی که خوانده نشدند: ${L.errors.map(esc).join(" · ")}</div>` : "")
     + `<div class="chart-grid" style="margin-top:12px" id="snSumCh"></div>`;
   // 1.35: نمودارهای خلاصه از قالب نمایش (پیش‌فرض: CPU و حافظه)
   const want = (D.t.tpl_eff && D.t.tpl_eff.sum_charts) || ["cpu_mem"];
   const ports = ((typeof MV !== "undefined" && MV.rows[D.t.id]) || {}).ports || [];
   const C = {
-    cpu_mem: ["CPU و حافظه (٪) — ۲۴ ساعت", [["cpu", "CPU", "info"], ["mem", "حافظه", "acc"]], { pct: true }],
+    cpu_mem: ["CPU و حافظه (٪) — ۲۴ ساعت", [["cpu", "CPU", "info"], ["mem", "حافظه", "acc"]], { pct: true }],   // [عنوان، سری‌ها، گزینه‌ها]
     traffic: ["ترافیک پورت‌های نمایشی — ۲۴ ساعت", ports.flatMap((p) => [[`if:${p.n}:in`, `${p.n} ↓`, "info"], [`if:${p.n}:out`, `${p.n} ↑`, "ok"]]), { bps: true }],
     temp: ["بیشترین دما (°C) — ۲۴ ساعت", [["temp", "دما", "warn"]], {}],
     rtt: ["زمان پاسخ SNMP (ms) — ۲۴ ساعت", [["rtt", "زمان پاسخ", "ok"]], {}],
     sessions: ["نشست‌های فعال — ۲۴ ساعت", [["ses", "نشست‌ها", "acc"]], {}],
   };
   const list = want.filter((k) => C[k] && C[k][1].length);
-  $("#snSumCh", b).innerHTML = list.map((k, i) => `<div class="chart-card wide"><div class="chart-head"><h3>${C[k][0]}</h3></div><div class="chart" id="snc${i + 1}"></div></div>`).join("");
+  const PL = { cpu_mem: () => snPlusM(D, ["cpu", "mem"], "24h"), temp: () => snPlusM(D, ["temp"], "24h"), rtt: () => snPlusM(D, ["rtt"], "24h"), sessions: () => snPlusM(D, ["ses"], "24h"),
+    traffic: () => snPlus(D, "traffic", { ports: ports.slice(0, 4).map((p) => p.n), range: "24h" }) };
+  $("#snSumCh", b).innerHTML = list.map((k, i) => `<div class="chart-card wide"><div class="chart-head"><h3>${C[k][0]}</h3>${PL[k]()}</div><div class="chart" id="snc${i + 1}"></div></div>`).join("");
   list.forEach((k, i) => snChart(D, $(`#snc${i + 1}`, b), "24h", C[k][1].slice(0, 8), { ...C[k][2], height: 170 }));
 }
 function snPorts(D, b, L) {
@@ -503,7 +509,7 @@ function snPorts(D, b, L) {
   const show = rows.slice(0, 500);
   b.innerHTML = `<div class="toolbar"><input type="search" id="snPf" class="search" placeholder="جستجوی پورت…" value="${esc(D.filter)}">
       <div class="seg" id="snPs">${[["all", "همه"], ["up", "وصل"], ["down", "قطع"], ["watch", "پیگیری‌شده"]].map(([k, n]) => `<button data-v="${k}" class="${D.pf === k ? "on" : ""}">${n}</button>`).join("")}</div>
-      <span class="muted">${num(rows.length)} پورت</span></div>
+      <span class="muted">${num(rows.length)} پورت</span>${snPlus(D, "snmptab", { tab: "ports", pf: D.pf, n: 50 }, 6, 5, I18N.t("پورت‌ها"))}</div>
     <div id="snPortChart"></div>
     <div class="table-wrap inner"><table class="grid"><thead><tr><th title="پیگیری: هشدار قطع، مصرف و خطا">پیگیری</th><th>پورت</th><th>توضیح</th><th>وضعیت</th><th>سرعت</th><th>ورودی</th><th>خروجی</th><th>مصرف</th><th>خطا/دقیقه</th></tr></thead><tbody>
     ${show.map((x) => `<tr><td><input type="checkbox" data-w="${esc(x.name)}" ${x.watch ? "checked" : ""} ${D.t.can_edit ? "" : "disabled"}></td>
@@ -528,7 +534,7 @@ function snPorts(D, b, L) {
 function snPortChart(D, el) {
   const p = D.port;
   el.innerHTML = `<div class="chart-card wide" style="margin-bottom:10px"><div class="chart-head"><h3 class="ltr">${esc(p)}</h3>
-      <div id="snPr"></div>
+      <div id="snPr"></div>${snPlus(D, "traffic", { ports: [p], range: dashPlusRange() })}
       <button class="btn sm ghost" id="snPx">بستن</button></div><div class="tr-note" id="snPn"></div><div class="chart" id="snPcc"></div><div class="chart" id="snPce"></div></div>`;
   const draw = () => {
     snChart(D, $("#snPcc", el), MON.tr, [[`if:${p}:in`, "ورودی", "info"], [`if:${p}:out`, "خروجی", "acc"]], { bps: true, height: 190, withMax: true, sync: "snp", zoomTo: set, note: $("#snPn", el) });
@@ -543,26 +549,26 @@ function snPortChart(D, el) {
 function snHw(D, b, L) {
   const tbl = (title, head, rows) => rows.length ? `<h3 style="margin:10px 0 6px">${title}</h3><div class="table-wrap inner"><table class="grid"><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>` : "";
   const html = [
-    tbl("دما", ["سنسور", "مقدار", "آستانه‌ی دستگاه", "وضعیت"], L.temps.map((x) => `<tr><td class="bidi">${esc(x.name)}</td><td class="ltr">${x.value === null ? "—" : num(x.value) + "°C"}</td><td class="ltr">${x.thr ? num(x.thr) + "°C" : "—"}</td><td>${snLv(x.state)}</td></tr>`)),
-    tbl("فن", ["فن", "وضعیت"], L.fans.map((x) => `<tr><td class="bidi">${esc(x.name)}</td><td>${snLv(x.state)}</td></tr>`)),
-    tbl("منبع تغذیه", ["منبع", "وضعیت"], L.psus.map((x) => `<tr><td class="bidi">${esc(x.name)}</td><td>${snLv(x.state)}</td></tr>`)),
-    tbl("سنسورهای دستگاه", ["سنسور", "مقدار", "وضعیت"], L.sensors.map((x) => `<tr><td class="bidi">${esc(x.name)}</td><td class="ltr">${esc(x.value ?? "")}</td><td>${snLv(x.state)}</td></tr>`)),
-    tbl("CPU", ["پردازنده", "۵ ثانیه", "۱ دقیقه", "۵ دقیقه"], (L.cpu && L.cpu.items || []).map((x) => `<tr><td class="bidi">${esc(x.name)}</td><td>${snPct(x.s5)}</td><td>${snPct(x.m1)}</td><td>${snPct(x.m5)}</td></tr>`)),
-    tbl("حافظه", ["بخش", "مصرف", "کل", "٪"], (L.mem && L.mem.items || []).map((x) => `<tr><td class="bidi">${esc(x.name)}</td><td class="ltr">${esc(fmtBytes(x.used))}</td><td class="ltr">${esc(fmtBytes(x.total))}</td><td>${snPct(x.pct)}</td></tr>`)),
+    tbl("دما", ["سنسور", "مقدار", "آستانه‌ی دستگاه", "وضعیت"], L.temps.map((x) => `<tr><td class="bidi">${latTxt(x.name)}</td><td class="ltr">${x.value === null ? "—" : num(x.value) + "°C"}</td><td class="ltr">${x.thr ? num(x.thr) + "°C" : "—"}</td><td>${snLv(x.state)}</td></tr>`)),
+    tbl("فن", ["فن", "وضعیت"], L.fans.map((x) => `<tr><td class="bidi">${latTxt(x.name)}</td><td>${snLv(x.state)}</td></tr>`)),
+    tbl("منبع تغذیه", ["منبع", "وضعیت"], L.psus.map((x) => `<tr><td class="bidi">${latTxt(x.name)}</td><td>${snLv(x.state)}</td></tr>`)),
+    tbl("سنسورهای دستگاه", ["سنسور", "مقدار", "وضعیت"], L.sensors.map((x) => `<tr><td class="bidi">${latTxt(x.name)}</td><td class="ltr">${esc(x.value ?? "")}</td><td>${snLv(x.state)}</td></tr>`)),
+    tbl("CPU", ["پردازنده", "۵ ثانیه", "۱ دقیقه", "۵ دقیقه"], (L.cpu && L.cpu.items || []).map((x) => `<tr><td class="bidi">${latTxt(x.name)}</td><td>${snPct(x.s5)}</td><td>${snPct(x.m1)}</td><td>${snPct(x.m5)}</td></tr>`)),
+    tbl("حافظه", ["بخش", "مصرف", "کل", "٪"], (L.mem && L.mem.items || []).map((x) => `<tr><td class="bidi">${latTxt(x.name)}</td><td class="ltr">${esc(fmtBytes(x.used))}</td><td class="ltr">${esc(fmtBytes(x.total))}</td><td>${snPct(x.pct)}</td></tr>`)),
     tbl("دیسک", ["دیسک", "مصرف", "کل", "٪"], L.disks.map((x) => `<tr><td class="ltr">${esc(x.name)}</td><td class="ltr">${esc(fmtBytes(x.used))}</td><td class="ltr">${esc(fmtBytes(x.total))}</td><td>${snPct(x.pct)}</td></tr>`)),
   ].join("");
-  b.innerHTML = (html || `<div class="empty">دستگاه اطلاعات سخت‌افزاری برنگرداند (یا این بخش‌ها در تنظیمات هدف خاموش‌اند).</div>`)
+  b.innerHTML = (html ? `<div class="toolbar"><b>${esc(I18N.t("سخت‌افزار"))}</b>${snPlus(D, "snmptab", { tab: "hw", n: 50 }, 6, 5)}</div>` + html : `<div class="empty">دستگاه اطلاعات سخت‌افزاری برنگرداند (یا این بخش‌ها در تنظیمات هدف خاموش‌اند).</div>`)
     + `<p class="hint">منبع داده: ${esc([L.cpu && L.cpu.src, L.mem && L.mem.src].filter(Boolean).join("، ") || "—")}</p>`;
 }
 function snOids(D, b, L) {
   if (!L.oids.length) { b.innerHTML = `<div class="empty">OID دستی یا وضعیتی از MIB سازنده برای این هدف نیست. در «ویرایش» ← «OIDهای دستی» اضافه کنید، یا MIB سازنده را در «تنظیمات ← مانیتورینگ» بارگذاری کنید.</div>`; return; }
   const al = {}; L.alarms.forEach((a) => (al[a.key] = a.level));
-  b.innerHTML = `<div class="table-wrap inner"><table class="grid"><thead><tr><th>نام</th><th>OID</th><th>مقدار</th><th>وضعیت</th><th></th></tr></thead><tbody>
+  b.innerHTML = `<div class="toolbar"><span class="muted">${num(L.oids.length)} OID</span>${snPlus(D, "snmptab", { tab: "oids", n: 50 }, 6, 5)}</div><div class="table-wrap inner"><table class="grid"><thead><tr><th>نام</th><th>OID</th><th>مقدار</th><th>وضعیت</th><th></th></tr></thead><tbody>
     ${L.oids.map((o) => `<tr><td>${esc(o.name)}${o.prof ? ` <span class="tag info" title="${esc(I18N.t("از MIB سازنده"))}">${esc(o.prof)}</span>` : ""}</td><td class="ltr">${esc(o.oid)}</td><td class="ltr">${o.missing ? `<span class="tag mute">${esc(I18N.t("روی دستگاه نیست"))}</span>` : o.value === null ? "—" : esc(String(o.value)) + (o.unit ? " " + esc(o.unit) : "") + (o.type === "counter" ? "/s" : "")}</td>
       <td>${snLv(al["oid:" + o.oid] || "ok")}</td><td>${o.chart ? `<button class="btn sm" data-oc="${esc(o.oid)}">نمودار</button>` : ""}</td></tr>`).join("")}</tbody></table></div><div id="snOc" style="margin-top:10px"></div>`;
   $$("[data-oc]", b).forEach((x) => (x.onclick = () => {
     const o = L.oids.find((y) => y.oid === x.dataset.oc);
-    $("#snOc", b).innerHTML = `<div class="chart-card wide"><div class="chart-head"><h3>${esc(o.name)}${o.unit ? " (" + esc(o.unit) + ")" : ""}</h3><div id="snOr"></div></div><div class="tr-note" id="snOn"></div><div class="chart" id="snOcc"></div></div>`;
+    $("#snOc", b).innerHTML = `<div class="chart-card wide"><div class="chart-head"><h3>${esc(o.name)}${o.unit ? " (" + esc(o.unit) + ")" : ""}</h3><div id="snOr"></div>${snPlusM(D, [], dashPlusRange(), o)}</div><div class="tr-note" id="snOn"></div><div class="chart" id="snOcc"></div></div>`;
     const draw = () => snChart(D, $("#snOcc", b), MON.tr, [["oid:" + o.oid, o.name, "info"]], { withMax: true, zoomTo: set, note: $("#snOn", b) });
     const set = (R) => { monTrSet(R); trBar($("#snOr", b), bar); draw(); };
     const bar = { get: () => MON.tr, set, refresh: draw };
@@ -574,19 +580,20 @@ async function snCharts(D, b, silent) {
   const L = D.live;
   const oids = (L.oids || []).filter((o) => o.chart && o.type !== "text");
   if (!silent || !$("#sncCpu", b)) {
+    const rg = dashPlusRange();
     b.innerHTML = `<div class="toolbar"><div id="snCr"></div>
       <button class="btn no-ro" id="snCsv">خروجی CSV</button></div><div class="tr-note" id="snCn"></div>
     <div class="chart-card wide sn-heatcard"><div class="chart-head"><h3>ترافیک همه‌ی پورت‌ها</h3><span class="muted" id="snHeatN"></span>
-        <label class="chk" style="margin-inline-start:auto"><input type="checkbox" id="snHeatAll">همه‌ی پورت‌ها</label></div>
+        <label class="chk" style="margin-inline-start:auto"><input type="checkbox" id="snHeatAll">همه‌ی پورت‌ها</label>${snPlus(D, "snmptab", { tab: "ports", pf: "top", n: 10 }, 6, 5, I18N.t("پرترافیک‌ترین پورت‌ها"))}</div>
       <div id="snHeat" class="sn-heat"></div><div class="sn-heatleg"><span>${esc(I18N.t("کم"))}</span><i></i><span>${esc(I18N.t("زیاد"))}</span>
         <span class="muted">${esc(I18N.t("رنگ = درصد ظرفیت پورت (اگر سرعت معلوم است)، وگرنه نسبت به پرترافیک‌ترین پورت. روی خانه‌ها بروید تا مقدار را ببینید."))}</span></div></div>
     <div class="chart-grid">
-      <div class="chart-card wide"><div class="chart-head"><h3>CPU (٪)</h3></div><div class="chart" id="sncCpu"></div></div>
-      <div class="chart-card wide"><div class="chart-head"><h3>حافظه (٪)</h3></div><div class="chart" id="sncMem"></div></div>
-      <div class="chart-card wide"><div class="chart-head"><h3>بیشترین دما (°C)</h3></div><div class="chart" id="sncTemp"></div></div>
-      ${L.disk_max !== null && L.disk_max !== undefined ? `<div class="chart-card wide"><div class="chart-head"><h3>بیشترین مصرف دیسک (٪)</h3></div><div class="chart" id="sncDisk"></div></div>` : ""}
-      <div class="chart-card wide"><div class="chart-head"><h3>زمان پاسخ SNMP (ms)</h3></div><div class="chart" id="sncRtt"></div></div>
-      ${oids.map((o, i) => `<div class="chart-card wide"><div class="chart-head"><h3>${esc(o.name)}${o.unit ? " (" + esc(o.unit) + ")" : ""}</h3></div><div class="chart" id="sncO${i}"></div></div>`).join("")}
+      <div class="chart-card wide"><div class="chart-head"><h3>CPU (٪)</h3>${snPlusM(D, ["cpu"], rg)}</div><div class="chart" id="sncCpu"></div></div>
+      <div class="chart-card wide"><div class="chart-head"><h3>حافظه (٪)</h3>${snPlusM(D, ["mem"], rg)}</div><div class="chart" id="sncMem"></div></div>
+      <div class="chart-card wide"><div class="chart-head"><h3>بیشترین دما (°C)</h3>${snPlusM(D, ["temp"], rg)}</div><div class="chart" id="sncTemp"></div></div>
+      ${L.disk_max !== null && L.disk_max !== undefined ? `<div class="chart-card wide"><div class="chart-head"><h3>بیشترین مصرف دیسک (٪)</h3>${snPlusM(D, ["disk"], rg)}</div><div class="chart" id="sncDisk"></div></div>` : ""}
+      <div class="chart-card wide"><div class="chart-head"><h3>زمان پاسخ SNMP (ms)</h3>${snPlusM(D, ["rtt"], rg)}</div><div class="chart" id="sncRtt"></div></div>
+      ${oids.map((o, i) => `<div class="chart-card wide"><div class="chart-head"><h3>${esc(o.name)}${o.unit ? " (" + esc(o.unit) + ")" : ""}</h3>${snPlusM(D, [], rg, o)}</div><div class="chart" id="sncO${i}"></div></div>`).join("")}
     </div><p class="hint">خط پررنگ = میانگین، خط کم‌رنگ = بیشینه‌ی هر بازه. داده‌ی ۵ دقیقه‌ای برای روزهای اخیر (طبق تنظیمات نگهداری)، بازه‌های بلندتر یا قدیمی‌تر از داده‌ی ساعتی. برای زوم روی نمودار بکشید؛ دوبار کلیک = بازه‌ی بزرگ‌تر.</p>`;
   }
   const set = (R) => { monTrSet(R); snCharts(D, b); };
@@ -669,8 +676,8 @@ async function snLive(D, b) {
       <span class="muted" id="slLeft"></span><button class="btn sm danger-ghost" id="slStop">توقف</button><button class="btn sm primary" id="slGo" hidden>▶ شروع دوباره</button></div>
     <p class="hint">برای عیب‌یابی: CPU و ترافیک همه‌ی پورت‌ها با فاصله‌ی کوتاه خوانده می‌شود. هیچ‌چیز ذخیره نمی‌شود و بررسی عادی، هشدارها و نمودارهای دستگاه تغییری نمی‌کنند. با بستن این پنجره یا پس از ۱۵ دقیقه خودکار متوقف می‌شود. خواندن پرتکرار کمی بار روی CPU دستگاه می‌گذارد.</p>
     <div id="slErr" class="hint" style="color:var(--warn)"></div>
-    <div class="chart-grid"><div class="chart-card wide"><div class="chart-head"><h3>CPU و حافظه (٪) — زنده</h3></div><div class="chart" id="slCpu"></div></div>
-      <div class="chart-card wide"><div class="chart-head"><h3 id="slTopH">پرترافیک‌ترین پورت‌ها — زنده</h3></div><div class="chart" id="slTop"></div></div></div>
+    <div class="chart-grid"><div class="chart-card wide"><div class="chart-head"><h3>CPU و حافظه (٪) — زنده</h3>${snPlusM(D, ["cpu", "mem"], "1h")}</div><div class="chart" id="slCpu"></div></div>
+      <div class="chart-card wide"><div class="chart-head"><h3 id="slTopH">پرترافیک‌ترین پورت‌ها — زنده</h3>${snPlus(D, "snmptab", { tab: "ports", pf: "top", n: 10 }, 6, 5, I18N.t("پرترافیک‌ترین پورت‌ها"))}</div><div class="chart" id="slTop"></div></div></div>
     <h3 style="margin:12px 0 6px">همه‌ی پورت‌ها (الان)</h3><p class="hint" style="margin-top:0">روی هر پورت کلیک کنید تا نمودار زنده‌ی همان پورت (حداکثر ۵) نمایش داده شود؛ کلیک دوباره = برداشتن.</p><div id="slPorts"></div>`;
   D.livePin = D.livePin || [];
   const stopped = (msg) => { D.liveOn = false; clearTimeout(D.liveT); $("#slLeft", b).textContent = I18N.t(msg); $("#slStop", b).hidden = true; $("#slGo", b).hidden = false; };

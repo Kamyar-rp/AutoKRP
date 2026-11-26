@@ -108,7 +108,7 @@ def build(A):
     pkg["mon_targets"] = []
     for t in S.mon_targets():
         x = {"ref": t["id"], **{k: t.get(k) for k in ("name", "host", "kind", "port", "url", "interval", "threshold", "timeout", "slow_ms", "icon", "grp",
-                                                       "owner", "enabled", "notify", "notes", "cert_days")},
+                                                       "owner", "enabled", "notify", "notes", "cert_days", "tls_verify")},
              "snmp": _j(t.get("snmp"), {}), "cred": t.get("cred_id") or None, "parent": t.get("parent_id") or None,
              "policy": t.get("policy_id") or None, "tpl": t.get("tpl") or ""}
         pkg["mon_targets"].append(x)
@@ -290,7 +290,7 @@ def apply(A, pkg, cats=None, with_settings=False):
 
     def f_tgt(it):
         t = {k: it.get(k) for k in ("name", "host", "kind", "port", "url", "interval", "threshold", "timeout", "slow_ms", "icon", "grp",
-                                    "enabled", "notify", "notes", "cert_days")}
+                                    "enabled", "notify", "notes", "cert_days", "tls_verify")}
         t["snmp"] = it.get("snmp") if isinstance(it.get("snmp"), dict) else {}
         t["cred_id"] = M["cred_profiles"].get(it.get("cred"))
         if t["kind"] == "snmp" and not t["cred_id"]:

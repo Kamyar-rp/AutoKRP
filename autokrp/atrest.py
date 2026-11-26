@@ -13,6 +13,7 @@ import logging
 import os
 import struct
 import threading
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -451,6 +452,32 @@ class EncryptedLogHandler(RotatingFileHandler):
 
     def format(self, record):
         return _enc_line(super().format(record))
+
+    # 1.59.12 (F6): در حالت سرور ویندوز پنجره‌ی وضعیت و پردازش پس‌زمینه هر دو app.log را باز دارند؛ چرخش (rename) با
+    # PermissionError شکست می‌خورد و RotatingFileHandler از آن به بعد هر رکورد را دور می‌ریخت. حالا در همان فایل ادامه
+    # می‌دهد و چرخش را هر ۱۰ دقیقه دوباره امتحان می‌کند.
+    _ROLL_RETRY = 600
+    _roll_fail_at = 0.0
+
+    def shouldRollover(self, record):
+        if self._roll_fail_at and time.time() - self._roll_fail_at < self._ROLL_RETRY:
+            return False
+        try:
+            return super().shouldRollover(record)
+        except OSError:
+            return False
+
+    def doRollover(self):
+        try:
+            super().doRollover()
+            self._roll_fail_at = 0.0
+        except OSError:
+            self._roll_fail_at = time.time()
+            if self.stream is None or getattr(self.stream, "closed", False):
+                try:
+                    self.stream = self._open()
+                except OSError:
+                    self.stream = None
 
     def emit(self, record):
         if not has_key():

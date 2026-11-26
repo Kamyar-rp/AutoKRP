@@ -26,7 +26,7 @@ FEATURE_API = {
                 "mon_noc_list", "mon_noc_save", "mon_noc_delete",
                 "mon_map_list", "mon_map_get", "mon_map_bg", "mon_map_status", "mon_map_save", "mon_map_delete", "mon_map_ports", "mon_map_lldp",
                 "mon_map_disc_info", "mon_map_disc_start", "mon_map_disc_job", "mon_map_disc_cancel",
-                "dash_list", "dash_save", "dash_delete",
+                "dash_list", "dash_save", "dash_delete", "dash_admin_list", "dash_admin_delete",
                 # 1.27.1: MIB سازنده‌ها ← نوع دستگاه خودکار
                 "mib_list", "mib_upload", "mib_delete", "mib_compile", "mib_types"},
     "term": {"term_open", "term_break", "serial_ports", "term_snips_save", "term_read", "term_write", "term_resize", "term_close", "term_list", "term_stats", "term_log", "conn_cancel",
@@ -298,7 +298,7 @@ SUB_API = {
     "monitor.topo": {"mon_topo", "mon_topo_scan", "mon_topo_apply"},
     "monitor.noc": {"mon_noc", "mon_noc_list", "mon_noc_save", "mon_noc_delete"},
     "monitor.live": {"mon_live_start", "mon_live_get", "mon_live_stop"},
-    "monitor.dash": {"dash_list", "dash_save", "dash_delete"},
+    "monitor.dash": {"dash_list", "dash_save", "dash_delete", "dash_admin_list", "dash_admin_delete"},
     "ssh.backup": {"backup_overview", "backup_versions", "backup_view", "backup_delete", "backup_diff", "backup_export", "backup_export_latest", "backup_now"},
     "ssh.fbackup": {"fbk_list", "fbk_save", "fbk_delete", "fbk_run", "fbk_cancel", "fbk_test", "fbk_pick_dir"},
     "term.xfer": {"xfer_open", "xfer_conns", "xfer_ls", "xfer_mkdir", "xfer_delete", "xfer_rename", "xfer_read_text", "xfer_write_text", "xfer_text_versions", "xfer_text_version", "xfer_close", "xfer_put_begin", "xfer_put", "xfer_get",
@@ -499,6 +499,16 @@ def check_tools(user, settings, tools, lv=None):
     return None
 
 
+def _legacy_mon(u):
+    """1.59.11: اپراتور قدیمی (پیش از مدل گروه‌ها) بدون ابزار مانیتورینگ که با دسترسی قدیمی هنوز مانیتورینگ را می‌بیند
+    (اپراتور تازه‌ی بدون ابزار از 1.59.10 نمی‌بیند). رفتار عمداً عوض نشده؛ فقط در فهرست کاربران برچسب بازبینی می‌گیرد."""
+    try:
+        return (u.get("role") == "operator" and int(u.get("access_v") or 0) < ACCESS_V and "monitor" not in (u.get("tools") or [])
+                and legacy_levels(u).get("monitor", "none") != "none")
+    except Exception:  # noqa — فقط برچسب نمایشی
+        return False
+
+
 def public_user(u):
     if not u:
         return {"username": "", "role": "admin", "single": True}
@@ -507,7 +517,8 @@ def public_user(u):
             "shared_devices": u.get("shared_devices", True) is not False,
             "groups": [str(g) for g in u.get("groups") or []], "access": clean_levels(u.get("access")),
             "devices": clean_devices(u.get("devices")), "superuser": bool(u.get("superuser")),
-            "access_v": int(u.get("access_v") or 0),
+            "access_v": int(u.get("access_v") or 0), "wall": bool(u.get("wall")) and u["role"] == "readonly",
+            "legacy_mon": _legacy_mon(u),
             "last_login": u.get("last_login"), "created": u.get("created"), "source": u.get("source") or "local"}
 
 

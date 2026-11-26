@@ -34,7 +34,7 @@ A full description in Persian is in [docs/security-design.fa.md](docs/security-d
 - HTTPS only (TLS ≥ 1.2; TLS 1.2 limited to ECDHE with AES-GCM/ChaCha20) with a self-signed or organisation certificate.
 - Optional allowed names: when set, connections using an IP address or any other host name are dropped during the TLS handshake (SNI) and by `Host` header; `localhost` works only on the server machine itself. Requests carrying reverse-proxy headers are never treated as local.
 - `__Host-` prefixed `HttpOnly; Secure; SameSite=Strict` session cookie, CSRF tokens, Origin and Content-Type checks, strict CSP without inline scripts, HSTS, `X-Frame-Options: DENY`.
-- Lockout after failed sign-ins (per IP+user, per IP and per account), idle session timeout, an allowed-networks list (private ranges by default), connection and body-size limits.
+- Lockout after failed sign-ins (per IP+user and per IP); many failures on one account from several addresses only slow that account down (up to 30 s per attempt) so nobody can lock another user out. Idle session timeout (30 minutes by default; only real user input counts, background page refreshes do not; optional read-only "wall display" accounts are exempt), an allowed-networks list (private ranges by default), connection and body-size limits.
 - Roles: admin / operator / read-only; operators only get the tools the admin grants. Non-admins never see server addresses, credentials, recipients, queries or scripts.
 
 ### Outbound connections

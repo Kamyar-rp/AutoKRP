@@ -20,6 +20,8 @@ log = logging.getLogger(__name__)
 TASK = "AutoKRP Server"
 FW_LEGACY = "AutoKRP Server"       # نام قانون پیش از 1.59.3 (برای همه‌ی نسخه‌ها یکی بود)
 FW_STATE = ".fw_applied"
+FW_PARTIAL = "partial"      # 1.59.9: فقط قانون وب را نصب‌کننده ساخته؛ امضای کامل نیست (هرگز با fw_state برابر نمی‌شود)
+FW_PORTS = ".fw_ports"       # 1.59.7: پورت‌های Trap/Syslog آخرین قانون (فقط عدد) برای به‌روزرسانی با نصب‌کننده
 NO_WINDOW = 0x08000000
 
 
@@ -203,10 +205,12 @@ def fw_applied():
         return None
 
 
-def _fw_delete_all():
+def _fw_delete_all(keep_events=False):
     exe, base, _ = program()
     ns = _sys32("netsh.exe")
-    for n in fw_names().values():
+    for k, n in fw_names().items():
+        if keep_events and k != "web":
+            continue
         _run([ns, "advfirewall", "firewall", "delete", "rule", f"name={n}"], timeout=30)
     if not base:     # قانون قدیمی هم‌نام فقط اگر مال همین فایل برنامه باشد
         _run([ns, "advfirewall", "firewall", "delete", "rule", f"name={FW_LEGACY}", f"program={exe}"], timeout=30)
@@ -214,7 +218,7 @@ def _fw_delete_all():
         _run([ns, "advfirewall", "firewall", "delete", "rule", f"name={FW_LEGACY}"], timeout=30)
 
 
-def fw_apply(nets=(), udp=(), tcp=(), port=8443):
+def fw_apply(nets=(), udp=(), tcp=(), port=8443, keep_events=False):
     """قانون‌های ورودی (به دسترسی Administrator نیاز دارد):
       وب: TCP، به خود فایل برنامه (هر پورتی که سرور گوش بدهد)، فقط از شبکه‌های مجاز (خالی = همه)؛
       Trap/Syslog: UDP (و TCP برای Syslog) روی همان پورت‌ها، از هر آدرسی (فیلتر منبع در خود برنامه است).
@@ -226,7 +230,7 @@ def fw_apply(nets=(), udp=(), tcp=(), port=8443):
     exe, base, _ = program()
     ns, N = _sys32("netsh.exe"), fw_names()
     nl, up, tp = fw_clean_nets(nets), _ports(udp), _ports(tcp)
-    _fw_delete_all()
+    _fw_delete_all(keep_events)
     add = [ns, "advfirewall", "firewall", "add", "rule", "dir=in", "action=allow", "enable=yes", "profile=any"]
     web = add + [f"name={N['web']}", "protocol=TCP"] + ([f"program={exe}"] if not base else [f"localport={int(port)}"])
     if nl:
@@ -236,7 +240,7 @@ def fw_apply(nets=(), udp=(), tcp=(), port=8443):
     if r.returncode != 0:
         errs.append(_out(r) or f"code {r.returncode}")
     for key, proto, pp in (("udp", "UDP", up), ("tcp", "TCP", tp)):
-        if pp:
+        if pp and not keep_events:
             r = _run(add + [f"name={N[key]}", f"protocol={proto}", "localport=" + ",".join(map(str, pp))]
                      + ([f"program={exe}"] if not base else []), timeout=30)
             if r.returncode != 0:
@@ -244,13 +248,37 @@ def fw_apply(nets=(), udp=(), tcp=(), port=8443):
     if errs:
         log.warning("قانون فایروال ساخته نشد: %s", "; ".join(errs))
         return {"ok": False, "error": "; ".join(errs)[:400]}
+    if keep_events:          # قانون Trap/Syslog قبلی دست نخورد؛ پورت‌ها معلوم نیست پس هم‌خوان نمی‌شود اعلام کرد
+        from . import paths
+        try:   # 1.59.9: نشانه‌ی «قانون هست ولی هم‌خوانی معلوم نیست» (قبلاً فایل نبود و پنجره «قانونی ساخته نشده» می‌گفت)
+            (paths.data_dir() / FW_STATE).write_text(FW_PARTIAL, encoding="ascii")   # nosec — ثابت، بدون داده
+        except OSError:
+            pass
+        log.info("قانون وب فایروال ویندوز به‌روز شد (قانون‌های Trap/Syslog قبلی ماند)")
+        return {"ok": True, "nets": nl, "udp": up, "tcp": tp, "kept": True}
     from . import paths
     try:
         (paths.data_dir() / FW_STATE).write_text(fw_state(nl, up, tp), encoding="ascii")   # nosec — فقط hash، بدون داده
     except OSError:
         pass
+    try:
+        import json
+        (paths.data_dir() / FW_PORTS).write_text(json.dumps({"udp": up, "tcp": tp}), encoding="ascii")  # nosec — فقط شماره‌ی پورت
+    except OSError:
+        pass
     log.info("قانون‌های فایروال ویندوز ساخته شد (شبکه‌ها %d، UDP %s، TCP %s)", len(nl), up, tp)
     return {"ok": True, "nets": nl, "udp": up, "tcp": tp}
+
+
+def fw_saved_ports():
+    """پورت‌های Trap/Syslog آخرین قانون ساخته‌شده (برای نصب‌کننده که پورت‌ها را نمی‌داند)."""
+    import json
+    from . import paths
+    try:
+        d = json.loads((paths.data_dir() / FW_PORTS).read_text(encoding="ascii"))
+        return {"udp": _ports(d.get("udp")), "tcp": _ports(d.get("tcp"))}
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def fw_live():
@@ -265,13 +293,31 @@ def fw_live():
     return {"udp": _ports(L.get("udp")), "tcp": _ports(L.get("tcp")), "known": bool(L.get("known"))}
 
 
+def fw_resolve(live):
+    """1.59.10 (F1): پیش از اولین ورود وب پورت‌های Trap/Syslog معلوم نیست (known=False). آن وقت پورت‌های آخرین قانون
+    (.fw_ports) به کار می‌رود، و اگر آن هم نیست قانون‌های Trap/Syslog موجود دست نمی‌خورد (keep). هرگز «پورت خالی» نه."""
+    live = dict(live or {})
+    if live.get("keep") or live.get("known", True):
+        return live
+    saved = fw_saved_ports()
+    if saved is not None:
+        return {"udp": saved["udp"], "tcp": saved["tcp"], "known": False, "saved": True}
+    return {"udp": [], "tcp": [], "known": False, "keep": True}
+
+
 def fw_status(nets, live=None):
-    """آیا قانون‌های فایروال ویندوز با شبکه‌های مجاز و پورت‌های Trap/Syslog فعلی هم‌خوان‌اند؟"""
+    """آیا قانون‌های فایروال ویندوز با شبکه‌های مجاز و پورت‌های Trap/Syslog فعلی هم‌خوان‌اند؟
+    1.59.10 (F2): پورت‌ها نامعلوم (پیش از اولین ورود) ← synced = None (نه «به‌روز» نه «هم‌خوان نیست»)."""
     live = live or fw_live()
+    known = bool(live.get("known", True))
     applied = fw_applied()
+    if not known:
+        saved = fw_saved_ports() or {"udp": [], "tcp": []}
+        return {"windows": supported(), "has": applied is not None, "nets": len(fw_clean_nets(nets)),
+                "synced": None if applied is not None else False, "udp": saved["udp"], "tcp": saved["tcp"], "known": False}
     return {"windows": supported(), "has": applied is not None, "nets": len(fw_clean_nets(nets)),
             "synced": applied is not None and applied == fw_state(nets, live.get("udp"), live.get("tcp")),
-            "udp": _ports(live.get("udp")), "tcp": _ports(live.get("tcp")), "known": bool(live.get("known", True))}
+            "udp": _ports(live.get("udp")), "tcp": _ports(live.get("tcp")), "known": True}
 
 
 def fw_remove():
@@ -283,10 +329,14 @@ def fw_remove():
         (paths.data_dir() / FW_STATE).unlink()
     except OSError:
         pass
+    try:
+        (paths.data_dir() / FW_PORTS).unlink()
+    except OSError:
+        pass
     return True
 
 
-def install(user, data_root, port, nets=(), udp=(), tcp=()):
+def install(user, data_root, port, nets=(), udp=(), tcp=(), keep_events=False):
     if not supported():
         raise SvcError("فقط روی ویندوز.")
     if not is_admin():
@@ -306,7 +356,7 @@ def install(user, data_root, port, nets=(), udp=(), tcp=()):
             os.remove(tmp)
         except OSError:
             pass
-    fw = fw_apply(nets, udp, tcp, port).get("ok")
+    fw = fw_apply(nets, udp, tcp, port, keep_events=keep_events).get("ok")
     log.info("اجرای خودکار سرور نصب شد (کاربر %s)", user)
     return {"firewall": fw}
 

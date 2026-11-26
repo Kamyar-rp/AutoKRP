@@ -214,7 +214,12 @@ def check_location(root):
     if d.exists():
         if not d.is_dir():
             raise ValueError(f"در این مسیر فایلی به نام {APP_ID} هست؛ پوشه‌ی دیگری انتخاب کنید.")
-        if any(x.name not in (LOCATION_FILE, ".write_test") for x in d.iterdir()) and not has_app_data(d):
+        # 1.59.7: فایل‌های صفحه‌ی اولین اجرا (زبان، پذیرش متن) هم داده‌ی ناشناخته نیستند؛ قبلاً با عوض کردن زبان یا
+        # پذیرفتن متن، پوشه‌ی پیش‌فرض ویندوز رد می‌شد
+        # 1.59.8: .svc_result و .resume_task را نصب‌کننده (فایروال، --resume-server) پیش از اولین اجرا می‌سازد؛ قبلاً با نصب
+        # همراه تسک فایروال، پوشه‌ی پیش‌فرض در اولین اجرا رد می‌شد
+        boot = (LOCATION_FILE, ".write_test", LANG_FILE, terms_file().name, ".svc_result", ".resume_task")
+        if any(x.name not in boot for x in d.iterdir()) and not has_app_data(d):
             # RESET کل این زیرپوشه را پاک می‌کند؛ پس پوشه‌ی پر با داده‌ی ناشناخته هرگز پذیرفته نمی‌شود
             raise ValueError(f"پوشه‌ی {d} از قبل هست و داده‌ی AutoKRP نیست؛ پوشه‌ی دیگری انتخاب کنید.")
         mf = d / MODE_FILE

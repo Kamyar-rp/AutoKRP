@@ -250,12 +250,11 @@ async function monDetail(id) {
         ${monRelLine(t)}
         ${t.err ? `<div class="muted" style="color:var(--err)">${esc(t.err)}</div>` : ""}</div></div>
       <div class="toolbar" style="margin-top:12px"><div id="mdTr"></div><span class="muted" id="mdSum"></span></div><div class="tr-note" id="mdNote"></div>
-      <div class="md-kpi" id="mdKpi"></div><div class="md-add" id="mdAdd" hidden></div>
-      <div class="chart-grid"><div class="chart-card wide"><div class="chart-head"><h3>در دسترس بودن (٪)</h3></div><div class="chart" id="mdAv"></div></div>
-      <div class="chart-card wide"><div class="chart-head"><h3>زمان پاسخ (ms)</h3></div><div class="chart" id="mdRtt"></div></div></div>
-      <h3 style="margin:12px 0 6px">قطعی‌های این بازه</h3><div id="mdEv"><div class="empty">در حال خواندن…</div></div>`,
+      <div class="md-kpiw"><div class="md-kpi" id="mdKpi"></div>${dashPlus({ type: "svc", title: "", w: 6, h: 3, cfg: { kinds: [], tids: [t.id], n: 1, range: dashPlusRange() } })}</div>
+      <div class="chart-grid"><div class="chart-card wide"><div class="chart-head"><h3>در دسترس بودن (٪)</h3>${dashPlus({ type: "availline", title: "", w: 6, h: 4, cfg: { kinds: [], tids: [t.id], range: dashPlusRange() } })}</div><div class="chart" id="mdAv"></div></div>
+      <div class="chart-card wide"><div class="chart-head"><h3>زمان پاسخ (ms)</h3>${dashPlus({ type: "rtt", title: "", w: 6, h: 4, cfg: { kinds: [], tids: [t.id], range: dashPlusRange() } })}</div><div class="chart" id="mdRtt"></div></div></div>
+      <div class="chart-head" style="margin:12px 0 6px"><h3>قطعی‌های این بازه</h3>${dashPlus({ type: "outages", title: "", w: 6, h: 4, cfg: { kinds: [], tids: [t.id], n: 20, range: dashPlusRange() || "24h" } })}</div><div id="mdEv"><div class="empty">در حال خواندن…</div></div>`,
     foot: `${t.can_edit ? `<button class="btn danger-ghost" data-a="del">حذف</button><button class="btn" data-a="toggle">${t.enabled ? "توقف بررسی" : "ادامه‌ی بررسی"}</button><button class="btn" data-a="edit">ویرایش</button>` : ""}
-      ${typeof dashRender === "function" && hasB("monitor") ? `<button class="btn ghost" data-a="dash">افزودن به داشبورد…</button>` : ""}
       <button class="btn" data-a="now">بررسی همین حالا</button><button class="btn ghost" data-a="close">بستن</button>`,
     onOpen: async (m, close) => {
       $$("[data-a]", m).forEach((b) => (b.onclick = async () => {
@@ -263,7 +262,6 @@ async function monDetail(id) {
         if (a === "close") return close();
         if (a === "edit") { close(); return monEdit(t); }
         if (a === "now") { await api("mon_check_now", id); toast("بررسی انجام می‌شود…", "info"); return; }
-        if (a === "dash") return monAddToDash(t, $("#mdAdd", m));
         if (a === "toggle") { const r = await api("mon_toggle", id, !t.enabled); if (!r.ok) return toast(r.error, "error"); close(); return loadMon(); }
         if (a === "del") {
           if (!(await confirm2({ title: "حذف هدف", body: `<p>«${esc(t.name)}» و سابقه‌ی قطعی‌هایش حذف شود؟</p>`, confirm: "حذف", danger: true }))) return;
@@ -293,26 +291,77 @@ async function monDetail(id) {
       draw();
     } });
 }
-/** 1.59: نمودار زمان پاسخ همین هدف در یک داشبورد قابل ویرایش (انتهای صفحه‌ی اول) */
-async function monAddToDash(t, box) {
+/* 1.59.10: دکمه‌ی کوچک + روی هر نمودار/جدول جزئیات دستگاه ← همان را به‌صورت ویجت به یک داشبورد اضافه می‌کند.
+   spec = { type, title, cfg, w, h } — همان ساختار ویجت داشبورد (dashboards.clean). آخرین انتخاب (داشبورد/صفحه) در مرورگر می‌ماند. */
+function dashPlus(spec) {
+  if (typeof dashRender !== "function" || !hasB("monitor")) return "";
+  const ax = (S.state && S.state.access) || {};       // 1.59.11: viewer هم (داشبورد شخصی)؛ بدون دسترسی «داشبوردها» نه
+  if ((ax["monitor.dash"] || ax.monitor) === "none") return "";
+  return `<button type="button" class="dplus" title="${esc(I18N.t("افزودن به داشبورد"))}" aria-label="${esc(I18N.t("افزودن به داشبورد"))}" data-dplus="${esc(JSON.stringify(spec))}">+</button>`;
+}
+function dashPlusRange() { return MON.tr && ["1h", "6h", "24h", "7d", "30d"].includes(MON.tr.p) ? MON.tr.p : ""; }
+const DPLUS_LS = "akrp_dash_last";
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest ? e.target.closest("[data-dplus]") : null;
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  let spec = null; try { spec = JSON.parse(b.dataset.dplus); } catch (_) { return; }
+  dashPlusPick(b, spec);
+}, true);
+function dashPlusClose() { const p = $("#dplusPop"); if (p) { p.remove(); document.removeEventListener("keydown", dashPlusKey, true); } }
+function dashPlusKey(e) { if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); dashPlusClose(); } }
+async function dashPlusPick(btn, spec) {
+  dashPlusClose();
   const r = await api("dash_list"); if (!r.ok) return toast(r.error, "error");
-  const L = r.dashboards.filter((d) => d.can_edit);
-  box.hidden = false;
-  if (!L.length) { box.innerHTML = `<span class="hint">${esc(I18N.t("داشبوردی که بتوانید ویرایش کنید نیست؛ اول در صفحه‌ی «داشبوردها» یکی بسازید."))}</span>`; return; }
-  box.innerHTML = `<span>${esc(I18N.t("داشبورد"))}</span><select id="mdDash">${L.map((d) => `<option value="${d.id}" data-no-i18n>${esc(d.name)}</option>`).join("")}</select>
-    <select id="mdDashP"></select><button class="btn sm primary" id="mdDashGo">${esc(I18N.t("افزودن نمودار زمان پاسخ"))}</button>`;
-  const pages = () => { const d = L.find((x) => x.id === Number($("#mdDash", box).value)); $("#mdDashP", box).innerHTML = d.data.pages.map((p, i) => `<option value="${i}" data-no-i18n>${esc(p.name)}</option>`).join(""); };
-  $("#mdDash", box).onchange = pages; pages();
-  $("#mdDashGo", box).onclick = async () => {
-    const d = L.find((x) => x.id === Number($("#mdDash", box).value)), pg = d.data.pages[Number($("#mdDashP", box).value) || 0];
-    if (pg.widgets.length >= 60) return toast("حداکثر ۶۰ ویجت در هر صفحه.", "warn");
-    const y = pg.widgets.reduce((a, w) => Math.max(a, w.y + w.h), 0);
-    const rng = MON.tr && ["1h", "6h", "24h", "7d", "30d"].includes(MON.tr.p) ? MON.tr.p : "";
-    pg.widgets.push({ id: "w" + Math.random().toString(36).slice(2, 9), type: "rtt", x: 0, y, w: 6, h: 4, title: "", cfg: { kinds: [], tids: [t.id], range: rng } });
-    const s = await api("dash_save", { id: d.id, name: d.name, data: d.data });
-    if (!s.ok) return toast(s.error, "error");
-    box.hidden = true; toast(`${I18N.t("به داشبورد اضافه شد")}: ${d.name}`, "ok");
-    if (typeof DB !== "undefined" && DB.cur && DB.cur.id === d.id && !DB.edit) { DB.cur = null; if (S.page === "dash") dashRender(); }
+  const L = r.dashboards.filter((d) => d.can_edit), canNew = r.personal_ok || r.can_shared;
+  if (!L.length && !canNew) return toast("داشبوردی که بتوانید ویرایش کنید نیست.", "warn");
+  let last = {}; try { last = JSON.parse(localStorage.getItem(DPLUS_LS) || "{}") || {}; } catch (_) { last = {}; }
+  const pop = document.createElement("div");
+  pop.id = "dplusPop"; pop.className = "dplus-pop"; pop.setAttribute("role", "dialog");
+  pop.innerHTML = `<b>${esc(I18N.t("افزودن به داشبورد"))}</b><div class="muted dplus-t" data-no-i18n>${esc(spec.title || (typeof DB_TYPES !== "undefined" && DB_TYPES[spec.type] ? I18N.t(DB_TYPES[spec.type][0]) : ""))}</div>
+    <label>${esc(I18N.t("داشبورد"))}<select id="dpD">${L.map((d) => `<option value="${d.id}" data-no-i18n>${esc(d.name)}${d.personal ? " · " + esc(I18N.t("شخصی")) : ""}</option>`).join("")}
+      ${canNew ? `<option value="new">${esc(I18N.t(r.personal_ok ? "داشبورد شخصی تازه…" : "داشبورد تازه…"))}</option>` : ""}</select></label>
+    <label id="dpPw">${esc(I18N.t("صفحه"))}<select id="dpP"></select></label>
+    <label id="dpNw" hidden>${esc(I18N.t("نام داشبورد تازه"))}<input class="input" id="dpN" maxlength="60" value="${esc(I18N.t("داشبورد من"))}"></label>
+    <div class="row dplus-f"><button class="btn sm ghost" id="dpX">${esc(I18N.t("انصراف"))}</button><button class="btn sm primary" id="dpGo">${esc(I18N.t("افزودن"))}</button></div>`;
+  document.body.appendChild(pop);
+  const D = $("#dpD", pop), P = $("#dpP", pop);
+  if (L.some((d) => d.id === Number(last.d))) D.value = String(last.d); else if (!L.length) D.value = "new";
+  const pages = () => {
+    const nw = D.value === "new", d = L.find((x) => x.id === Number(D.value));
+    $("#dpPw", pop).hidden = nw; $("#dpNw", pop).hidden = !nw;
+    P.innerHTML = d ? d.data.pages.map((p, i) => `<option value="${i}" data-no-i18n>${esc(p.name)}</option>`).join("") : "";
+    if (d && Number(last.d) === d.id && d.data.pages[Number(last.p)]) P.value = String(last.p);
+  };
+  D.onchange = pages; pages();
+  const rc = btn.getBoundingClientRect(), pw = pop.offsetWidth, ph = pop.offsetHeight;
+  pop.style.left = Math.max(8, Math.min(window.innerWidth - pw - 8, rc.left + rc.width - pw)) + "px";
+  pop.style.top = (rc.bottom + 6 + ph > window.innerHeight - 8 ? Math.max(8, rc.top - ph - 6) : rc.bottom + 6) + "px";
+  document.addEventListener("keydown", dashPlusKey, true);
+  $("#dpX", pop).onclick = dashPlusClose;
+  D.focus();
+  $("#dpGo", pop).onclick = async () => {
+    const go = $("#dpGo", pop); go.disabled = true;
+    const w = { id: "w" + Math.random().toString(36).slice(2, 9), type: spec.type, x: 0, y: 0, w: spec.w || 6, h: spec.h || 4, title: spec.title || "", cfg: spec.cfg || {} };
+    let s, name, did;
+    if (D.value === "new") {
+      name = ($("#dpN", pop).value || "").trim() || I18N.t("داشبورد من");
+      s = await api("dash_save", { name, personal: !!r.personal_ok, data: { range: "1h", rotate: 0, refresh: 30, pages: [{ id: "p1", name: I18N.t("صفحه ۱"), widgets: [w] }] } });
+      did = s.ok ? s.id : 0; last = { d: did, p: 0 };
+    } else {
+      const d = L.find((x) => x.id === Number(D.value)), pi = Number(P.value) || 0, pg = d.data.pages[pi];
+      if (pg.widgets.length >= 60) { go.disabled = false; return toast("حداکثر ۶۰ ویجت در هر صفحه.", "warn"); }
+      w.y = pg.widgets.reduce((a, x) => Math.max(a, x.y + x.h), 0);
+      pg.widgets.push(w);
+      name = d.name; did = d.id;
+      s = await api("dash_save", { id: d.id, name: d.name, data: d.data });
+      last = { d: d.id, p: pi };
+    }
+    if (!s.ok) { go.disabled = false; return toast(s.error, "error"); }
+    try { localStorage.setItem(DPLUS_LS, JSON.stringify(last)); } catch (_) { /* فقط راحتی؛ بدون حافظه‌ی مرورگر هم کار می‌کند */ }
+    dashPlusClose();
+    toast(`${I18N.t("به داشبورد اضافه شد")}: ${name}`, "ok");
+    if (typeof DB !== "undefined" && DB.cur && DB.cur.id === did && !DB.edit) { DB.cur = null; if (S.page === "dash") dashRender(); }
   };
 }
 function monLabel(ts, step) { return trTick(ts, step, 0); }
@@ -340,11 +389,12 @@ async function monEdit(t0) {
       <label class="field" id="meHostW"><span>IP یا نام میزبان</span><input id="meHost" class="ltr" value="${esc(t.kind === "http" ? "" : t.host || "")}" placeholder="192.168.1.1"></label>
       <label class="field" id="mePortW"><span>پورت</span><input id="mePort" class="ltr" value="${esc(t.port || "")}" placeholder="22, 443, 3389…"></label>
       <div class="field wide" id="meSnmpW">${snEditHtml(t)}</div>
-      <label class="field wide" id="meUrlW"><span>آدرس</span><input id="meUrl" class="ltr" value="${esc(t.url || "")}" placeholder="https://portal.example.local"><small class="hint">کد ۵۰۰ به بالا یا بدون پاسخ = قطع. گواهی بررسی نمی‌شود و ریدایرکت دنبال نمی‌شود.</small></label>
+      <label class="field wide" id="meUrlW"><span>آدرس</span><input id="meUrl" class="ltr" value="${esc(t.url || "")}" placeholder="https://portal.example.local"><small class="hint">کد ۵۰۰ به بالا یا بدون پاسخ = قطع. ریدایرکت دنبال نمی‌شود.</small></label>
+      <div class="field wide" id="meTlsW"><label class="chk"><input type="checkbox" id="meTls" ${t.tls_verify ? "checked" : ""}>بررسی گواهی TLS (فقط https؛ گواهی نامعتبر، منقضی یا با نام دیگر = قطع با علت)</label></div>
       <label class="field" id="meCertW"><span>هشدار انقضای گواهی HTTPS (روز قبل)</span><input id="meCert" type="number" min="0" max="365" value="${esc(t.cert_days || 0)}"><small class="hint">۰ = خاموش. گواهی هر ساعت خوانده می‌شود؛ هشدار روزی یک بار تا تمدید (قطع حساب نمی‌شود).</small></label>
       <label class="field"><span>هر چند ثانیه بررسی شود</span><input id="meInt" type="number" min="10" value="${esc(t.interval)}"></label>
       <label class="field"><span>قطع پس از چند شکست پشت‌سرهم</span><input id="meThr" type="number" min="1" max="20" value="${esc(t.threshold)}"></label>
-      <label class="field"><span>Timeout (ثانیه)</span><input id="meTo" type="number" step="0.5" min="0.5" value="${esc(t.timeout)}"></label>
+      <label class="field"><span>Timeout (ثانیه)</span><input id="meTo" type="number" step="0.5" min="0.5" value="${esc(t.timeout)}"><small class="hint" id="meToH">پورت TCP: روی بعضی ویندوزها رد شدن اتصال حدود ۲ ثانیه طول می‌کشد؛ با Timeout ۲ ثانیه یا کمتر پورت بسته «timeout» دیده می‌شود.</small></label>
       <label class="field"><span>«کند» اگر پاسخ بیشتر از (ms)</span><input id="meSlow" type="number" min="0" value="${esc(t.slow_ms || 0)}"><small class="hint">۰ = خاموش</small></label>
       <label class="field"><span>گروه</span><input id="meGrp" list="meGrps" value="${esc(t.grp || "")}" placeholder="مثلاً دیتاسنتر"><datalist id="meGrps">${groups.map((g) => `<option value="${esc(g)}">`).join("")}</datalist></label>
       <label class="field"><span>وابسته به (پدر)</span><select id="meParent"><option value="">— بدون وابستگی —</option>${monParentOpts(t)}</select>
@@ -356,7 +406,7 @@ async function monEdit(t0) {
     onOpen: (m, close) => {
       const kind = () => $("#meKind button.on", m).dataset.v;
       const vis = () => {
-        const k = kind(); $("#meHostW", m).hidden = k === "http"; $("#mePortW", m).hidden = k !== "tcp" && k !== "snmp"; $("#meUrlW", m).hidden = k !== "http"; $("#meCertW", m).hidden = k !== "http";
+        const k = kind(); $("#meHostW", m).hidden = k === "http"; $("#mePortW", m).hidden = k !== "tcp" && k !== "snmp"; $("#meUrlW", m).hidden = k !== "http"; $("#meCertW", m).hidden = k !== "http"; $("#meTlsW", m).hidden = k !== "http"; $("#meToH", m).hidden = k !== "tcp";
         $("#meSnmpW", m).hidden = k !== "snmp"; $("#mePort", m).placeholder = k === "snmp" ? "161" : "22, 443, 3389…";
       };
       $$("#meKind button", m).forEach((b) => (b.onclick = () => {
@@ -390,7 +440,7 @@ async function monEdit(t0) {
       $("[data-r='1']", m).onclick = async () => {
         const k = kind();
         const body = { id: t.id, name: $("#meName", m).value.trim(), kind: k, host: $("#meHost", m).value.trim(), port: $("#mePort", m).value.trim(),
-          url: $("#meUrl", m).value.trim(), cert_days: $("#meCert", m).value || 0, interval: $("#meInt", m).value, threshold: $("#meThr", m).value, timeout: $("#meTo", m).value,
+          url: $("#meUrl", m).value.trim(), cert_days: $("#meCert", m).value || 0, tls_verify: $("#meTls", m).checked ? 1 : 0, interval: $("#meInt", m).value, threshold: $("#meThr", m).value, timeout: $("#meTo", m).value,
           slow_ms: $("#meSlow", m).value, grp: $("#meGrp", m).value.trim(), icon, notify: $("#meNotify", m).checked, enabled: t.enabled !== 0, notes: t.notes || "",
           parent_id: $("#meParent", m).value || null, policy_id: $("#mePol", m).value || null };
         if (k === "snmp") { body.snmp = snEditCollect(m); body.cred_id = $("#snCred", m).value; }

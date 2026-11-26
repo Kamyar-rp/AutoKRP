@@ -381,18 +381,28 @@ def _m28(c):
         c.execute("ALTER TABLE ips ADD COLUMN tban_count TEXT")
 
 
+def _m29(c):
+    """1.59.10 (G1): history.owner = صاحب شیء شخصی (هدف/داشبورد/پنجره‌ی نگهداری/پروفایل/نشست)؛ خالی = عمومی."""
+    have = {r[1] for r in c.execute("PRAGMA table_info(history)")}
+    if "owner" not in have:
+        c.execute("ALTER TABLE history ADD COLUMN owner TEXT DEFAULT ''")
+    have = {r[1] for r in c.execute("PRAGMA table_info(mon_targets)")}
+    if "tls_verify" not in have:        # 1.59.10: بررسی گواهی TLS هدف HTTP
+        c.execute("ALTER TABLE mon_targets ADD COLUMN tls_verify INTEGER DEFAULT 0")
+
+
 MIGRATIONS = [_m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11, _m12, _m13, _m14, _m15, _m16, _m17, _m18, _m19, _m20, _m21, _m22, _m23, _m24, _m25,
-              _m26, _m27, _m28]
+              _m26, _m27, _m28, _m29]
 # ستون‌هایی که مهاجرت‌ها اضافه می‌کنند؛ هر بار باز شدن بررسی می‌شود و اگر نباشد اضافه می‌شود
 # (پایگاه داده‌ای که شماره‌ی نسخه‌اش جلوتر از ستون‌هایش است، مثلاً بازگردانی فایل قدیمی، دیگر خطا نمی‌دهد)
 REQUIRED_COLUMNS = {
     "ssh_devices": {"backup": "INTEGER", "backup_status": "TEXT", "backup_at": "REAL", "backup_message": "TEXT",
                     "legacy": "INTEGER DEFAULT 0", "owner": "TEXT DEFAULT ''", "cred_id": "INTEGER",
                     "protocol": "TEXT DEFAULT 'ssh'"},
-    "history": {"user": "TEXT"},
+    "history": {"user": "TEXT", "owner": "TEXT DEFAULT ''"},
     "runs": {"log": "TEXT"},
     "ips": {c: "TEXT" for c in INTEL_FIELDS + FW_FIELDS + RULE_FIELDS},
-    "mon_targets": {"snmp": "TEXT", "cred_id": "INTEGER", "parent_id": "INTEGER", "cert_days": "INTEGER DEFAULT 0",
+    "mon_targets": {"snmp": "TEXT", "cred_id": "INTEGER", "parent_id": "INTEGER", "cert_days": "INTEGER DEFAULT 0", "tls_verify": "INTEGER DEFAULT 0",
                     "policy_id": "INTEGER", "tpl": "TEXT DEFAULT ''"},
     "mon_events": {"kind": "TEXT DEFAULT 'down'"},
     "ip_attack_day": {"runs": "INTEGER DEFAULT 1"},
@@ -900,6 +910,11 @@ class Store:
             self.db.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)")
             row = self.db.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
             ver = int(row[0]) if row else 0
+            if ver > len(MIGRATIONS):
+                # 1.59.7: نسخه‌ی تازه‌تر برنامه این داده را نوشته (مثلاً پایگاه داده‌ی مشترک MySQL)؛ باز کردن با ساختار
+                # قدیمی ممکن است ستون‌ها/داده‌ی تازه را خراب کند
+                raise RuntimeError(f"ساختار پایگاه داده ({ver}) از این نسخه‌ی برنامه ({len(MIGRATIONS)}) تازه‌تر است؛ "
+                                   "نسخه‌ی تازه‌تر AutoKRP را نصب کنید.")
             for i, m in enumerate(MIGRATIONS[ver:], start=ver + 1):
                 self.db.execute("BEGIN")
                 try:
@@ -1217,7 +1232,7 @@ class Store:
         return runs[0] if runs else None
 
     # ------------------------------------------------------------ history
-    def add_history(self, kind, target, status, detail="", run_id="", file="", user=None, ip=None):
+    def add_history(self, kind, target, status, detail="", run_id="", file="", user=None, ip=None, owner=""):
         if user is None:
             user = getattr(ACTOR, "name", "") or ""
         if ip is None:
@@ -1225,8 +1240,8 @@ class Store:
         from .auditlog import category
         now = time.time()
         with self._lock:
-            self.db.execute("INSERT INTO history(ts,run_id,kind,target,status,detail,file,user) VALUES(?,?,?,?,?,?,?,?)",
-                            (now, run_id, kind, target, status, detail, file, user))
+            self.db.execute("INSERT INTO history(ts,run_id,kind,target,status,detail,file,user,owner) VALUES(?,?,?,?,?,?,?,?,?)",
+                            (now, run_id, kind, target, status, detail, file, user, str(owner or "").lower()))
             # 1.46: همان رخداد در لاگ ممیزی زنجیره‌ای (حذف‌نشدنی از داخل برنامه)
             self.db.execute("INSERT INTO audit_log(ts,kind,cat,user,ip,target,status,detail,mac) VALUES(?,?,?,?,?,?,?,?,'')",
                             (now, kind, category(kind, target), user or "", str(ip or "")[:64], str(target or "")[:500], status,
@@ -1323,8 +1338,23 @@ class Store:
             return dict(r) if r else None
 
     # ---- 1.37: تاریخچه با صفحه‌بندی و جستجوی سمت سرور (قبلاً فقط ۳۰۰۰ ردیف آخر به رابط می‌رسید)
-    def history_query(self, kinds=None, status=None, q="", since=None, until=None, hide=(), offset=0, limit=200, target=None):
+    def history_query(self, kinds=None, status=None, q="", since=None, until=None, hide=(), offset=0, limit=200, target=None,
+                      viewer=None, hide_names=()):
+        """viewer (1.59.10، G1) = نام کاربر غیرادمین: ردیف امنیتی (ورود، تغییر رمز…) فقط مال خودش؛ ردیف شیء شخصی کاربر دیگر
+        (owner) نه؛ ردیف‌های مانیتورینگ قدیمی بدون owner که نامشان در hide_names (اشیای شخصی دیگران) است هم نه."""
         where, args = [], []
+        if viewer is not None:
+            me = str(viewer).lower()
+            where.append("(kind<>'security' OR LOWER(COALESCE(user,''))=?)")
+            args.append(me)
+            where.append("(COALESCE(owner,'')='' OR owner=?)")
+            args.append(me)
+            where.append("(kind NOT IN ('terminal','transfer') OR LOWER(COALESCE(user,''))=?)")   # نشست ترمینال/انتقال فقط مال خودش
+            args.append(me)
+            hn = sorted({str(x) for x in hide_names if x})[:500]
+            if hn:
+                where.append(f"NOT (kind='monitor' AND COALESCE(owner,'')='' AND LOWER(COALESCE(user,''))<>? AND target IN ({','.join('?' * len(hn))}))")
+                args += [me] + hn
         if kinds:
             where.append(f"kind IN ({','.join('?' * len(kinds))})")
             args += list(kinds)
@@ -1557,7 +1587,7 @@ class Store:
 
     # ------------------------------------------------------------ مانیتورینگ
     MON_FIELDS = ("name", "host", "kind", "port", "url", "interval", "threshold", "timeout", "slow_ms", "icon", "grp",
-                  "owner", "enabled", "notify", "notes", "snmp", "cred_id", "parent_id", "cert_days", "policy_id", "tpl")
+                  "owner", "enabled", "notify", "notes", "snmp", "cred_id", "parent_id", "cert_days", "policy_id", "tpl", "tls_verify")
 
     def mon_targets(self):
         with self._lock:

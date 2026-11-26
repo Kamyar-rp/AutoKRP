@@ -240,19 +240,53 @@ def _opener(https):
     return urllib.request.build_opener(*hs)
 
 
-def http_check(url, timeout=5.0):
-    """درخواست GET ساده (بدون بررسی گواهی، بدون پروکسی و ریدایرکت؛ فقط برای شناسایی سرویس)."""
+def _opener_verified():
+    """1.59.10: با بررسی کامل گواهی و نام میزبان (مخزن گواهی سیستم؛ در ویندوز از راه truststore)."""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect(),
+                                       urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+
+
+def http_check(url, timeout=5.0, verify=False):
+    """درخواست GET ساده (بدون پروکسی و ریدایرکت). verify=False: بدون بررسی گواهی (شناسایی سرویس داخلی)؛
+    verify=True (1.59.10، تیک «بررسی گواهی» هدف مانیتورینگ): گواهی نامعتبر = خطا با علت."""
     req = urllib.request.Request(url, headers={"User-Agent": "AutoKRP-NetScan/1.0", "Accept": "*/*", "Connection": "close"})
     start = time.perf_counter()
+    https = url.lower().startswith("https://")
     try:
-        with _opener(url.lower().startswith("https://")).open(req, timeout=timeout) as r:  # nosec B310 — فقط http/https ساخته‌شده در همین ماژول
+        op = _opener_verified() if (verify and https) else _opener(https)
+        with op.open(req, timeout=timeout) as r:  # nosec B310 — فقط http/https ساخته‌شده در همین ماژول
             return {"status": r.status, "server": r.headers.get("Server") or "", "title": _title(r.read(4096)),
                     "latency_ms": round((time.perf_counter() - start) * 1000, 2)}
     except urllib.error.HTTPError as e:
         return {"status": e.code, "server": (e.headers.get("Server") if e.headers else "") or "", "title": "",
                 "latency_ms": round((time.perf_counter() - start) * 1000, 2)}
     except Exception as e:
+        why = getattr(e, "reason", None)
+        if isinstance(why, ssl.SSLCertVerificationError) or isinstance(e, ssl.SSLCertVerificationError):
+            v = why if isinstance(why, ssl.SSLCertVerificationError) else e
+            return {"status": "", "server": "", "title": "", "cert_bad": True,
+                    "error": "گواهی TLS معتبر نیست: " + _cert_why(v), "cert_detail": (getattr(v, "verify_message", "") or str(v))[:200]}
         return {"status": "", "server": "", "title": "", "error": str(e)[:200]}
+
+
+# 1.59.11: علت خطای گواهی به‌جای متن انگلیسی OpenSSL (متن اصلی در cert_detail برای جزئیات)
+_CERT_WHY = ((18, "خودامضا است"), (19, "زنجیره‌ی گواهی به مرجع مورد اعتماد نمی‌رسد"), (20, "صادرکننده مورد اعتماد نیست"),
+             (21, "صادرکننده مورد اعتماد نیست"), (10, "منقضی شده است"), (9, "هنوز معتبر نشده است"), (62, "با نام میزبان نمی‌خواند"))
+
+
+def _cert_why(v):
+    code = getattr(v, "verify_code", None)
+    for c, t in _CERT_WHY:
+        if code == c:
+            return t
+    m = (getattr(v, "verify_message", "") or str(v)).lower()
+    if "hostname" in m or "ip address mismatch" in m:
+        return "با نام میزبان نمی‌خواند"
+    if "expired" in m:
+        return "منقضی شده است"
+    if "self-signed" in m or "self signed" in m:
+        return "خودامضا است"
+    return "مرجع صادرکننده مورد اعتماد نیست"
 
 
 def _title(body):

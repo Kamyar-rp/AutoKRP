@@ -73,18 +73,22 @@ Name: "{autodesktop}\{#ExeName}"; Filename: "{app}\{#ExeName}.exe"; Tasks: deskt
 Filename: "{app}\{#ExeName}.exe"; Parameters: "--quit-running"; Flags: runhidden waituntilterminated runasoriginaluser; StatusMsg: "Closing a running AutoKRP..."
 ; Windows Firewall rule (as Administrator); allowed networks and Trap/Syslog ports are applied later from the server window
 Filename: "{app}\{#ExeName}.exe"; Parameters: "--firewall-apply --quiet"; Flags: runhidden waituntilterminated; Tasks: firewall; StatusMsg: "Windows Firewall rule..."
+; 1.59.7: if the update stopped the background server (auto-start task), start it again right away
+Filename: "{app}\{#ExeName}.exe"; Parameters: "--resume-server"; Flags: runhidden waituntilterminated runasoriginaluser; StatusMsg: "Starting the AutoKRP server again..."
 ; start as the user who started the setup (not as Administrator): the data folder belongs to that user
 Filename: "{app}\{#ExeName}.exe"; Description: "{cm:LaunchProgram,{#ExeName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallRun]
 ; 1.59.3: remove this edition's Windows Firewall rules (data is never deleted)
 Filename: "{app}\{#ExeName}.exe"; Parameters: "--firewall-remove --quiet"; Flags: runhidden waituntilterminated; RunOnceId: "AutoKRPFirewall"
+; 1.59.8: remove the auto-start task ("AutoKRP Server") only if it points to this installed program (data is never deleted)
+Filename: "{app}\{#ExeName}.exe"; Parameters: "--remove-own-service"; Flags: runhidden waituntilterminated; RunOnceId: "AutoKRPTask"
 
 [UninstallDelete]
 Type: dirifempty; Name: "{app}"
 
 [Messages]
-FinishedLabel=AutoKRP is installed.%n%nYour data was not moved or changed: open AutoKRP with the same Windows user to continue with it. If server auto-start was set up from the portable exe, open the app and choose "Update to this copy".
+FinishedLabel=AutoKRP is installed.%n%nYour data was not moved or changed (a backup of the main data files is taken on first start of a new version, in "upgrade_backups" in the data folder). If the background server was running, it has been started again. Open AutoKRP with the same Windows user to continue with it. If server auto-start was set up from the portable exe, open the app and choose "Update to this copy".
 
 [Code]
 // Before files are replaced: close the running installed copy (its files are in use).

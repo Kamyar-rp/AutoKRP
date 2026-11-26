@@ -7,6 +7,7 @@
 - داده‌ی نمودار: خلاصه‌ی هر دقیقه (۷ روز) و هر ساعت (۴۰۰ روز) در فایل‌های رمزشده‌ی monitor/؛ هر خط یک رکورد
   رمزشده است (atrest) و رکوردهای هم‌زمان جمع زده می‌شوند. قطعی‌ها با شروع/پایان در پایگاه داده‌اند.
 """
+import errno
 import json
 import logging
 import os
@@ -161,7 +162,9 @@ def clean_target(t, owner=None):
             "icon": icon, "grp": str(t.get("grp") or "").strip()[:60], "owner": owner if owner is not None else (t.get("owner") or ""),
             "enabled": 1 if t.get("enabled", True) else 0, "notify": 1 if t.get("notify", True) else 0,
             "notes": str(t.get("notes") or "")[:500], "parent_id": _int_or_none(t.get("parent_id")),
-            "cert_days": num("cert_days", 0, 365, 0) if kind == "http" and url.lower().startswith("https://") else 0}
+            "cert_days": num("cert_days", 0, 365, 0) if kind == "http" and url.lower().startswith("https://") else 0,
+            # 1.59.10: بررسی گواهی TLS (پیش‌فرض خاموش؛ گواهی نامعتبر = قطع با علت)
+            "tls_verify": 1 if kind == "http" and url.lower().startswith("https://") and t.get("tls_verify") else 0}
 
 
 def _int_or_none(v):
@@ -272,7 +275,7 @@ def check_ping(host, timeout):
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,  # nosec B603
                            timeout=timeout + 2, creationflags=0x08000000 if os.name == "nt" else 0)
     except subprocess.TimeoutExpired:
-        return False, None, "timeout"
+        return False, None, TIMEOUT_MSG
     except OSError as e:
         return False, None, str(e)
     out = p.stdout.upper()
@@ -289,6 +292,9 @@ def check_ping(host, timeout):
     return True, round(rtt, 1), ""
 
 
+_TCP_TIMEOUT = {errno.EWOULDBLOCK, errno.EAGAIN, errno.EINPROGRESS, errno.EALREADY, 10035}   # connect_ex پس از پایان مهلت (ویندوز: WSAEWOULDBLOCK)
+
+
 def check_tcp(host, port, timeout):
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
@@ -302,9 +308,11 @@ def check_tcp(host, port, timeout):
         rc = s.connect_ex(addr)
         if rc == 0:
             return True, round((time.perf_counter() - t0) * 1000, 1), ""
+        if rc in _TCP_TIMEOUT:      # 1.59.9: مهلت تمام شد (ویندوز 10035) نه «رد شد»؛ قبلاً پیام «پورت بسته است (10035)» می‌داد
+            return False, None, TIMEOUT_MSG
         return False, None, f"پورت {port} بسته است ({rc})"
     except socket.timeout:
-        return False, None, "timeout"
+        return False, None, TIMEOUT_MSG
     except OSError as e:
         return False, None, str(e)[:120]
     finally:
@@ -334,11 +342,33 @@ def cert_expiry(url, timeout):
             "at": time.time(), "err": ""}
 
 
-def check_http(url, timeout):
-    r = netscan.http_check(url, timeout)
+TIMEOUT_MSG = "مهلت پاسخ تمام شد"      # 1.59.12: به‌جای «timeout» (کد به این متن وابسته نیست)
+
+
+def _http_err(msg):
+    """1.59.12: متن خام urllib (‎<urlopen error …>‎) ← پیام کوتاه فارسی؛ ناشناخته ← همان علت بدون قالب urlopen."""
+    m = str(msg or "")
+    low = m.lower()
+    if "timed out" in low or "timeout" in low:
+        return TIMEOUT_MSG
+    if "10061" in m or "refused" in low:
+        return "اتصال رد شد (پورت بسته است)"
+    if "getaddrinfo" in low or "11001" in m or "name or service not known" in low or "nodename nor servname" in low:
+        return "نام میزبان پیدا نشد"
+    if "10065" in m or "10051" in m or "unreachable" in low:
+        return "مقصد در دسترس نیست"
+    if "reset" in low or "10054" in m:
+        return "اتصال قطع شد"
+    mm = re.match(r"<urlopen error (?:\[[^\]]*\]\s*)?(.*)>$", m)
+    return (mm.group(1) if mm else m) or "بدون پاسخ"
+
+
+def check_http(url, timeout, verify=False):
+    r = netscan.http_check(url, timeout, verify)
     st = r.get("status")
     if st == "" or st is None:
-        return False, None, (r.get("error") or "بدون پاسخ")[:160]
+        e = r.get("error") or "بدون پاسخ"
+        return False, None, (e if r.get("cert_bad") else _http_err(e))[:160]
     if int(st) >= 500:
         return False, r.get("latency_ms"), f"HTTP {st}"
     return True, r.get("latency_ms"), f"HTTP {st}"
@@ -611,7 +641,7 @@ class Monitor:
             elif t["kind"] == "tcp":
                 ok, rtt, err = check_tcp(t["host"], int(t["port"]), float(t.get("timeout") or 2))
             elif t["kind"] == "http":
-                ok, rtt, err = check_http(t["url"], float(t.get("timeout") or 5))
+                ok, rtt, err = check_http(t["url"], float(t.get("timeout") or 5), bool(t.get("tls_verify")))
                 if ok and int(t.get("cert_days") or 0) > 0:
                     self._cert(t)
             else:
@@ -724,7 +754,7 @@ class Monitor:
         when = time.strftime("%Y-%m-%d", time.localtime(c["expires"]))
         msg = (f"گواهی HTTPS «{t['name']}» منقضی شده است ({when})" if days < 0
                else f"گواهی HTTPS «{t['name']}» تا {days} روز دیگر منقضی می‌شود ({when})")
-        self.emit("warn", msg, "monitor")
+        self.emit("warn", msg, "monitor", tid=t["id"])
         if self.history:
             self.history("monitor", t["name"], "warn", msg, "")
         if t.get("notify"):
@@ -795,17 +825,17 @@ class Monitor:
                 return
             if maint:
                 self.store.mon_event_open(t["id"], name, now, f"{err} — در پنجره‌ی نگهداری «{maint}»", "maint")
-                self.emit("info", f"«{name}» در پنجره‌ی نگهداری «{maint}» قطع است ({where})", "monitor")
+                self.emit("info", f"«{name}» در پنجره‌ی نگهداری «{maint}» قطع است ({where})", "monitor", tid=t["id"])
                 return
             if new == "unreachable":
                 self.store.mon_event_open(t["id"], name, now, f"در دسترس نیست به‌خاطر قطع «{cause}» — {err}", "unreach")
-                self.emit("warn", f"«{name}» در دسترس نیست به‌خاطر قطع «{cause}» ({where})", "monitor")
+                self.emit("warn", f"«{name}» در دسترس نیست به‌خاطر قطع «{cause}» ({where})", "monitor", tid=t["id"])
                 if self.history:
                     self.history("monitor", name, "warn", f"در دسترس نیست به‌خاطر قطع «{cause}» — {where}", owner)
                 return
             self.store.mon_event_open(t["id"], name, now, err)
             msg = f"«{name}» قطع شد ({where}) — {err}"
-            self.emit("error", msg, "monitor")
+            self.emit("error", msg, "monitor", tid=t["id"])
             if self.history:
                 self.history("monitor", name, "error", f"قطع شد — {where} — {err}", owner)
             if t.get("notify"):
@@ -817,12 +847,12 @@ class Monitor:
             dur = int(now - ev["start"]) if ev else 0
             kind = (ev or {}).get("kind") or "down"
             if kind != "down":           # قطعی به‌خاطر پدر یا در نگهداری: بدون هشدار
-                self.emit("info", f"«{name}» دوباره در دسترس است ({where})", "monitor")
+                self.emit("info", f"«{name}» دوباره در دسترس است ({where})", "monitor", tid=t["id"])
                 if kind == "unreach" and self.history:
                     self.history("monitor", name, "ok", f"دوباره در دسترس — {where} — {fmt_dur(dur)}", owner)
             else:
                 msg = f"«{name}» دوباره وصل شد ({where}) — قطعی {fmt_dur(dur)}"
-                self.emit("info", msg, "monitor")
+                self.emit("info", msg, "monitor", tid=t["id"])
                 if self.history:
                     self.history("monitor", name, "ok", f"دوباره وصل شد — {where} — قطعی {fmt_dur(dur)}", owner)
                 if t.get("notify"):
@@ -831,7 +861,7 @@ class Monitor:
             if prev == "down":
                 self._wake_children(t)
         elif new == "slow" and prev == "up":
-            self.emit("warn", f"«{name}» کند است ({rtt} ms)", "monitor")
+            self.emit("warn", f"«{name}» کند است ({rtt} ms)", "monitor", tid=t["id"])
         if new in ("up", "slow") and prev == "unreachable":
             self._wake_children(t)
 
@@ -849,7 +879,7 @@ class Monitor:
         with self._lock:
             st["maint"] = mw or ""
         if mw:
-            self.emit("info", f"«{name}» وارد پنجره‌ی نگهداری «{mw}» شد", "monitor")
+            self.emit("info", f"«{name}» وارد پنجره‌ی نگهداری «{mw}» شد", "monitor", tid=t["id"])
             if self.history:
                 self.history("monitor", name, "ok", f"شروع نگهداری «{mw}»", t.get("owner") or "")
             return
@@ -872,32 +902,32 @@ class Monitor:
         name = t.get("name") or t["host"]
         if (self.state.get(t["id"]) or {}).get("maint"):
             for key, old, new, msg in events:
-                self.emit("info", f"«{name}»: {msg} (در پنجره‌ی نگهداری)", "monitor")
+                self.emit("info", f"«{name}»: {msg} (در پنجره‌ی نگهداری)", "monitor", tid=t["id"])
             return
         for key, old, new, msg in events:
             full = f"«{name}»: {msg}"
             if key == "reboot":
-                self.emit("warn", full, "monitor")
+                self.emit("warn", full, "monitor", tid=t["id"])
                 if self.history:
                     self.history("monitor", name, "warn", msg, t.get("owner") or "")
                 if t.get("notify"):
                     self.notify("mon_alarm", full)
                 continue
             if new == "crit":
-                self.emit("error", full, "monitor")
+                self.emit("error", full, "monitor", tid=t["id"])
                 if self.history:
                     self.history("monitor", name, "error", f"هشدار بحرانی — {msg}", t.get("owner") or "")
                 if t.get("notify"):
                     self.notify("mon_alarm", f"هشدار بحرانی — {full}")
                 self._alert(t, "alarm", full, key)
             elif new == "warn":
-                self.emit("warn", full, "monitor")
+                self.emit("warn", full, "monitor", tid=t["id"])
                 if self.history:
                     self.history("monitor", name, "warn", f"هشدار — {msg}", t.get("owner") or "")
                 if old == "crit":
                     self._alert(t, "clear", full, key)
             else:
-                self.emit("info", f"{full} — برطرف شد", "monitor")
+                self.emit("info", f"{full} — برطرف شد", "monitor", tid=t["id"])
                 if self.history:
                     self.history("monitor", name, "ok", f"برطرف شد — {msg}", t.get("owner") or "")
                 if old == "crit":

@@ -51,7 +51,8 @@ class Worker:
         from .fgupdate import FgUpdater
         from .monitor import Monitor
         self.monitor = Monitor(settings, store, emit=self.emit, notify=self.notifier.notify, demo=demo)
-        self.monitor.history = lambda kind, target, status, detail, owner: store.add_history(kind, target, status, detail, user="")
+        self.monitor.history = lambda kind, target, status, detail, owner: store.add_history(kind, target, status, detail, user="",
+                                                                                               owner=owner or "")
         from .health import Health
         self.health = Health(settings, notify=self.notifier.notify, emit=self.emit,
                              history=lambda kind, target, status, detail: store.add_history(kind, target, status, detail, user=""))
@@ -73,10 +74,11 @@ class Worker:
         self._thread = None
 
     # ------------------------------------------------------------ events
-    def emit(self, level, msg, kind="app", run_id=""):
+    def emit(self, level, msg, kind="app", run_id="", tid=None):
+        """tid: شناسه‌ی هدف مانیتورینگ (1.59.11) تا get_state رخداد هدف‌های شخصی دیگران را به کاربر نشان ندهد."""
         with self._elock:
             self.events.append({"seq": next(self._seq), "ts": time.time(), "level": level, "msg": msg,
-                                "kind": kind, "run_id": run_id})
+                                "kind": kind, "run_id": run_id, **({"tid": tid} if tid is not None else {})})
         getattr(log, {"error": "error", "warn": "warning"}.get(level, "info"))("[%s] %s", kind, msg)
 
     def events_since(self, seq):

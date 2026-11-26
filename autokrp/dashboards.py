@@ -4,12 +4,14 @@ owner خالی = مشترک (ساخت و ویرایش با دسترسی «اجر
 داده‌ی ویجت‌ها را رابط از همان APIهای موجود می‌گیرد (mon_list/mon_rows/series/report/events/map) با همان بررسی دسترسی."""
 import re
 
-DASH_MAX = 200
+DASH_MAX = 200          # داشبوردهای مشترک
+DASH_USER_MAX = 20      # 1.59.10 (G2): داشبورد شخصی هر کاربر (قبلاً یک سقف ۲۰۰ مشترک بین همه)
 PAGE_MAX = 20
 WIDGET_MAX = 60
 COLS = 12
 TYPES = ("status", "severity", "problems", "traffic", "metric", "gauge", "value", "topn", "avail", "map", "clock", "events", "text",
-         "svc", "rtt", "tiles", "availbar", "snmptab")       # 1.59: ابزارهای Ping/HTTP/TCP و جدول SNMP
+         "svc", "rtt", "tiles", "availbar", "snmptab",       # 1.59: ابزارهای Ping/HTTP/TCP و جدول SNMP
+         "availline", "outages")                             # 1.59.10: نمودار دسترس‌پذیری و قطعی‌های اخیر
 RANGES = ("1h", "6h", "24h", "7d", "30d")
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
 

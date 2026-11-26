@@ -97,6 +97,23 @@ SLOW_API_SECS = 1.5
 SLOW_CALLS = collections.deque(maxlen=200)      # (زمان، نام متد، ثانیه) — فقط نام، بدون پارامتر یا داده
 
 
+_FA_RE = re.compile("[\u0600-\u06ff]")
+
+
+def _api_error(e):
+    """1.59.10 (G3): پیام خطای API برای کاربر. خطای اعتبارسنجی خود برنامه (متن فارسی، مثل رمز ضعیف یا نام کاربری نامعتبر)
+    بدون پیشوند «خطای غیرمنتظره»؛ خطای پایتونی خام (مثل invalid literal for int()) فقط در لاگ، نه در رابط."""
+    msg = str(e or "")
+    if msg and _FA_RE.search(msg) and not isinstance(e, (OSError, KeyError)):
+        return msg
+    if isinstance(e, (ValueError, KeyError, IndexError)):
+        return "ورودی نامعتبر است."
+    out = friendly_error(e)
+    if out.startswith("خطای غیرمنتظره"):
+        return "خطای غیرمنتظره رخ داد؛ جزئیات در لاگ برنامه ثبت شد."
+    return out
+
+
 def _safe(fn):
     @functools.wraps(fn)
     def wrap(self, *a, **k):
@@ -137,7 +154,7 @@ def _safe(fn):
             return {"ok": False, "error": "پارامترهای نامعتبر" if "argument" in str(e) else friendly_error(e)}
         except Exception as e:
             log.exception("api %s", fn.__name__)
-            return {"ok": False, "error": friendly_error(e)}
+            return {"ok": False, "error": _api_error(e)}
         finally:
             ACTOR.name = ""
             ACTOR.ip = ""
@@ -257,6 +274,8 @@ class Api:
         me = self._current_user()
         admin = me is None or me.get("role") == "admin"
         st["prompt"] = bool(admin and st["backend"] == "local" and not self._settings.get("database", "asked", default=False))
+        if admin:
+            st["data_dir"] = str(paths.data_dir())     # 1.59.7: محل داده‌ی محلی در پنجره‌ی اولین اجرا و تب پایگاه داده
         return st if admin else {"backend": st["backend"], "ok": st.get("ok"), "prompt": False}
 
     @_safe
@@ -688,6 +707,12 @@ class Api:
         if not self._is_super():
             raise ConnectorError("فقط ادمین اصلی کاربران و دسترسی‌ها را تغییر می‌دهد.")
 
+    @staticmethod
+    def _v3_new(u, role, tools):
+        """کاربر تازه با مدل گروه‌ها؟ 1.59.10 (G0، تصمیم کاربر): اپراتور تازه بدون هیچ ابزار (API قدیمی بدون groups) دیگر
+        مدل قدیمی «دیدن همه‌ی مانیتورینگ/نتیجه‌ها» را نمی‌گیرد؛ بدون دسترسی است تا ادمین اصلی گروه بدهد. viewer مثل قبل."""
+        return "groups" in u or (role == "operator" and not tools)
+
     def _new_access(self, u):
         """1.32: کاربر تازه با مدل گروه‌ها (گروه خالی = بدون ابزار تا ادمین اصلی گروه بدهد)."""
         gs = perms.groups_of(self._settings)
@@ -713,7 +738,7 @@ class Api:
             if not password:
                 raise VaultError("برای کاربر تازه رمز لازم است.")
             rec = {**v.make_user(name, password, role, tools, bool(u.get("disabled"))), "created": time.time(),
-                   "shared_devices": u.get("shared_devices", True) is not False, "perms_v": perms.PERMS_V, **(self._new_access(u) if "groups" in u else {})}
+                   "shared_devices": u.get("shared_devices", True) is not False, "perms_v": perms.PERMS_V, **(self._new_access(u) if self._v3_new(u, role, tools) else {})}
             items.append(rec)
             msg = f"کاربر {name} ({perms.ROLE_TITLES.get(role)}) ساخته شد"
         else:
@@ -749,6 +774,7 @@ class Api:
         if not any(x["role"] == "admin" and not x.get("disabled") for x in items):
             raise VaultError("حداقل یک ادمین فعال لازم است.")
         self._save_users(items)
+        self._drop_user_objects(rec["username"])
         self._store.add_history("security", "کاربران", "ok", f"کاربر {rec['username']} حذف شد")
         return self.users_list()
 
@@ -799,7 +825,8 @@ class Api:
             rec = serverauth.new_user_record(master, name, password, role, tools, bool(u.get("disabled")), strong)
             rec["shared_devices"] = u.get("shared_devices", True) is not False
             rec["perms_v"] = perms.PERMS_V
-            if "groups" in u:                   # 1.32: مدل گروه‌ها؛ بدون groups (API قدیمی) = نقش + tools مثل قبل
+            rec["wall"] = bool(u.get("wall")) and role == "readonly"   # 1.59.11: نمایشگر دیواری = بدون پایان نشست بی‌کاری
+            if self._v3_new(u, role, tools):   # 1.32: مدل گروه‌ها؛ بدون groups (API قدیمی) = نقش + tools مثل قبل
                 rec.update(self._new_access(u))
             data["users"].append(rec)
             msg = f"کاربر {name} ({perms.ROLE_TITLES.get(role)}) ساخته شد"
@@ -812,7 +839,7 @@ class Api:
                 role = old["role"]            # نقش کاربر AD از گروه‌هایش در هر ورود
                 tools = [t for t in (src_tools or []) if t in perms.USER_TOOLS] if role == "operator" else []
             old.update(role=role, tools=tools, disabled=bool(u.get("disabled")), shared_devices=u.get("shared_devices", old.get("shared_devices", True)) is not False,
-                       perms_v=perms.PERMS_V)
+                       perms_v=perms.PERMS_V, wall=bool(u.get("wall", old.get("wall"))) and role == "readonly")
             if "groups" in u:
                 self._to_v3(old)
                 old["groups"] = self._new_access(u)["groups"]
@@ -823,7 +850,7 @@ class Api:
                     raise VaultError("رمز شرایط لازم را ندارد: " + "، ".join(errs))
                 old.update(serverauth._wrap(master, password))
             data["users"] = [old if x["username"].lower() == old["username"].lower() else x for x in data["users"]]
-            msg = f"کاربر {old['username']} به‌روز شد" + ("؛ رمز تغییر کرد" if password else "")
+            msg = f"کاربر {old['username']} به‌روز شد" + ("؛ رمز تغییر کرد" if password else "") + ("؛ نمایشگر دیواری" if old.get("wall") else "")
         if not any(x["role"] == "admin" and not x.get("disabled") and x.get("source") != "ad" for x in data["users"]):
             raise VaultError("حداقل یک ادمین محلی فعال لازم است (کاربر AD کافی نیست؛ اگر AD در دسترس نباشد کسی وارد نمی‌شود).")
         data["users"] = self._mark_super(data["users"])
@@ -855,6 +882,7 @@ class Api:
         data["users"] = items
         serverauth.save(data)
         self._server.drop_session(username=rec["username"])
+        self._drop_user_objects(rec["username"])
         self._store.add_history("security", "کاربران", "ok", f"کاربر {rec['username']} حذف شد")
         return self.users_list()
 
@@ -1167,7 +1195,7 @@ class Api:
         counts.update(self._ip_counts())
         last = self._store.last_run()
         return {
-            "events": self._worker.events_since(int(since or 0)),
+            "events": self._events_for_me(self._worker.events_since(int(since or 0))),
             "conn": self._worker.conn_view(), "fg_devices": self._settings.fg_devices(), "last_check": self._worker.last_check,
             "run": run.to_dict(full=False) | {"approval": run.approval is not None} if run else None,
             "last_run": last, "counts": counts,
@@ -1183,6 +1211,39 @@ class Api:
             "sec_alerts": self._worker.seccheck.summary() if self._is_super() or (self._current_user() or {}).get("role") == "admin" else 0,
             **self._me(),
         }
+
+    # 1.59.11: رخدادهای زنده‌ی get_state برای همه‌ی نشست‌ها یکی بود (نشت نام/IP هدف‌های شخصی دیگران و رخدادهای امنیتی
+    # به کاربر بدون دسترسی). ادمین همه را می‌بیند؛ بقیه فقط رخداد بخش‌هایی که دسترسی دارند و هدف‌هایی که در mon_list می‌بینند.
+    EV_SEC = ("run", "ban", "schedule", "import", "conn")
+
+    def _events_for_me(self, evs):
+        if not evs or self._mon_admin():
+            return evs
+        lv = self._levels()
+        en = perms.enabled_features(self._settings)
+        sec_ok = any(lv.get(k, "none") != "none" for k in dict(perms.SECTIONS).get("sec", []))   # 1.59.12: بیلد بدون امنیت
+        mon_ok = "monitor" in en and lv.get("monitor", "none") != "none"
+        vis = None
+        out = []
+        for e in evs:
+            k = e.get("kind") or "app"
+            if k == "app":
+                ok = True
+            elif k == "monitor":
+                ok = mon_ok
+                if ok and e.get("tid") is not None:
+                    if vis is None:
+                        vis = {t["id"] for t in self._store.mon_targets() if self._mon_visible(t)}
+                    ok = e["tid"] in vis
+                elif ok:
+                    ok = lv.get("monitor.events", lv.get("monitor", "none")) != "none"
+            elif k == "asset":
+                ok = self._asset_can_view()
+            else:
+                ok = k in self.EV_SEC and sec_ok
+            if ok:
+                out.append({x: v for x, v in e.items() if x != "tid"})
+        return out
 
     def _ip_counts(self):
         """شمارش‌های آدرس‌ها برای داشبورد. get_state هر ۱ تا ۲.۵ ثانیه صدا زده می‌شود؛ قبلاً هر بار کل جدول ips
@@ -3602,7 +3663,8 @@ class Api:
         else:
             self._mon.snmp.prev.pop(tid, None)      # آدرس یا شمارنده‌ها ممکن است عوض شده باشند
         self._store.add_history("monitor", c["name"], "ok", ("ویرایش هدف" if t.get("id") else "هدف تازه") +
-                                f" — {c['kind']} {c['url'] or c['host']}{':' + str(c['port']) if c['port'] else ''} — هر {c['interval']} ثانیه")
+                                f" — {c['kind']} {c['url'] or c['host']}{':' + str(c['port']) if c['port'] else ''} — هر {c['interval']} ثانیه",
+                                owner=c.get("owner") or "")
         return {"id": tid}
 
     def _mon_parent_ok(self, pid, owner, tid=None):
@@ -3829,7 +3891,7 @@ class Api:
         self._mon.reload()
         when = (f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(c['start']))} تا {time.strftime('%Y-%m-%d %H:%M', time.localtime(c['end']))}"
                 if c["kind"] == "once" else f"هفتگی {c['t_from']}–{c['t_to']}")
-        self._store.add_history("monitor", c["name"], "ok", ("ویرایش" if w.get("id") else "تعریف") + f" پنجره‌ی نگهداری — {when}")
+        self._store.add_history("monitor", c["name"], "ok", ("ویرایش" if w.get("id") else "تعریف") + f" پنجره‌ی نگهداری — {when}", owner=c.get("owner") or "")
         return {"id": mid}
 
     @_safe
@@ -3839,7 +3901,7 @@ class Api:
             raise ConnectorError("پنجره پیدا نشد یا اجازه‌ی حذفش را ندارید.")
         self._store.maint_delete(w["id"])
         self._mon.reload()
-        self._store.add_history("monitor", w["name"], "ok", "پنجره‌ی نگهداری حذف شد")
+        self._store.add_history("monitor", w["name"], "ok", "پنجره‌ی نگهداری حذف شد", owner=w.get("owner") or "")
         return {}
 
     @_safe
@@ -3854,7 +3916,7 @@ class Api:
         self._mon.snmp.clear(t["id"])
         self._mon.snmp.remove_files(t["id"])
         self._mon.reload()
-        self._store.add_history("monitor", t["name"], "ok", "هدف حذف شد")
+        self._store.add_history("monitor", t["name"], "ok", "هدف حذف شد", owner=t.get("owner") or "")
         return {}
 
     @_safe
@@ -3864,7 +3926,8 @@ class Api:
         self._store.mon_save(t)
         self._mon.state.pop(t["id"], None)
         self._mon.reload()
-        self._store.add_history("monitor", t["name"], "ok", "بررسی از سر گرفته شد" if enabled else "بررسی متوقف شد")
+        self._store.add_history("monitor", t["name"], "ok", "بررسی از سر گرفته شد" if enabled else "بررسی متوقف شد",
+                                owner=t.get("owner") or "")
         return {}
 
     @_safe
@@ -3879,7 +3942,23 @@ class Api:
     def mon_report(self, rng="24h", ids=None):
         """rng: بازه‌ی آماده («24h»، «7d»…) یا {"from": ts, "to": ts}."""
         vis = {t["id"]: t for t in self._store.mon_targets() if self._mon_visible(t)}
-        want = [int(i) for i in ids or [] if int(i) in vis] or list(vis)
+        if ids in (None, "", []):
+            want = list(vis)
+        else:
+            # 1.59.11: شناسه‌ی تکی هم پذیرفته می‌شود؛ شناسه‌ی نامعتبر یا ناپیدا دیگر به «همه‌ی هدف‌های قابل دیدن» برنمی‌گردد
+            ids = ids if isinstance(ids, (list, tuple)) else [ids]
+            want = []
+            for i in ids:
+                try:
+                    if isinstance(i, bool):
+                        raise ValueError
+                    i = int(i)
+                except (TypeError, ValueError):
+                    raise ConnectorError("شناسه‌ی هدف نامعتبر است.") from None
+                if i in vis and i not in want:
+                    want.append(i)
+            if not want:
+                raise ConnectorError("هدف پیدا نشد.")
         try:
             S = self._mon.series(rng if isinstance(rng, dict) else str(rng), set(want))
         except ValueError as e:
@@ -4172,7 +4251,7 @@ class Api:
 
     @_safe
     def dash_save(self, dash):
-        from .dashboards import DASH_MAX, clean
+        from .dashboards import DASH_MAX, DASH_USER_MAX, clean
         p = dash if isinstance(dash, dict) else {}
         name = str(p.get("name") or "").strip()[:60]
         if not name:
@@ -4187,19 +4266,67 @@ class Api:
                 raise ConnectorError("داشبوردهای مشترک را فقط ادمین یا کاربر با دسترسی «اجرا»ی مانیتورینگ تغییر می‌دهد.")
             owner = old.get("owner") or ""
         else:
-            if len(have) >= DASH_MAX:
-                raise ConnectorError(f"حداکثر {DASH_MAX} داشبورد.")
             personal = (bool(p.get("personal")) or not self._mon_can_add()) and bool(self._uname())
             if not personal and not self._mon_can_add():
                 raise ConnectorError("ساخت داشبورد مشترک نیاز به دسترسی «اجرا»ی مانیتورینگ دارد.")
             owner = self._uname() if personal else ""
+            # 1.59.10 (G2): سقف جدا — شخصی برای هر کاربر، مشترک برای همه (قبلاً شخصی‌های یک کاربر جای بقیه را می‌گرفت)
+            if owner and sum(1 for x in have if (x.get("owner") or "") == owner) >= DASH_USER_MAX:
+                raise ConnectorError(f"حداکثر {DASH_USER_MAX} داشبورد شخصی برای هر کاربر.")
+            if not owner and sum(1 for x in have if not x.get("owner")) >= DASH_MAX:
+                raise ConnectorError(f"حداکثر {DASH_MAX} داشبورد مشترک.")
         data = clean(p.get("data"))
         if did:
             self._store.lay_save(did, "dash", name, data)
         else:
             did = self._store.lay_save(None, "dash", name, data, owner)
-        self._store.add_history("monitor", name, "ok", "داشبورد " + ("شخصی " if owner else "") + "ذخیره شد")
+        self._store.add_history("monitor", name, "ok", "داشبورد " + ("شخصی " if owner else "") + "ذخیره شد", owner=owner or "")
         return {"id": did}
+
+    @_safe
+    def dash_admin_list(self):
+        """1.59.10 (G2): فقط ادمین — داشبوردهای شخصی همه‌ی کاربران (بدون محتوا) برای پاکسازی."""
+        self._need_admin_role()
+        out = []
+        for x in self._store.lay_list("dash"):
+            if not x.get("owner"):
+                continue
+            try:
+                n = sum(len(pg.get("widgets") or []) for pg in (x.get("data") or {}).get("pages") or [])
+            except (AttributeError, TypeError):
+                n = 0
+            out.append({"id": x["id"], "name": x["name"], "owner": x["owner"], "widgets": n, "created": x.get("created")})
+        out.sort(key=lambda z: (z["owner"], z["name"].lower()))
+        return {"items": out}
+
+    @_safe
+    def dash_admin_delete(self, ids):
+        self._need_admin_role()
+        want = {int(i) for i in (ids or [])[:500] if str(i).isdigit()}
+        done = []
+        for x in self._store.lay_list("dash"):
+            if x["id"] in want and x.get("owner"):
+                self._store.lay_delete(x["id"], "dash")
+                done.append(x)
+        if done:
+            self._store.add_history("monitor", "داشبوردها", "ok", f"{len(done)} داشبورد شخصی کاربران با ادمین حذف شد: "
+                                    + ", ".join(sorted({x["owner"] for x in done}))[:300])
+        return {"deleted": len(done)}
+
+    def _need_admin_role(self):
+        u = self._current_user()
+        if u is not None and u.get("role") != "admin":
+            raise ConnectorError("فقط ادمین.")
+
+    def _drop_user_objects(self, username):
+        """1.59.10 (G2): با حذف کاربر داشبوردهای شخصی‌اش هم حذف می‌شود (جای کس دیگری را نگیرد و بی‌صاحب نماند)."""
+        name = str(username or "").lower()
+        try:
+            for x in self._store.lay_list("dash"):
+                if (x.get("owner") or "") == name:
+                    self._store.lay_delete(x["id"], "dash")
+        except Exception:  # noqa — بیلد بدون مانیتورینگ یا پایگاه داده‌ی بسته
+            log.exception("حذف داشبوردهای کاربر حذف‌شده")
 
     @_safe
     def dash_delete(self, did):
@@ -4209,7 +4336,7 @@ class Api:
         if not self._dash_can_edit(x):
             raise ConnectorError("داشبوردهای مشترک را فقط ادمین یا کاربر با دسترسی «اجرا»ی مانیتورینگ حذف می‌کند.")
         self._store.lay_delete(x["id"], "dash")
-        self._store.add_history("monitor", x["name"], "ok", "داشبورد حذف شد")
+        self._store.add_history("monitor", x["name"], "ok", "داشبورد حذف شد", owner=x.get("owner") or "")
         return {}
 
     # ---- نقشه‌های دستی شبکه (1.38)
@@ -5022,7 +5149,8 @@ class Api:
         self._mon.snmp.client.forget()
         n = len(self._store.cred_users(cid))
         self._store.add_history("monitor", name, "ok", f"پروفایل SNMP {'ساخته' if not old else 'به‌روز'} شد (v{meta['v']})"
-                                + (f"؛ {n} هدف از آن استفاده می‌کنند" if n else ""))
+                                + (f"؛ {n} هدف از آن استفاده می‌کنند" if n else ""),
+                                owner=(old.get("owner") if old else (self._uname() if personal else "")) or "")
         return {"id": cid}
 
     @_safe
@@ -5037,7 +5165,7 @@ class Api:
         self._store.cred_delete(p["id"])
         self._vault.delete_prefix(f"cred.{p['id']}.")
         self._mon.snmp.client.forget()
-        self._store.add_history("monitor", p["name"], "ok", "پروفایل SNMP حذف شد")
+        self._store.add_history("monitor", p["name"], "ok", "پروفایل SNMP حذف شد", owner=p.get("owner") or "")
         return {}
 
     def _snmp_cred(self, cred_id, owner):
@@ -5312,7 +5440,7 @@ class Api:
             raise ConnectorError("برای بررسی زنده دسترسی «اجرا»ی مانیتورینگ لازم است.")
         e = self._mon.targets().get(t["id"]) or t
         x = self._live().start(e, sec)
-        self._store.add_history("monitor", t["name"], "ok", f"بررسی زنده‌ی موقت هر {x['iv']} ثانیه شروع شد")
+        self._store.add_history("monitor", t["name"], "ok", f"بررسی زنده‌ی موقت هر {x['iv']} ثانیه شروع شد", owner=t.get("owner") or "")
         return {"iv": x["iv"], "left": round(x["end"] - time.time())}
 
     @_safe
@@ -5343,7 +5471,7 @@ class Api:
         t["snmp"] = json.dumps(cfg, ensure_ascii=False)
         self._store.mon_save(t)
         self._mon.reload()
-        self._store.add_history("monitor", t["name"], "ok", f"پیگیری پورت: {'، '.join(str(x) for x in names[:10])}" if on else f"پایان پیگیری پورت: {'، '.join(str(x) for x in names[:10])}")
+        self._store.add_history("monitor", t["name"], "ok", f"پیگیری پورت: {'، '.join(str(x) for x in names[:10])}" if on else f"پایان پیگیری پورت: {'، '.join(str(x) for x in names[:10])}", owner=t.get("owner") or "")
         return {"watch": w}
 
     # ------------------------------------------------------------ مدیریت دارایی (1.21)
@@ -5874,7 +6002,8 @@ class Api:
         self._vault.set_many(ch)
         n = len(self._store.cred_users(cid))
         self._store.add_history("ssh", name, "ok", f"پروفایل اعتبارنامه {'ساخته' if not p.get('id') else 'به‌روز'} شد"
-                                + (f"؛ {n} دستگاه از آن استفاده می‌کنند" if n else ""))
+                                + (f"؛ {n} دستگاه از آن استفاده می‌کنند" if n else ""),
+                                owner=(self._store.cred_get(cid) or {}).get("owner") or "")
         self._protect_bg()
         return {"id": cid}
 
@@ -5889,7 +6018,7 @@ class Api:
             raise ConnectorError(f"{len(used)} دستگاه از این پروفایل استفاده می‌کنند ({names}); اول اعتبارنامه‌ی آن‌ها را عوض کنید.")
         self._store.cred_delete(p["id"])
         self._vault.delete_prefix(f"cred.{p['id']}.")
-        self._store.add_history("ssh", p["name"], "ok", "پروفایل اعتبارنامه حذف شد")
+        self._store.add_history("ssh", p["name"], "ok", "پروفایل اعتبارنامه حذف شد", owner=p.get("owner") or "")
         return {}
 
     def _dev_cred(self, cred_id, owner):
@@ -6584,10 +6713,40 @@ class Api:
             offset, limit = max(0, int(offset or 0)), max(1, min(1000, int(limit or 200)))
         except (TypeError, ValueError):
             offset, limit = 0, 200
-        rows, total = self._store.history_query(kinds, status, str(q or "")[:200], since, None, hide, offset, limit)
+        vw, hn = self._hist_scope()
+        rows, total = self._store.history_query(kinds, status, str(q or "")[:200], since, None, hide, offset, limit,
+                                                viewer=vw, hide_names=hn)
         ids = {r.get("run_id") for r in rows if r.get("run_id")}
         runs = [x for x in self._store.list_runs(5000) if x["id"] in ids]
         return {"rows": rows, "runs": runs, "total": total, "offset": offset}
+
+    def _hist_scope(self):
+        """1.59.10 (G1): (viewer، نام اشیای شخصی دیگران) برای غیرادمین؛ (None، ()) برای ادمین و کلاینت بدون کاربر."""
+        u = self._current_user()
+        if u is None or u.get("role") == "admin":
+            return None, ()
+        me = self._uname()
+        names = set()
+        try:
+            names |= {t["name"] for t in self._store.mon_targets() if t.get("owner") and t["owner"] != me}
+            names |= {x["name"] for x in self._store.lay_list("dash") if x.get("owner") and x["owner"] != me}
+            names |= {w["name"] for w in self._store.maint_list() if w.get("owner") and w["owner"] != me}
+        except Exception:  # noqa — بیلد بدون مانیتورینگ
+            log.debug("history scope", exc_info=True)
+        return me, names
+
+    def _hist_row_ok(self, row):
+        vw, hn = self._hist_scope()
+        if vw is None:
+            return True
+        user = (row.get("user") or "").lower()
+        if row.get("kind") == "security" and user != vw:
+            return False
+        if (row.get("owner") or "") not in ("", vw):
+            return False
+        if row.get("kind") in ("terminal", "transfer") and user != vw:
+            return False
+        return not (row.get("kind") == "monitor" and not row.get("owner") and user != vw and row.get("target") in hn)
 
     @_safe
     def history_view(self, hid, fname=None, q=None):
@@ -6595,7 +6754,8 @@ class Api:
         import csv as csvmod
         import io
         row = self._store.history_get(int(hid))
-        if not row or self._level(perms.HISTORY_KIND.get(row.get("kind"), "")) == "none" and row.get("kind") in perms.HISTORY_KIND:
+        if not row or self._level(perms.HISTORY_KIND.get(row.get("kind"), "")) == "none" and row.get("kind") in perms.HISTORY_KIND \
+                or not self._hist_row_ok(row):
             raise ConnectorError("ردیف پیدا نشد.")
         u = self._current_user()
         admin = u is None or u.get("role") == "admin"

@@ -1,0 +1,10 @@
+{
+ "ساختار پایگاه داده ({0}) از این نسخه‌ی برنامه ({1}) تازه‌تر است؛ نسخه‌ی تازه‌تر AutoKRP را نصب کنید.": "The database structure ({0}) is newer than this version of the app ({1}); install the newer AutoKRP.",
+ "قانون وب فایروال ویندوز به‌روز شد (قانون‌های Trap/Syslog قبلی ماند)": "Windows Firewall web rule updated (the previous Trap/Syslog rules were kept)",
+ "به‌روزرسانی %s ← %s: پشتیبان فایل‌های داده در %s": "Update %s → %s: data files backed up to %s",
+ "پشتیبان پیش از به‌روزرسانی گرفته نشد: فضای خالی کم است (%d MB لازم، %d MB آزاد)": "No backup before the update: not enough free space (%d MB needed, %d MB free)",
+ "پشتیبان پیش از به‌روزرسانی ناموفق بود": "Backup before the update failed",
+ "ثبت نسخه‌ی برنامه ناموفق بود": "Saving the app version failed",
+ "ادامه": "Continue",
+ "پوشه": "Folder"
+}

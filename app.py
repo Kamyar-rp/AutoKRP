@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import socket
 import sys
 from pathlib import Path
@@ -104,6 +105,48 @@ def control(cmd, demo=False, timeout=5):
         return None
 
 
+RESUME_FILE = ".resume_task"
+STATUS_H = 640            # 1.59.9: ارتفاع ۷۰۰ روی صفحه‌ی ۷۶۸ پیکسلی (با نوار عنوان و taskbar) دکمه‌ی پایین را می‌برید
+
+
+def _status_pos(w=620, h=None):
+    """1.59.10 (F3): پنجره‌ی وضعیت سرور وسط ناحیه‌ی کاری صفحه‌ی اصلی (تست ویندوز 1.59.9: جای آبشاری، پایینش زیر taskbar).
+    ناحیه‌ی کاری از SPI_GETWORKAREA (پیکسل فیزیکی؛ pywebview فرایند را DPI-aware می‌کند) ÷ مقیاس DPI ← پیکسل منطقی."""
+    h = h or STATUS_H
+    if sys.platform != "win32":
+        return {}
+    try:
+        import ctypes
+        from ctypes import wintypes
+        rc = wintypes.RECT()
+        if not ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(rc), 0):   # SPI_GETWORKAREA
+            return {}
+        try:
+            sc = max(1.0, ctypes.windll.user32.GetDpiForSystem() / 96.0)
+        except AttributeError:
+            sc = 1.0
+        L, T, W, H = rc.left / sc, rc.top / sc, (rc.right - rc.left) / sc, (rc.bottom - rc.top) / sc
+        return {"x": int(L + max(0, (W - w) / 2)), "y": int(T + max(0, (H - h) / 2))}
+    except Exception:  # noqa — هر خطا: جای پیش‌فرض ویندوز
+        return {}
+
+
+def _resume_server():
+    """1.59.7: بعد از به‌روزرسانی با فایل نصبی: اگر --quit-running سرور پس‌زمینه را بسته بود، تسک دوباره اجرا می‌شود
+    (مانیتورینگ تا ری‌استارت بعدی ویندوز خاموش نمی‌ماند)."""
+    f = paths.root() / APP_ID / RESUME_FILE
+    if not f.is_file():
+        return 0
+    try:
+        f.unlink()
+    except OSError:
+        pass
+    from autokrp import winsvc
+    if not (winsvc.supported() and winsvc.installed()):
+        return 0
+    return 0 if winsvc.run_now() else 1
+
+
 def _quit_running(wait=25):
     """1.52: بستن نمونه‌ی در حال اجرا (کلاینت، سرور پنجره‌دار یا پس‌زمینه، Demo) پیش از به‌روزرسانی با فایل نصبی.
     فقط با توکن همین کاربر ویندوز (CTL_FILE)؛ پوشه‌ی داده‌ای نمی‌سازد. خروجی ۰ = چیزی در حال اجرا نماند."""
@@ -114,8 +157,20 @@ def _quit_running(wait=25):
         if not (d / CTL_FILE).is_file():
             continue
         paths.set_demo(demo)
+        headless = False
+        if not demo:
+            try:
+                headless = bool(json.loads(control("INFO", demo) or b"{}").get("headless"))
+            except ValueError:
+                pass
         if control("STOP", demo) is None:
             continue
+        if headless:
+            # 1.59.7: سرور پس‌زمینه (تسک) بسته شد؛ نصب‌کننده بعد از کپی با --resume-server دوباره اجرایش می‌کند
+            try:
+                (d / RESUME_FILE).write_text("1", encoding="ascii")
+            except OSError:
+                pass
         t0 = _t.time()
         while _t.time() - t0 < wait:
             try:
@@ -189,9 +244,102 @@ def _loc_err_en(msg):
     return msg
 
 
-def _choose_mode(ask_location=False):
+VER_FILE = ".app_version"
+UPG_DIR = "upgrade_backups"
+UPG_KEEP = 2
+# فایل‌های بالای پوشه‌ی داده که در پشتیبان پیش از به‌روزرسانی نمی‌آیند (موقت/کنترل)؛ زیرپوشه‌ها هم نمی‌آیند
+_UPG_SKIP = {".ctl_token", VER_FILE, ".resume_task", "terms_accepted.json"}
+_FIRST_RUN_FILES = {".mode", ".lang", ".location"}     # 1.59.10: فقط انتخاب‌های اولین اجرا (G7)
+
+
+def _ver_tuple(v):
+    out = []
+    for p in str(v or "").split("."):
+        m = re.match(r"\d+", p)
+        out.append(int(m.group()) if m else 0)
+    return tuple(out)
+
+
+def _upgrade_check(args, quiet=False):
+    """1.59.7: هر بار که نسخه‌ی برنامه عوض شده (به‌روزرسانی)، پیش از باز شدن داده‌ها از فایل‌های اصلی پوشه‌ی داده
+    (پایگاه داده‌ی محلی، تنظیمات، اسرار، کاربران سرور، گواهی) یک نسخه در «upgrade_backups» گرفته می‌شود (همان فایل‌های
+    رمزشده؛ دو نسخه‌ی آخر می‌ماند). داده‌ای که نسخه‌ی تازه‌تر برنامه نوشته با نسخه‌ی قدیمی‌تر باز نمی‌شود.
+    فقط پس از گرفتن قفل تک‌نمونه صدا زده شود (هیچ نمونه‌ی دیگری در حال نوشتن نیست). خروجی False = ادامه نده."""
+    if args.demo:
+        return True
+    import shutil
+    import time as _t
+    from autokrp import __version__
+    log = logging.getLogger("autokrp.app")
+    d = paths.data_dir()
+    vf = d / VER_FILE
+    try:
+        prev = vf.read_text(encoding="ascii").strip() if vf.is_file() else ""
+    except (OSError, ValueError):
+        prev = ""
+    if prev == __version__:
+        return True
+    if prev and _ver_tuple(prev) > _ver_tuple(__version__) and not getattr(args, "allow_downgrade", False):
+        msg = paths.L(f"داده‌های این نصب را نسخه‌ی تازه‌تر AutoKRP ({prev}) نوشته است و این نسخه ({__version__}) قدیمی‌تر است. "
+                      f"برای جلوگیری از خراب شدن داده‌ها اجرا نمی‌شود؛ نسخه‌ی {prev} یا تازه‌تر را نصب کنید.\n"
+                      f"(برگشت به نسخه‌ی قبل: پشتیبان پیش از به‌روزرسانی در پوشه‌ی زیر است)\n{d / UPG_DIR}",
+                      f"The data of this installation was written by a newer AutoKRP ({prev}); this version ({__version__}) is older. "
+                      f"It will not start, to protect the data; install version {prev} or newer.\n"
+                      f"(To go back to the older version, the backup taken before the update is in)\n{d / UPG_DIR}")
+        log.error("%s", msg)
+        if quiet:
+            print(msg)
+        else:
+            message_box(msg)
+        return False
+    files = [f for f in d.iterdir() if f.is_file() and f.name not in _UPG_SKIP] if d.is_dir() else []
+    # 1.59.10 (G7): نصب تازه (بدون .app_version) که فقط انتخاب‌های اولین اجرا را دارد (.mode، .lang، .location) پشتیبان لازم ندارد؛
+    # نصب پیش از 1.59.7 (بدون .app_version ولی با داده) مثل قبل پشتیبان «unknown» می‌گیرد
+    if not prev and all(f.name in _FIRST_RUN_FILES for f in files):
+        files = []
+    if prev or files:
+        # نصب قبلی بدون .app_version (پیش از 1.59.7) هم داده دارد: پشتیبان با نام «unknown»
+        try:
+            size = sum(f.stat().st_size for f in files)
+            free = shutil.disk_usage(d).free
+            if files and free < size * 2 + 200 * 1024 * 1024:
+                log.warning("پشتیبان پیش از به‌روزرسانی گرفته نشد: فضای خالی کم است (%d MB لازم، %d MB آزاد)",
+                            (size * 2) >> 20, free >> 20)
+            elif files:
+                stamp = _t.strftime("%Y%m%d-%H%M%S")
+                dst = d / UPG_DIR / f"{prev or 'unknown'}_to_{__version__}_{stamp}"
+                dst.mkdir(parents=True, exist_ok=False)
+                for f in files:
+                    shutil.copy2(f, dst / f.name)
+                old = sorted((p for p in (d / UPG_DIR).iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime)
+                for p in old[:-UPG_KEEP]:
+                    shutil.rmtree(p, ignore_errors=True)
+                log.warning("به‌روزرسانی %s ← %s: پشتیبان فایل‌های داده در %s", prev or "?", __version__, dst)
+        except OSError:
+            log.exception("پشتیبان پیش از به‌روزرسانی ناموفق بود")
+    try:
+        vf.write_text(__version__, encoding="ascii")
+    except OSError:
+        log.exception("ثبت نسخه‌ی برنامه ناموفق بود")
+    return True
+
+
+def _relaunch():
+    """pywebview در یک فرایند فقط یک بار start می‌شود؛ برنامه پس از انتخاب‌های اولین اجرا دوباره اجرا می‌شود."""
+    import subprocess
+    cmd = [sys.executable] + ([] if getattr(sys, "frozen", False) else [sys.argv[0]]) + sys.argv[1:]
+    # نسخه‌ی exe (PyInstaller onefile): فرزند نباید پوشه‌ی موقت _MEI همین فرایند را به ارث ببرد؛ این پوشه با
+    # بسته شدن ما پاک می‌شود و فرزند در بارگذاری DLLها (مثلاً ClrLoader برای پنجره) با خطای 0x7e شکست می‌خورد
+    env = {k: v for k, v in os.environ.items() if not (k.startswith("_PYI_") or k == "_MEIPASS2")}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    subprocess.Popen(cmd, close_fds=True, env=env)  # nosec B603 — اجرای دوباره‌ی همین برنامه
+    return 0
+
+
+def _choose_mode(ask_location=False, fixed=None):
     """اولین اجرا: (۱.۲۶.۲) انتخاب پوشه‌ی داده و انتخاب کلاینت یا سرور. خروجی: "client" | "server" | None(انصراف).
-    پوشه‌ی داده بعداً فقط با پاک‌سازی کامل (RESET) عوض می‌شود."""
+    پوشه‌ی داده بعداً فقط با پاک‌سازی کامل (RESET) عوض می‌شود.
+    1.59.7: fixed = بیلد تک‌حالته (مثلاً مانیتورینگ سرور): فقط متن پذیرش و پوشه‌ی داده، بدون انتخاب حالت."""
     try:
         import webview
     except Exception:
@@ -221,20 +369,21 @@ max-height:52vh;overflow:auto;font-size:12.8px;line-height:1.9;color:#cfd9e4}#tb
 <div class=row><input id=p spellcheck=false><button class=g id=br data-t=br>انتخاب پوشه…</button></div>
 <div class=m id=msg></div>
 <p class=s style="margin:6px 0 0" data-t=note>پایگاه داده، تنظیمات، اسرار، لاگ‌ها، داده‌ی مانیتورینگ و پشتیبان‌ها همه داخل زیرپوشه‌ی <span class=ltr>AutoKRP</span> همین مسیر و رمزشده ذخیره می‌شوند. پیش‌فرض: پوشه‌ی کاربر ویندوز. درایو شبکه پشتیبانی نمی‌شود.</p>
-<div id=ex><button id=useEx data-t=useEx>ادامه با داده‌ی موجود</button></div></div><h3 data-t=h2>۲. حالت اجرا</h3></div>
+<div id=ex><button id=useEx data-t=useEx>ادامه با داده‌ی موجود</button></div></div><h3 data-t=h2 id=h2>۲. حالت اجرا</h3></div>
+<div id=fixBox style="display:none;margin-top:14px"><button id=go data-t=go>ادامه</button></div>
 <div id=modes class=cards>
 <div class=c data-m=client><b data-t=cT>کلاینت (دسکتاپ)</b><p data-t=cD>یک کاربر روی همین کامپیوتر، با پنجره‌ی برنامه. بدون رمز (DPAPI) یا یک رمز اصلی.</p></div>
 <div class=c data-m=server><b data-t=sT>سرور (وب)</b><p data-t=sD>چند کاربر از طریق مرورگر و HTTPS، با نقش‌های ادمین/اپراتور/فقط‌خواندنی.</p></div>
 </div></div></div>
 <script>
-const ASK=__ASK__, NEED=__NEED__, TERMS=__TERMS__, $=(x)=>document.getElementById(x);
+const ASK=__ASK__, FIXED=__FIXED__, NEED=__NEED__, TERMS=__TERMS__, $=(x)=>document.getElementById(x);
 const TU={fa:{c:"متن بالا را خواندم و می‌پذیرم",y:"می‌پذیرم و ادامه",n:"نمی‌پذیرم (خروج)",s:"English"},en:{c:"I have read and accept the text above",y:"Accept and continue",n:"I do not accept (exit)",s:"فارسی"}};
 function drawTerms(){const l=LANG,u=TU[l],w=$("terms");w.dir=l==="fa"?"rtl":"ltr";$("tt").textContent=TERMS.title[l];
  $("tb").innerHTML="";TERMS.text[l].forEach((t)=>{const p=document.createElement("p");p.textContent=t;$("tb").appendChild(p);});
  $("tcl").textContent=u.c;$("tyes").textContent=u.y;$("tno").textContent=u.n;$("lang0").textContent=u.s;$("lang0").style.float=l==="fa"?"left":"right";}
 const EN={sub:"First run (can be changed later only with a full reset, RESET).",h1:"1. Data folder",br:"Choose folder…",
  note:"The database, settings, secrets, logs, monitoring data and backups are all stored encrypted in the <span class=ltr>AutoKRP</span> subfolder of this location. Default: the Windows user folder. Network drives are not supported.",
- useEx:"Continue with existing data",h2:"2. Run mode",cT:"Client (desktop)",cD:"One user on this computer, with the app window. No password (DPAPI) or one master password.",
+ useEx:"Continue with existing data",go:"Continue",h2:"2. Run mode",cT:"Client (desktop)",cD:"One user on this computer, with the app window. No password (DPAPI) or one master password.",
  sT:"Server (web)",sD:"Several users through a browser over HTTPS, with admin/operator/read-only roles."};
 const FA={};document.querySelectorAll("[data-t]").forEach((e)=>FA[e.dataset.t]=e.innerHTML);
 let EX=null, T=0, LANG=__LANG__, LAST=null;
@@ -243,14 +392,14 @@ function setLang(l){LANG=l;document.documentElement.lang=l;document.documentElem
  document.querySelectorAll("h3,.loc").forEach((e)=>e.style.textAlign=l==="fa"?"right":"left");
  document.querySelectorAll("[data-t]").forEach((e)=>e.innerHTML=(l==="fa"?FA:EN)[e.dataset.t]);$("lang").textContent=l==="fa"?"English":"فارسی";if(LAST)show(LAST);}
 function show(r){LAST=r;const m=$("msg");EX=null;$("ex").style.display="none";const en=LANG==="en";
- if(!r.ok){m.className="m er";m.textContent=en&&r.error_en?r.error_en:r.error;$("modes").className="cards dis";return;}
+ if(!r.ok){m.className="m er";m.textContent=en&&r.error_en?r.error_en:r.error;$("modes").className="cards dis";if(FIXED)$("go").disabled=true;return;}
  m.className="m ok";m.innerHTML=(en?"Data in: ":"داده‌ها در: ")+"<span class=ltr></span>"+(r.free_gb!=null?(en?" — free space: ":" — فضای آزاد: ")+r.free_gb+" GB":"");
  m.querySelector(".ltr").textContent=r.dir;
  if(r.existing){EX=r.existing;const md=r.existing==="server"?(en?"server":"سرور"):(en?"client":"کلاینت");
   m.innerHTML+=en?"<br>Existing AutoKRP data ("+md+" mode) was found here; it will be used and the mode stays the same."
    :"<br>داده‌ی قبلی AutoKRP (حالت «"+md+"») در این مسیر پیدا شد؛ همان استفاده می‌شود و حالت عوض نمی‌شود.";
-  $("ex").style.display="block";$("modes").className="cards dis";}
- else $("modes").className="cards";}
+  $("ex").style.display="block";$("modes").className="cards dis";if(FIXED)$("go").disabled=true;}
+ else {$("modes").className="cards";if(FIXED)$("go").disabled=false;}}
 async function check(){const r=await api().check($("p").value);show(r);}
 function initTerms(){if(!NEED){$("terms").style.display="none";$("main").style.display="block";return init();}
  drawTerms();$("lang0").onclick=()=>{LANG=LANG==="fa"?"en":"fa";api().lang(LANG);drawTerms();};
@@ -258,6 +407,8 @@ function initTerms(){if(!NEED){$("terms").style.display="none";$("main").style.d
  $("tno").onclick=()=>api().decline();
  $("tyes").onclick=async()=>{await api().accept(TERMS.v);$("terms").style.display="none";$("main").style.display="block";init();};}
 function init(){setLang(LANG);$("lang").onclick=()=>{setLang(LANG==="fa"?"en":"fa");api().lang(LANG);};
+ if(FIXED){$("modes").style.display="none";$("h2").style.display="none";$("fixBox").style.display="block";$("go").disabled=true;
+  $("go").onclick=()=>api().pick(FIXED,$("p").value);}
  if(!ASK){$("modes").className="cards";return;}
  $("locBox").style.display="block";$("p").value=__DEF__;check();
  $("p").addEventListener("input",()=>{clearTimeout(T);T=setTimeout(check,400);});
@@ -265,7 +416,7 @@ function init(){setLang(LANG);$("lang").onclick=()=>{setLang(LANG==="fa"?"en":"f
  $("useEx").onclick=()=>api().pick(EX,$("p").value);}
 document.querySelectorAll("[data-m]").forEach((c)=>c.onclick=()=>api().pick(c.dataset.m,ASK?$("p").value:""));
 window.addEventListener("pywebviewready",initTerms);
-</script></body></html>""".replace("__ASK__", "true" if ask_location else "false").replace("__DEF__", json.dumps(default)).replace("__LANG__", json.dumps(paths.ui_lang())).replace(
+</script></body></html>""".replace("__ASK__", "true" if ask_location else "false").replace("__FIXED__", json.dumps(fixed)).replace("__DEF__", json.dumps(default)).replace("__LANG__", json.dumps(paths.ui_lang())).replace(
         "__NEED__", "true" if need_terms else "false").replace("__TERMS__", json.dumps(terms.payload(), ensure_ascii=False).replace("</", "<\\/"))
     chosen = {"m": None, "root": None}
 
@@ -308,7 +459,7 @@ window.addEventListener("pywebviewready",initTerms);
                 except ValueError:
                     return False
                 if info["existing"]:
-                    m = info["existing"]                    # حالت داده‌ی قبلی عوض نمی‌شود
+                    m = info["existing"]                    # حالت داده‌ی قبلی عوض نمی‌شود (بیلد تک‌حالته: main پیام می‌دهد)
                 chosen["root"] = Path(str(root).strip().strip('"'))
             chosen["m"] = "server" if m == "server" else "client"
             for w in webview.windows:
@@ -413,10 +564,10 @@ def _cert_fp():
 
 
 _STATUS_CSS = """body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1622;color:#e6edf6;font-family:Tahoma,sans-serif;text-align:center}
-a{color:#2f9e8f;direction:ltr;display:inline-block;margin:3px 0}.b{background:#101c2a;border:1px solid #223040;border-radius:14px;padding:22px 30px;max-width:540px}
-.fp{direction:ltr;font-family:Consolas,monospace;font-size:10.5px;color:#8aa0b4;word-break:break-all;margin-top:6px}
-.h{color:#8aa0b4;font-size:12.5px;line-height:1.8}.sv{border-top:1px solid #223040;margin-top:14px;padding-top:12px}
-button{background:#2f9e8f;color:#04120f;border:0;border-radius:8px;padding:7px 14px;font-family:inherit;font-weight:700;cursor:pointer;margin:4px}
+a{color:#2f9e8f;direction:ltr;display:inline-block;margin:0}.b{background:#101c2a;border:1px solid #223040;border-radius:14px;padding:10px 22px;max-width:540px;margin:4px 0}h2{font-size:18px;margin:0 0 2px}p{margin:4px 0}
+.fp{direction:ltr;font-family:Consolas,monospace;font-size:10.5px;color:#8aa0b4;word-break:break-all;margin-top:2px}
+.h{color:#8aa0b4;font-size:12px;line-height:1.45}.sv{border-top:1px solid #223040;margin-top:6px;padding-top:6px}
+button{background:#2f9e8f;color:#04120f;border:0;border-radius:8px;padding:6px 14px;font-family:inherit;font-weight:700;cursor:pointer;margin:3px}
 button.g{background:#1b2a3a;color:#e6edf6}button:disabled{opacity:.55}.st{font-size:13px}.ok{color:#5fd1a0}.no{color:#e0b060}.err{color:#ff8080}"""
 
 _STATUS_JS = r"""const A=()=>window.pywebview.api;
@@ -433,11 +584,11 @@ function draw(s){const e=document.getElementById("svc");if(!e||!s)return;
    :'<button onclick="call(\'svc_install\')">'+T('فعال کردن','Enable')+'</button>')+
   '<p class="h">'+T('نیاز به دسترسی Administrator (پنجره‌ی UAC). سرور با همین کاربر ویندوز اجرا می‌شود و داده‌ها تا اولین ورود در وب قفل می‌مانند.','Requires Administrator access (UAC prompt). The server runs as this Windows user and data stays locked until the first web sign-in.')+'</p>'+fwHtml(s.fw,T);}
 function fwHtml(f,T){if(!f)return "";
- const st=f.synced?'<b class="ok">'+T('به‌روز','Up to date')+'</b>':f.has?'<b class="no">'+T('با تنظیمات فعلی هم‌خوان نیست','Out of date')+'</b>':'<b class="no">'+T('قانونی ساخته نشده','No rule yet')+'</b>';
+ const st=f.synced===null?'<b>'+T('بعد از اولین ورود در وب معلوم می‌شود','Known after the first web sign-in')+'</b>':f.synced?'<b class="ok">'+T('به‌روز','Up to date')+'</b>':f.has?'<b class="no">'+T('با تنظیمات فعلی هم‌خوان نیست','Out of date')+'</b>':'<b class="no">'+T('قانونی ساخته نشده','No rule yet')+'</b>';
  const web=f.nets?T(f.nets+' شبکه‌ی مجاز (تنظیمات ← امنیت ← سرور وب)',f.nets+' allowed network(s) (Settings → Security → Web server)'):T('همه‌ی آدرس‌ها (شبکه‌ی مجازی تعریف نشده)','any address (no allowed networks set)');
  const ev=(f.udp.length?'UDP '+f.udp.join(', '):'')+(f.tcp.length?(f.udp.length?' · ':'')+'TCP '+f.tcp.join(', '):'');
  return '<div class="sv"><div class="st">'+T('فایروال ویندوز: ','Windows Firewall: ')+st+'</div><p class="h">'+T('وب (هر پورتی که سرور گوش بدهد): ','Web (whatever port the server listens on): ')+web+'<br>Trap/Syslog: '+(ev||T('خاموش','off'))+
-  (f.known?'':'<br>'+T('پورت‌های Trap/Syslog بعد از اولین ورود در وب معلوم می‌شوند.','Trap/Syslog ports are known after the first web sign-in.'))+'</p>'+
+  (f.known?'':'<br>'+T('پورت‌های Trap/Syslog بعد از اولین ورود در وب معلوم می‌شوند؛ تا آن وقت دکمه‌ی زیر قانون‌های Trap/Syslog قبلی را نگه می‌دارد.','Trap/Syslog ports are known after the first web sign-in; until then the button below keeps the existing Trap/Syslog rules.'))+'</p>'+
   '<button onclick="call(\'svc_fw\')">'+T('به‌روزرسانی فایروال ویندوز','Update Windows Firewall')+'</button></div>';}
 window.addEventListener("pywebviewready",async()=>draw(await A().svc_status()));"""
 
@@ -450,8 +601,8 @@ def _status_html(title, urls, fp, note):
     return f"""<!doctype html><html lang={'fa dir=rtl' if fa else 'en dir=ltr'}><head><meta charset=utf-8><style>{_STATUS_CSS}</style></head>
 <body><div class=b><h2 style="margin-top:0">{_html.escape(title)}</h2>
 <p class=h>{paths.L('از مرورگر یکی از این آدرس‌ها را باز کنید:', 'Open one of these addresses in a browser:')}</p>{links}
-{'<p class=h style="margin-top:14px">' + paths.L('اثر انگشت گواهی (برای بررسی هشدار مرورگر):', 'Certificate fingerprint (to verify the browser warning):') + '</p><div class=fp>' + _html.escape(fp) + '</div>' if fp else ''}
-<p class=h style="margin-top:14px">{note}</p>
+{'<p class=h style="margin-top:8px">' + paths.L('اثر انگشت گواهی (برای بررسی هشدار مرورگر):', 'Certificate fingerprint (to verify the browser warning):') + '</p><div class=fp>' + _html.escape(fp) + '</div>' if fp else ''}
+<p class=h style="margin-top:8px">{note}</p>
 <div class=sv id=svc></div><p class=h id=msg></p></div><script>const FA={'true' if fa else 'false'};{_STATUS_JS}</script></body></html>"""
 
 
@@ -473,18 +624,27 @@ class _SvcApi:
         inst = winsvc.installed()
         task_exe = winsvc.task_program() if inst else None
         from autokrp import serverauth
-        fw = winsvc.fw_status(serverauth.config().get("allowed_networks") or [], self._live()) if winsvc.supported() else None
+        fw = winsvc.fw_status(serverauth.config().get("allowed_networks") or [], self._raw_live()) if winsvc.supported() else None
         return {"supported": winsvc.supported() and not self.demo, "installed": inst,
                 "background": self.background, "stale": bool(task_exe and not winsvc.same_program(task_exe)),
                 "task_exe": task_exe or "", "fw": fw}
 
-    def _live(self):
+    def _raw_live(self):
         from autokrp import winsvc
         try:
             v = self.fw_live() if self.fw_live else None
         except Exception:  # noqa — سرور پس‌زمینه پاسخ نداد
             v = None
         return v if isinstance(v, dict) else winsvc.fw_live()
+
+    def _live(self):
+        """پورت‌های قابل اعمال (F1: پیش از اولین ورود ← پورت‌های آخرین قانون یا نگه داشتن قانون‌های موجود)."""
+        from autokrp import winsvc
+        try:
+            v = self.fw_live() if self.fw_live else None
+        except Exception:  # noqa — سرور پس‌زمینه پاسخ نداد
+            v = None
+        return winsvc.fw_resolve(v if isinstance(v, dict) else winsvc.fw_live())
 
     def svc_fw(self):
         """قانون‌های فایروال ویندوز با شبکه‌های مجاز و پورت‌های Trap/Syslog فعلی (با UAC)."""
@@ -522,13 +682,13 @@ class _SvcApi:
 
 
 def _fw_args(live):
+    # 1.59.7: هر دو همیشه فرستاده می‌شوند (خالی = بدون قانون)؛ نبودنشان یعنی «همان پورت‌های قبلی» (نصب‌کننده)
+    # 1.59.10 (F1): پورت نامعلوم (keep) ← هیچ پرچمی، تا فرایند Administrator همان مسیر «پورت‌های قبلی / نگه داشتن» را برود
     live = live or {}
-    out = []
-    if live.get("udp"):
-        out += ["--fw-udp", ",".join(str(int(x)) for x in live["udp"])]
-    if live.get("tcp"):
-        out += ["--fw-tcp", ",".join(str(int(x)) for x in live["tcp"])]
-    return out
+    if live.get("keep"):
+        return []
+    return ["--fw-udp=" + ",".join(str(int(x)) for x in live.get("udp") or []),
+            "--fw-tcp=" + ",".join(str(int(x)) for x in live.get("tcp") or [])]
 
 
 def _csv_ports(v):
@@ -582,7 +742,8 @@ def _svc_do(action, user, quiet=True, live=None):
     try:
         cfg = serverauth.config()
         if action == "firewall":
-            r = winsvc.fw_apply(cfg.get("allowed_networks") or [], live.get("udp"), live.get("tcp"), cfg.get("port") or 8443)
+            r = winsvc.fw_apply(cfg.get("allowed_networks") or [], live.get("udp"), live.get("tcp"), cfg.get("port") or 8443,
+                                keep_events=bool(live.get("keep")))
             msg = _fw_msg(r)
             if not r.get("ok"):
                 raise winsvc.SvcError(msg)
@@ -593,7 +754,7 @@ def _svc_do(action, user, quiet=True, live=None):
             if paths.saved_mode() != "server":
                 raise winsvc.SvcError(paths.L("اجرای خودکار فقط برای حالت سرور است.", "Auto-start is only for server mode."))
             r = winsvc.install(user, paths.root(), cfg.get("port") or 8443, cfg.get("allowed_networks") or [],
-                               live.get("udp"), live.get("tcp"))
+                               live.get("udp"), live.get("tcp"), keep_events=bool(live.get("keep")))
             msg = paths.L("اجرای خودکار فعال شد؛ سرور از روشن شدن بعدی ویندوز در پس‌زمینه اجرا می‌شود.",
                           "Auto-start enabled; from the next Windows start the server runs in the background.") + (
                 "" if r.get("firewall") else paths.L(" (قانون فایروال ساخته نشد؛ پورت را دستی باز کنید.)",
@@ -624,6 +785,8 @@ def _run_server(args):
         return _background_window(args)
     atrest.set_server_mode(True)
     setup_logging()
+    if not _upgrade_check(args, quiet=headless):   # 1.59.7: پس از قفل تک‌نمونه و پیش از باز شدن داده‌ها
+        return 1
     log = logging.getLogger("autokrp.app")
     log.info("شروع در حالت سرور%s", " (پس‌زمینه)" if headless else "")
     info = {"url": None, "port": None, "error": None, "headless": headless}
@@ -690,7 +853,18 @@ def _run_server(args):
         status = _status_html(paths.L("سرور AutoKRP در حال اجراست", "AutoKRP server is running"), urls, _cert_fp(),
                               paths.L("اولین حساب ادمین فقط از همین سیستم (localhost) ساخته می‌شود.<br>با بستن این پنجره سرور متوقف می‌شود.",
                                       "The first admin account can only be created from this machine (localhost).<br>Closing this window stops the server."))
-        webview.create_window(paths.L("AutoKRP — سرور", "AutoKRP — Server"), html=status, js_api=api, width=620, height=700, background_color="#0b1622")
+        webview.create_window(paths.L("AutoKRP — سرور", "AutoKRP — Server"), html=status, js_api=api, width=620, height=STATUS_H, background_color="#0b1622",
+                              **_status_pos())
+
+        def close_on_stop():
+            # 1.59.8: فرمان STOP (--quit-running نصب‌کننده) فقط سرور را می‌بست و پنجره و فرایند زنده می‌ماند
+            stop.wait()
+            for w in list(webview.windows):
+                try:
+                    w.destroy()
+                except Exception:  # noqa — پنجره همزمان بسته شده
+                    pass
+        threading.Thread(target=close_on_stop, name="close-on-stop", daemon=True).start()
         webview.start(gui="edgechromium" if sys.platform == "win32" else None)
         return 0
     finally:
@@ -739,8 +913,8 @@ def _background_window(args):
                     'The server is running in the background (Windows auto-start); closing this window does not stop it.')
             + '<br><button class="g" id="bgStop" onclick="call(\'svc_stop_bg\')">' + paths.L('توقف سرور پس‌زمینه', 'Stop background server') + '</button>')
     status = _status_html(paths.L("سرور AutoKRP در پس‌زمینه", "AutoKRP server in the background"), urls, _cert_fp(), note)
-    webview.create_window(paths.L("AutoKRP — سرور (پس‌زمینه)", "AutoKRP — Server (background)"), html=status, js_api=api, width=620, height=700,
-                          background_color="#0b1622")
+    webview.create_window(paths.L("AutoKRP — سرور (پس‌زمینه)", "AutoKRP — Server (background)"), html=status, js_api=api, width=620, height=STATUS_H,
+                          background_color="#0b1622", **_status_pos())
     webview.start(gui="edgechromium" if sys.platform == "win32" else None)
     return 0
 
@@ -758,7 +932,8 @@ def _svc_cli(args):
     if winsvc.is_admin():
         if action == "remove":
             control("STOP", False)
-        return _svc_do(action, args.svc_user or winsvc.current_user(), quiet=args.quiet)
+        # 1.59.10 (F1): نصب هم پورت‌ها را از پرچم‌ها (یا پورت‌های قبلی) می‌گیرد؛ قبلاً پورت خالی ← قانون Trap/Syslog پاک می‌شد
+        return _svc_do(action, args.svc_user or winsvc.current_user(), quiet=args.quiet, live=_cli_live(args))
     if args.quiet:                 # فرزند بالابرده‌شده ولی هنوز بدون دسترسی
         return 1
     if action == "remove":
@@ -766,6 +941,37 @@ def _svc_cli(args):
     ok, msg = _svc_elevated(action)
     message_box(msg or (paths.L("انجام شد.", "Done.") if ok else paths.L("انجام نشد.", "Failed.")))
     return 0 if ok else 1
+
+
+def _remove_own_service():
+    """1.59.8: حذف برنامه — تسک «AutoKRP Server» فقط اگر به همین فایل برنامه اشاره می‌کند حذف می‌شود (نسخه‌ی دیگر
+    AutoKRP کنار این نصب ممکن است همان نام تسک را داشته باشد). خروجی همیشه ۰.
+    1.59.9: فایل‌های موقتی که خود نصب‌کننده ساخته (.svc_result، .resume_task) پاک می‌شوند؛ هیچ داده‌ی دیگری دست نمی‌خورد."""
+    from autokrp import winsvc
+    for n in (".svc_result", RESUME_FILE):
+        try:
+            (paths.data_dir() / n).unlink()
+        except OSError:
+            pass
+    if not (winsvc.supported() and winsvc.is_admin() and winsvc.installed()):
+        return 0
+    tp = winsvc.task_program()
+    if tp and winsvc.same_program(tp):
+        try:
+            winsvc.remove()
+        except Exception:  # noqa — حذف برنامه نباید به‌خاطر تسک متوقف شود
+            return 0
+    return 0
+
+
+def _cli_live(args):
+    """پورت‌های Trap/Syslog از پرچم‌های خط فرمان. نبودن هر دو پرچم (نصب‌کننده، یا پنجره‌ی سرور پیش از اولین ورود):
+    همان پورت‌های آخرین قانون؛ اگر آن هم نیست قانون‌های Trap/Syslog موجود دست نمی‌خورد (1.59.7، 1.59.10 F1)."""
+    from autokrp import winsvc
+    if args.fw_udp is None and args.fw_tcp is None:
+        live = winsvc.fw_saved_ports()
+        return live if live is not None else {"udp": [], "tcp": [], "keep": True}
+    return {"udp": _csv_ports(args.fw_udp), "tcp": _csv_ports(args.fw_tcp)}
 
 
 def _fw_cli(args):
@@ -778,7 +984,7 @@ def _fw_cli(args):
     if args.firewall_apply and buildcfg.MODE == "client":
         return 0                   # بیلد فقط کلاینت: سروری نیست که قانون بخواهد
     action = "firewall" if args.firewall_apply else "fwremove"
-    live = {"udp": _csv_ports(args.fw_udp), "tcp": _csv_ports(args.fw_tcp)}
+    live = _cli_live(args)
     if winsvc.is_admin():
         return _svc_do(action, args.svc_user or winsvc.current_user(), quiet=args.quiet, live=live)
     if args.quiet:
@@ -815,6 +1021,9 @@ def main():
     ap.add_argument("--fw-tcp", help=argparse.SUPPRESS)
     ap.add_argument("--quiet", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--quit-running", action="store_true", help="close a running AutoKRP (used by the installer before updating)")
+    ap.add_argument("--resume-server", action="store_true", help="start the background server task again if --quit-running stopped it (installer)")
+    ap.add_argument("--remove-own-service", action="store_true", help=argparse.SUPPRESS)   # 1.59.8: حذف‌کننده
+    ap.add_argument("--allow-downgrade", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--local-db", action="store_true", help="ignore the MySQL settings and use the local database")
     ap.add_argument("--memdiag", action="store_true", help="log memory use every minute to logs\\memdiag.txt (diagnostics)")
     ap.add_argument("--memdiag-trace", action="store_true", help="with --memdiag: trace Python allocations (tracemalloc); slows the app")
@@ -837,6 +1046,10 @@ def main():
             paths.set_root(loc)
     if args.quit_running:
         return _quit_running()
+    if args.resume_server:
+        return _resume_server()
+    if args.remove_own_service:
+        return _remove_own_service()
     if args.install_service or args.remove_service:
         return _svc_cli(args)
     if args.firewall_apply or args.firewall_remove:
@@ -858,23 +1071,22 @@ def main():
         message_box(paths.L(f"داده‌های این نصب برای حالت «{saved}» است. حالت فقط با پاک‌سازی کامل (RESET) عوض می‌شود.",
                             f"This installation's data is for “{saved}” mode. The mode can only be changed with a full reset (RESET)."))
         return 1
+    first_real = not args.demo and not args.data_root and paths.saved_location() is None
+    if buildcfg.MODE in ("client", "server") and not saved and first_real:
+        # 1.59.7: بیلد تک‌حالته (مثلاً مانیتورینگ سرور) هم در اولین اجرا پوشه‌ی داده را می‌پرسد؛ قبلاً حالت مستقیم
+        # ذخیره می‌شد و داده بی‌پرسش در پوشه‌ی پیش‌فرض ویندوز ساخته می‌شد
+        if _choose_mode(ask_location=True, fixed=buildcfg.MODE) is None:
+            return 0
+        return _relaunch()
     mode = want or saved
     if want and not saved:
         paths.save_mode(want)
     if mode is None:
         # پوشه‌ی داده فقط در اولین اجرای واقعی پرسیده می‌شود (نه Demo، نه وقتی از قبل انتخاب شده یا --data-root داده شده)
-        mode = _choose_mode(ask_location=not args.demo and not args.data_root and paths.saved_location() is None)
+        mode = _choose_mode(ask_location=first_real)
         if mode is None:
             return 0
-        # pywebview در یک فرایند فقط یک بار start می‌شود؛ برنامه با حالت انتخاب‌شده دوباره اجرا می‌شود
-        import subprocess
-        cmd = [sys.executable] + ([] if getattr(sys, "frozen", False) else [sys.argv[0]]) + sys.argv[1:]
-        # نسخه‌ی exe (PyInstaller onefile): فرزند نباید پوشه‌ی موقت _MEI همین فرایند را به ارث ببرد؛ این پوشه با
-        # بسته شدن ما پاک می‌شود و فرزند در بارگذاری DLLها (مثلاً ClrLoader برای پنجره) با خطای 0x7e شکست می‌خورد
-        env = {k: v for k, v in os.environ.items() if not (k.startswith("_PYI_") or k == "_MEIPASS2")}
-        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-        subprocess.Popen(cmd, close_fds=True, env=env)  # nosec B603 — اجرای دوباره‌ی همین برنامه
-        return 0
+        return _relaunch()
     paths.set_mode(mode)
     if args.local_db:            # MySQL در دسترس نیست و کاربر می‌خواهد با پایگاه داده‌ی محلی (خالی) ادامه دهد
         from autokrp import dbmysql
@@ -906,6 +1118,8 @@ def main():
             atrest.migrate_plain_files()   # داده‌های ساده‌ی نسخه‌های قبل؛ پیش از باز شدن فایل لاگ
             marker.write_bytes(b"")
     setup_logging()                 # پیش از باز شدن: لاگ‌ها در حافظه تا کلید برسد
+    if not _upgrade_check(args):    # 1.59.7: پس از قفل تک‌نمونه و پیش از باز شدن داده‌ها
+        return 1
 
     import webview
     from autokrp import clientgate

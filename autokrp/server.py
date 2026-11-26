@@ -178,6 +178,7 @@ class _Ctx:
     # و سقف خیلی بالاتر برای خود حساب (حمله‌ی پخش از چند IP). قبلاً شمارنده‌ی حساب با همان سقف عادی بود و هر کسی با
     # چند رمز غلط از هر جایی حساب ادمین را قفل می‌کرد.
     IP_FACTOR, USER_FACTOR = 3, 10
+    USER_DELAY_MAX = 30
 
     def _keys(self, ip, name, local=None):
         n = (name or "").strip().lower()
@@ -203,14 +204,20 @@ class _Ctx:
                     rec[0] = 0
                 rec[0] += 1
                 rec[2] = now
-                if th and rec[0] >= th * f:
+                if th and k.startswith("user:"):
+                    # 1.59.11: شمارنده‌ی سراسری حساب دیگر قفل کامل نمی‌کند (حمله‌ی قفل از ۱۰ IP با فقط نام کاربری)؛
+                    # از سقف به بعد هر تلاش فقط تأخیر کوتاه فزاینده می‌گیرد (۲، ۴، ۸ … تا USER_DELAY_MAX ثانیه).
+                    over = rec[0] - th * f
+                    if over >= 0:
+                        rec[1] = now + min(self.USER_DELAY_MAX, 2 ** min(over + 1, 10))
+                        if over == 0:
+                            locked_user = k[5:]
+                elif th and rec[0] >= th * f:
                     rec[1], rec[0] = now + win, 0
-                    if k.startswith("user:"):
-                        locked_user = k[5:]
                 self.fails[k] = rec
         if locked_user and self.api is not None:
             try:
-                msg = f"حساب «{locked_user}» به‌خاطر تلاش‌های ناموفق زیاد از چند آدرس {win // 60} دقیقه قفل شد (آخرین: {ip})"
+                msg = f"تلاش‌های ناموفق زیاد از چند آدرس روی حساب «{locked_user}»؛ ورود این حساب کند شد (آخرین: {ip})"
                 self.api._worker.emit("warn", msg, "security")
                 self.api._store.add_history("security", "ورود", "warn", msg, user="")
             except Exception:
@@ -226,9 +233,7 @@ class _Ctx:
             if rec and rec[0] > 0:
                 rec[0] -= 1                                     # همین تلاش موفق بود
             self.fails.pop(f"pair:{ip}|{n}", None)
-            rec = self.fails.get(f"user:{n}")
-            if rec and rec[1] <= time.time():
-                self.fails.pop(f"user:{n}", None)              # حساب قفل‌شده با ورود موفق از جای دیگر باز نمی‌شود
+            self.fails.pop(f"user:{n}", None)                  # 1.59.11: کندی حساب با ورود موفق برداشته می‌شود
 
     def purge_fails(self):
         now, win = time.time(), self._win()
@@ -250,14 +255,21 @@ class _Ctx:
                                   "pid": self._pid(sid)}
         return sid, csrf
 
+    def _idle(self, user=None):
+        """1.59.11: پایان نشست بی‌کاری همیشه فعال است (خالی/۰/نامعتبر = ۳۰ دقیقه)؛ استثنا فقط حساب فقط‌خواندنی
+        «نمایشگر دیواری» (NOC روی دیوار) که ادمین در فرم کاربر تیک می‌زند."""
+        if user and user.get("wall") and user.get("role") == "readonly":
+            return 0
+        try:
+            m = int(self.cfg.get("session_timeout_minutes") or 0)
+        except (TypeError, ValueError):
+            m = 0
+        return (m if m > 0 else 30) * 60
+
     def get_session(self, sid, touch=True):
         with self.lock:
             s = self.sessions.get(sid)
             if not s:
-                return None
-            idle = int(self.cfg.get("session_timeout_minutes") or 0) * 60
-            if idle and time.time() - s["seen"] > idle:
-                self.sessions.pop(sid, None)
                 return None
             try:
                 rec = serverauth.find(serverauth.load(), s["user"]["username"])
@@ -271,8 +283,12 @@ class _Ctx:
             if self._ad_expired(s, rec):
                 self.sessions.pop(sid, None)
                 return None
+            idle = self._idle(rec)
+            if idle and time.time() - s["seen"] > idle:
+                self.sessions.pop(sid, None)
+                return None
             s["user"] = {k: rec.get(k) for k in ("username", "role", "tools", "disabled", "shared_devices", "perms_v", "source",
-                                                  "groups", "access", "devices", "superuser", "access_v")}
+                                                  "groups", "access", "devices", "superuser", "access_v", "wall")}
             if touch:
                 s["seen"] = time.time()
             return s
@@ -393,9 +409,9 @@ class _Ctx:
             try:
                 self._purge_downloads()
                 self.purge_fails()
-                idle = int(self.cfg.get("session_timeout_minutes") or 0) * 60
                 with self.lock:
                     for k, s in list(self.sessions.items()):
+                        idle = self._idle(s["user"])
                         if (idle and time.time() - s["seen"] > idle) or self._ad_expired(s, s["user"]):
                             self.sessions.pop(k, None)
                 up = paths.data_dir() / "uploads"
@@ -970,7 +986,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self._json({"ok": True, "path": str(dest), "name": name})
 
     def _api(self, method):
-        sid, sess = self._session(touch=method not in ("get_state", "get_run", "ssh_job", "fgu_job", "ui_perf", "js_error", "term_read", "xfer_jobs", "mon_state"))
+        # 1.59.11: فقط کار واقعی کاربر نشست را تمدید می‌کند: ui_touch (رابط با هر کلیک/کلید/چرخ/لمس، حداکثر هر ۳۰ ثانیه
+        # می‌فرستد). قبلاً هر متدی جز چند متد (mon_rows، mon_noc، داشبورد…) تمدید می‌کرد و صفحه‌ی باز نشست بی‌کار را تا ابد نگه می‌داشت.
+        sid, sess = self._session(touch=method == "ui_touch")
         if not sess:
             return self._json({"ok": False, "error": "نشست منقضی شد", "locked": True}, 401)
         if not _eq(self.headers.get(CSRF_HEADER, ""), sess["csrf"]):

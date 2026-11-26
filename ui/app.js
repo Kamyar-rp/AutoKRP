@@ -557,6 +557,12 @@ const ROLE_FA = { admin: "ادمین", operator: "اپراتور", readonly: "ف
 let roleSig = "";
 const SEC_TOOLS = ["splunk", "abuse", "fortigate", "redmine", "dns", "scan", "intel"];
 function canTool(t) { return !S.state || !S.state.tools || S.state.tools.includes(t); }
+/** 1.59.10 (G4): داده‌ی کاربر لاتین (نام دستگاه، IP، پورت) با ارقام لاتین و بدون ترجمه؛ قلم رابط (VazirUI-FD) ارقام را فارسی
+ * نشان می‌دهد. متن فارسی همان esc ساده می‌ماند تا ترجمه شود. */
+function latTxt(t) {
+  const v = String(t ?? "");
+  return /^[\x20-\x7e·↓↑]+$/.test(v) && /[0-9A-Za-z]/.test(v) ? `<span class="ltr lat" data-no-i18n>${esc(v)}</span>` : esc(v);
+}
 function isAdmin() { return !S.state || !S.state.me || S.state.me.role === "admin"; }
 function isRO() { return !!(S.state && S.state.me && S.state.me.role === "readonly"); }
 /** 1.39: سطح دسترسی این کاربر به یک بخش یا زیرمجموعه (monitor.maps، term.tftp، …) */
@@ -3659,7 +3665,7 @@ async function renderUsers(box, sec, after) {
   box.innerHTML = `<h3>کاربران</h3>
     <div class="table-wrap inner"><table class="grid"><thead><tr><th class="nosort">نام کاربری</th><th class="nosort">نقش</th><th class="nosort">ابزارها</th><th class="nosort">وضعیت</th><th class="nosort">آخرین ورود</th><th class="nosort"></th></tr></thead><tbody>
     ${r.users.map((u) => `<tr><td class="ltr"><b>${esc(u.username)}</b>${u.username === r.me ? ` <span class="tag info">شما</span>` : ""}${u.source === "ad" ? ` <span class="tag mnt" title="کاربر Active Directory؛ نقش از گروه‌های AD">AD</span>` : ""}</td><td>${esc(r.roles[u.role] || u.role)}</td><td>${esc(tl(u))}</td>
-      <td>${u.disabled ? `<span class="tag mute">غیرفعال</span>` : `<span class="tag ok">فعال</span>`}</td><td class="ltr">${u.last_login ? fmtDate(u.last_login) : "—"}</td>
+      <td>${u.disabled ? `<span class="tag mute">غیرفعال</span>` : `<span class="tag ok">فعال</span>`}${u.wall ? ` <span class="tag info" title="نشست با بی‌کاری بسته نمی‌شود">نمایشگر دیواری</span>` : ""}${u.legacy_mon ? ` <span class="tag warn" title="این حساب پیش از 1.59.10 ساخته شده و با دسترسی قدیمی مانیتورینگ را می‌بیند؛ اگر نباید ببیند، در «دسترسی‌ها» گروهش را تعیین کنید.">دسترسی قدیمی — بازبینی کنید</span>` : ""}</td><td class="ltr">${u.last_login ? fmtDate(u.last_login) : "—"}</td>
       <td><button class="btn sm" data-ue="${esc(u.username)}">ویرایش</button>${u.username === r.me ? "" : ` <button class="btn sm danger-ghost" data-ud="${esc(u.username)}">حذف</button>`}</td></tr>`).join("")}</tbody></table></div>
     <div class="form-foot"><button class="btn primary" id="uAdd">+ کاربر تازه</button><span style="flex:1"></span>${r.server ? "" : `<button class="btn ghost" id="uOff">غیرفعال کردن کاربران</button>`}</div>`;
   const reload = () => (after ? after() : renderUsers(box, sec));
@@ -3742,13 +3748,18 @@ function userModal(u, done) {
       <label class="field"><span>تکرار رمز</span><input type="password" class="ltr" id="umPw2" autocomplete="new-password"></label></div>
     <div class="field" id="umGroups"><span>گروه‌های دسترسی</span><div class="chks" id="umGrpList"><span class="muted">…</span></div>
       <small class="hint">ابزارها، سطح دسترسی (دیدن یا اجرا) و دستگاه‌های مجاز از گروه‌ها می‌آید؛ استثنای هر کاربر در جدول «دسترسی‌ها».</small></div>
-    <label class="chk" style="margin-top:8px"><input type="checkbox" id="umDis" ${u.disabled ? "checked" : ""}>غیرفعال (نمی‌تواند وارد شود)</label>`,
+    <div style="display:flex;flex-direction:column;align-items:flex-start;gap:6px;margin-top:8px">
+      <label class="chk"><input type="checkbox" id="umDis" ${u.disabled ? "checked" : ""}>غیرفعال (نمی‌تواند وارد شود)</label>
+      ${WEB ? `<label class="chk" id="umWallL"><input type="checkbox" id="umWall" ${u.wall ? "checked" : ""}>نمایشگر دیواری (NOC): نشست با بی‌کاری بسته نمی‌شود</label>
+      <small class="hint" id="umWallH">فقط برای نقش فقط‌خواندنی؛ این حساب را فقط روی نمایشگر دیواری به کار ببرید.</small>` : ""}</div>`,
     foot: `<button class="btn ghost" data-r="0">انصراف</button><button class="btn primary" data-r="1">ذخیره</button>`,
     onOpen: (m, close) => {
       if (u.source === "ad") {          // کاربر AD: نقش از گروه‌ها و رمز در خود AD
         $("#umRole", m).disabled = true; $("#umPw", m).closest(".field").hidden = true; $("#umPw2", m).closest(".field").hidden = true;
         $("#umRole", m).insertAdjacentHTML("afterend", `<small class="hint">کاربر AD: نقش در هر ورود از گروه‌های AD تعیین می‌شود؛ رمز در خود AD.</small>`);
       }
+      const wv = () => { const w = $("#umWall", m); if (!w) return; const ro = $("#umRole", m).value === "readonly"; w.disabled = !ro; if (!ro) w.checked = false; };
+      $("#umRole", m).addEventListener("change", wv); wv();
       api("access_get").then((g) => {
         const bx = $("#umGrpList", m); if (!bx) return;
         if (!g.ok) { $("#umGroups", m).hidden = true; return; }
@@ -3761,6 +3772,7 @@ function userModal(u, done) {
         const pw = $("#umPw", m).value;
         if (pw !== $("#umPw2", m).value) return toast("رمز و تکرار آن یکی نیستند.", "error");
         const body = { username: $("#umName", m).value.trim(), role: $("#umRole", m).value, disabled: $("#umDis", m).checked };
+        if ($("#umWall", m)) body.wall = $("#umWall", m).checked && body.role === "readonly";
         if ($("#umGrpList input", m)) body.groups = $$(".umG", m).filter((c) => c.checked).map((c) => c.value);
         const x = await api("user_save", body, pw);
         if (!x.ok) return toast(x.error, "error");
@@ -3999,10 +4011,10 @@ function drawChart(el, labels, series, { type = "bar", height = 220, fmt = null,
     st = `<table class="ch-stats"><thead><tr><th></th><th>${esc(I18N.t("کمینه"))}</th><th>${esc(I18N.t("میانگین"))}</th><th>${esc(I18N.t("بیشینه"))}</th><th>${esc(I18N.t("آخرین"))}</th></tr></thead><tbody>${series.map((s) => {
       const v = s.values.filter((x) => x !== null && x !== undefined && Number.isFinite(x));
       const last = [...s.values].reverse().find((x) => x !== null && x !== undefined);
-      return `<tr><td><i style="background:${s.color}"></i>${esc(s.name)}</td><td class="ltr">${v.length ? esc(fv(Math.min(...v))) : "—"}</td><td class="ltr">${v.length ? esc(fv(v.reduce((a, b) => a + b, 0) / v.length)) : "—"}</td><td class="ltr">${v.length ? esc(fv(Math.max(...v))) : "—"}</td><td class="ltr">${esc(fv(last))}</td></tr>`;
+      return `<tr><td><i style="background:${s.color}"></i>${latTxt(s.name)}</td><td class="ltr">${v.length ? esc(fv(Math.min(...v))) : "—"}</td><td class="ltr">${v.length ? esc(fv(v.reduce((a, b) => a + b, 0) / v.length)) : "—"}</td><td class="ltr">${v.length ? esc(fv(Math.max(...v))) : "—"}</td><td class="ltr">${esc(fv(last))}</td></tr>`;
     }).join("")}</tbody></table>`;
   }
-  el.innerHTML = `${stats && line ? "" : `<div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}</div>`}
+  el.innerHTML = `${stats && line ? "" : `<div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${latTxt(s.name)}</span>`).join("")}</div>`}
     <svg viewBox="0 0 ${W} ${H}" direction="ltr" xmlns="http://www.w3.org/2000/svg" font-family="${I18N.lang === "en" ? "Vazir, Segoe UI, Tahoma, sans-serif" : "VazirUI, Tahoma, sans-serif"}" font-size="11" class="${zoom ? "zoomable" : ""}">${g}${marks}${xh}${hits}</svg>${st}`;
   const svg = el.querySelector("svg"), xhl = svg.querySelector(".xh"), zr = svg.querySelector(".zsel");
   el._xh = (i) => { if (!xhl) return; if (i === null || i < 0 || i >= n) { xhl.setAttribute("visibility", "hidden"); return; } const x = L + cw * i + cw / 2; xhl.setAttribute("x1", x); xhl.setAttribute("x2", x); xhl.setAttribute("visibility", "visible"); };

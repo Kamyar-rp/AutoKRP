@@ -573,7 +573,7 @@ class SshRunner:
             self.store.ssh_set_status(dev["id"], r["status"], msg)
             self.store.add_stat("ssh", "ok" if r["status"] == "ok" else "failed", dev["host"], src=job["kind"])
             self.store.add_history("ssh", f"{r['name']} ({dev['host']})", "ok" if r["status"] == "ok" else "error",
-                                   f"{job['script_name']}: {msg}", job["id"], str(out_dir))
+                                   f"{job['script_name']}: {msg}", job["id"], str(out_dir), owner=dev.get("owner") or "")
 
     def last_output(self, job_id, dev_id):
         base = (paths.data_dir() / "ssh_runs").resolve()

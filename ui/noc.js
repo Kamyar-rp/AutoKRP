@@ -124,7 +124,7 @@ function nocProblems(ts) {
   return prob.length ? prob.map((t) => {
     const s = nocSt(t);
     const why = t.status === "unreachable" ? `به‌خاطر قطع «${t.cause}»` : t.status === "down" ? t.err : t.alarms.length ? t.alarms.join(" · ") : t.status === "slow" ? `${num(t.rtt)} ms` : "";
-    return `<div class="noc-p s-${s}">${monIcon(t.icon)}<div><b class="bidi">${esc(t.name)}</b><span class="bidi">${esc(why || "")}</span></div>
+    return `<div class="noc-p s-${s}">${monIcon(t.icon)}<div><b class="bidi">${latTxt(t.name)}</b><span class="bidi">${esc(why || "")}</span></div>
       <div class="noc-dur">${t.since && (t.status === "down" || t.status === "unreachable") ? monDur(now - t.since) : ""}${t.maint ? `<small>نگهداری</small>` : ""}</div></div>`;
   }).join("") : `<div class="noc-allok">همه‌ی هدف‌ها سالم‌اند ✓</div>`;
 }
@@ -143,7 +143,7 @@ function nocGroups(ts) {
     const L = groups[g].sort((a, b) => (NOC_RANK[a.status] ?? 9) - (NOC_RANK[b.status] ?? 9) || a.name.localeCompare(b.name, "fa"));
     const okN = L.filter((t) => t.status === "up" || t.status === "slow").length;
     return `<div class="noc-g"><h3><span class="bidi">${esc(g)}</span><small>${num(okN)}/${num(L.length)}</small></h3>
-      <div class="noc-tiles">${L.map((t) => `<div class="noc-t s-${nocSt(t)}" title="${esc(t.name + (t.err ? " — " + t.err : ""))}"><span class="bidi">${esc(t.name)}</span></div>`).join("")}</div></div>`;
+      <div class="noc-tiles">${L.map((t) => `<div class="noc-t s-${nocSt(t)}" title="${esc(t.name + (t.err ? " — " + t.err : ""))}"><span class="bidi">${latTxt(t.name)}</span></div>`).join("")}</div></div>`;
   }).join("") || `<div class="empty">هدفی برای نمایش نیست.</div>`;
 }
 function nocTiles(ts, big) {

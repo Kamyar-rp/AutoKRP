@@ -11,7 +11,7 @@ const DB_ENG = { mysql: { name: "MySQL / MariaDB", port: 3306 }, postgres: { nam
 const dbExt = (d) => !!d && (d.backend === "mysql" || d.backend === "postgres");
 
 function dbStatusHtml(d) {
-  if (!dbExt(d)) return `<dl class="kv"><dt>محل داده‌ها</dt><dd>${d && d.engine === "cipher" ? "فایل رمزشده‌ی محلی SQLCipher (state.sdb؛ هر صفحه AES-256 با امضای HMAC)" : "فایل رمزشده‌ی محلی (state.dat)"}</dd></dl>`;
+  if (!dbExt(d)) return `<dl class="kv"><dt>محل داده‌ها</dt><dd>${d && d.engine === "cipher" ? "فایل رمزشده‌ی محلی SQLCipher (state.sdb؛ هر صفحه AES-256 با امضای HMAC)" : "فایل رمزشده‌ی محلی (state.dat)"}</dd>${d && d.data_dir ? `<dt>پوشه</dt><dd class="dpath" dir="ltr" data-no-i18n>${esc(d.data_dir)}</dd>` : ""}</dl>`;
   const mode = (DB_MODES.find((m) => m[0] === d.mode) || [, d.mode])[1], ssl = (DB_SSL.find((m) => m[0] === d.ssl) || [, d.ssl])[1];
   return `<dl class="kv"><dt>محل داده‌ها</dt><dd>${DB_ENG[d.backend].name}</dd>
     <dt>سرور</dt><dd class="ltr">${esc(d.user)}@${esc(d.host)}:${esc(d.port)} / ${esc(d.database)}</dd>
@@ -44,7 +44,7 @@ async function dbDialog(first) {
   DB_STATE.mode = c.mode || "cols"; DB_STATE.ssl = c.ssl || "off"; DB_STATE.engine = c.backend || "mysql"; DB_STATE.choice = first ? "local" : DB_STATE.engine;
   return openModal({ title: first ? "محل نگهداری داده‌ها" : "اتصال پایگاه داده‌ی بیرونی", wide: true,
     body: `${first ? `<p>داده‌های برنامه (IPها، اجراها، تاریخچه، آمار) کجا نگهداری شوند؟ بعداً هم از «تنظیمات ← پایگاه داده» قابل تغییر است.</p>
-      <div class="mode-cards" id="dbChoice"><button class="mode-card on" data-v="local"><b>محلی (پیشنهادی)</b><span>فایل رمزشده روی همین سیستم؛ بدون نیاز به سرور.</span></button>
+      <div class="mode-cards" id="dbChoice"><button class="mode-card on" data-v="local"><b>محلی (پیشنهادی)</b><span>فایل رمزشده روی همین سیستم؛ بدون نیاز به سرور.</span>${cur.data_dir ? `<span class="dpath" dir="ltr" data-no-i18n>${esc(cur.data_dir)}</span>` : ""}</button>
         <button class="mode-card" data-v="mysql"><b>MySQL / MariaDB</b><span>یوزر و پسورد را بدهید؛ برنامه پایگاه داده و جدول‌ها را خودش می‌سازد و با به‌روزرسانی برنامه ساختارشان را به‌روز می‌کند.</span></button>
         <button class="mode-card" data-v="postgres"><b>PostgreSQL</b><span>نسخه‌ی ۱۶ یا بالاتر؛ مثل MySQL، پایگاه داده و جدول‌ها خودکار ساخته و به‌روز می‌شوند.</span></button></div>` : ""}
       <div id="dbForm" ${first ? "hidden" : ""} style="margin-top:12px">

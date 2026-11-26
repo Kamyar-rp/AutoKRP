@@ -629,7 +629,7 @@ class DevEvents:
             return
         st = self.mon.state.get(t["id"]) or {}
         if st.get("maint") or st.get("status") == "unreachable":
-            self.mon.emit("info", msg + " (در نگهداری / به‌خاطر پدر؛ بدون هشدار)", "monitor")
+            self.mon.emit("info", msg + " (در نگهداری / به‌خاطر پدر؛ بدون هشدار)", "monitor", tid=t["id"])
             return
         key = f"{rec['k']}:{rec.get('name') or rec.get('oid') or ''}"
         now = time.time()
@@ -637,7 +637,7 @@ class DevEvents:
             if now - self._last_alert.get((t["id"], key), 0) < ALERT_GAP:
                 return
             self._last_alert[(t["id"], key)] = now
-        self.mon.emit("error" if rec["sev"] == "crit" else "warn", msg, "monitor")
+        self.mon.emit("error" if rec["sev"] == "crit" else "warn", msg, "monitor", tid=t["id"])
         if self.mon.history:
             self.mon.history("monitor", t.get("name") or t["host"], "error" if rec["sev"] == "crit" else "warn", f"{what}: {rec.get('name')} — {rec.get('msg', '')[:300]}",
                              t.get("owner") or "")

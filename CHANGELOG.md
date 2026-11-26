@@ -2,6 +2,84 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/) from the first public release.
 
+## [1.59.12] — 2026-11-26
+
+### Fixed
+- **Monitoring-only and other custom builds: the main dashboard and live events stayed empty for every non-admin user** ("Invalid input" from the state request), a regression in 1.59.11.
+- **Windows server mode: the app log could stop being written.** When the log reached its size limit while another AutoKRP process (the server window) had it open, rotation failed and every later line was dropped. The log now keeps writing and retries rotation later.
+- Monitoring: HTTP checks show short messages ("Timed out", "Connection refused (port closed)", "Host name not found"…) instead of raw `<urlopen error …>` text; Ping/TCP timeouts say "Timed out".
+- Monitoring report: `true`/`false` is no longer accepted as a target ID.
+
+## [1.59.11] — 2026-11-26
+
+### Security
+- **Sign-in: an account can no longer be locked for 15 minutes from many addresses.** Failed attempts on one user name from several addresses now only slow that account down (2, 4, 8 … up to 30 seconds per attempt) instead of locking it. The per-address lock (5 attempts) is unchanged. A successful sign-in removes the slow-down.
+- **Idle sessions now really end.** Only real user activity (click, key, scroll, touch) keeps a web session alive; background refreshes of open pages (monitoring table, NOC, dashboards) no longer do. An empty or zero idle timeout now means 30 minutes.
+- **Monitoring report:** asking for a target the user cannot see now returns "Target not found" instead of a report of all visible targets. A single ID is accepted; invalid IDs give a clean message.
+- **Live events:** each user only sees events for the sections they can access and for monitoring targets they can see (others' personal targets, security and system events are admin-only).
+
+### Added
+- **Wall display (NOC) accounts:** a "Wall display" checkbox in the user form (read-only role only). The session of such an account does not end when idle, so a NOC wall screen stays signed in.
+- Users list: tags "Wall display" and "Old access — review" (old operator accounts that still see monitoring through the pre-1.59.10 access model).
+
+### Changed
+- Viewers see the "+" (add to dashboard) button and can add charts and tables to their own personal dashboards.
+- An invalid TLS certificate is reported with a short reason (self-signed, expired, untrusted issuer, wrong host name) instead of the raw OpenSSL text.
+
+## [1.59.10] — 2026-11-26
+
+### Added
+- **"+" on every chart and table of a device's details (Monitoring).** Click the small + to add that chart or table to a dashboard: pick the dashboard and page (or create a new personal dashboard); your last choice is remembered. Works for Ping/TCP/HTTP (availability, response time, summary, outages) and SNMP (CPU, memory, temperature, disk, response time, sessions, port traffic, custom/MIB OIDs, port/hardware/OID tables, busiest ports). Replaces the old "Add to dashboard…" button.
+- Dashboard widgets: **Availability chart** and **Recent outages**; the "Value chart" widget can also show active sessions and custom/MIB OIDs.
+- Monitoring, HTTP check: optional **"Verify TLS certificate"** per target (off by default). An invalid, expired or wrong-name certificate is reported as down with the reason.
+- Monitoring, TCP check: a hint about Windows taking about 2 seconds to refuse a loopback connection.
+- Dashboards: the admin can list and delete users' personal dashboards (👥 button).
+
+### Changed
+- **Each user can have at most 20 personal dashboards**; shared dashboards have their own limit of 200 (before, personal dashboards counted against the shared limit). Deleting a user also deletes their personal dashboards.
+- **History for non-admin users:** security rows show only the user's own actions; rows about other users' personal objects (targets, dashboards, SNMP/credential profiles) are hidden, including in search, totals and the detail view.
+- A new operator without any section tools no longer sees monitoring. Viewers still do.
+- Error messages no longer show raw Python text; unexpected errors say "details were written to the app log".
+
+### Fixed
+- **Server window: "Update Windows Firewall" (and enabling auto-start) before the first web sign-in no longer deletes the Trap/Syslog rules.** Until the ports are known, the saved ports are used; the status says "known after the first web sign-in" instead of "out of date".
+- Server window fits a 1024×768 screen with the "previous version" warning, and opens centred in the work area.
+- Device names and IP addresses keep Latin digits in the NOC view, chart legends and SNMP hardware tables.
+- English UI: the "Current problems" widget translates the reason; "High" is capitalised.
+- Settings → Database: data folder path is left-aligned with a monospace font in the Persian layout.
+- A fresh install no longer creates a useless "upgrade backup" containing only the first-run choices.
+- `installer/AutoKRP.iss` uses CRLF line endings.
+
+## [1.59.9] — 2026-11-26
+
+### Fixed
+- **Server window: Windows Firewall status.** After an update with the installer the rules existed but the window said "No rule yet"; it now says the rules do not match the current settings until you press "Update Windows Firewall" (the installer cannot know the Trap/Syslog ports of installations older than 1.59.7).
+- **Server window fits small screens.** The window is lower (640 px instead of 700) and the layout is more compact, so the bottom buttons are no longer cut off on a 1366×768 screen.
+- **Uninstall also removes the small result/marker files** the installer leaves in the data folder (`.svc_result`, `.resume_task`). No other data is touched.
+- Settings → Database: the data folder path is shown left-to-right and wraps inside the card instead of being cut off in right-to-left layout.
+- Monitoring, TCP check: a connect that ran out of time (Windows reports error 10035) is now shown as "timeout" instead of the misleading "port closed (10035)". A refused connection still says "port closed".
+- The release headings of 1.59.5 and 1.59.6 were missing from this changelog (their notes were merged into the next release); restored.
+
+## [1.59.8] — 2026-11-25
+
+### Fixed
+- **First start after installing with the "Windows Firewall" option no longer rejects the default data folder.** The installer leaves a small result file in it; the first-run page now treats it (and the "restart background server" marker) as not-data.
+- **Uninstall now removes the "AutoKRP Server" auto-start task** when it points to the program being removed (a task of another AutoKRP edition is left alone). Before, it stayed and pointed to a missing file. Data is still never deleted.
+- The server window (and its process) now closes when the installer or `--quit-running` stops the server. Before, only the server stopped and the window kept the process alive.
+
+## [1.59.7] — 2026-11-24
+
+### Fixed
+- **Single-mode builds (e.g. the monitoring server build) now ask for the data folder on first start**, together with the terms. Before, they skipped the first-run page and always created the data in the Windows user folder.
+- On the first-run page, the default folder was rejected ("already exists and is not AutoKRP data") after switching the language or accepting the terms.
+- **Updating with the installer removed the Windows Firewall rules for SNMP Trap/Syslog**, so traps and syslog stopped arriving after every update. The installer now keeps the Trap/Syslog ports of the last rules created from the server window (installations from before 1.59.7 keep their existing Trap/Syslog rules as they are).
+- **The background server (auto-start task) stayed off after an update** until the next Windows restart. The installer now starts the task again if the update stopped it.
+
+### Added
+- **Backup before each update.** When the app version changes, the main data files (local database, settings, secrets, server users, certificate) are copied to `upgrade_backups` in the data folder before they are opened; the last two backups are kept. Skipped (with a log warning) when free disk space is low.
+- An older version no longer opens data written by a newer version (it stops with a message instead of risking the data); the same check applies to the database structure, including a shared MySQL/PostgreSQL database.
+- The first-run "Where to keep the data" dialog and Settings → Database show the local data folder.
+
 ## [1.59.6] — 2026-11-23
 
 ### Added
@@ -15,7 +93,7 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 - Before sign-in, remote users can no longer tell whether the server is set up or still locked (only the server machine itself is told).
 - Extra response headers: `Cross-Origin-Resource-Policy` and `Permissions-Policy`.
 
- — 2026-11-22
+## [1.59.5] — 2026-11-22
 
 ### Added
 - **Excel-style column filters on the Addresses page.** Every column except IP has a ▾ button that opens a list of its values with counts, which you can tick (with search, select all, sort, and from–to ranges for numbers and dates). For example, in the FortiGate column you can show only "Already Banned", "Blocked" or "Address". Column filters work together with the filters at the top (such as "Non-malicious"). Active filters appear as removable chips above the table, and "Select all of these" selects the result.

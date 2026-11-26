@@ -1,0 +1,19 @@
+{
+  "؛ نمایشگر دیواری": "; wall display",
+  "این حساب پیش از 1.59.10 ساخته شده و با دسترسی قدیمی مانیتورینگ را می‌بیند؛ اگر نباید ببیند، در «دسترسی‌ها» گروهش را تعیین کنید.": "This account was created before 1.59.10 and sees monitoring through the old access model; if it should not, set its group under “Access”.",
+  "با نام میزبان نمی‌خواند": "does not match the host name",
+  "تلاش‌های ناموفق زیاد از چند آدرس روی حساب «{0}»؛ ورود این حساب کند شد (آخرین: {1})": "Many failed attempts from several addresses on account “{0}”; sign-in for this account is slowed down (last: {1})",
+  "خودامضا است": "is self-signed",
+  "دسترسی قدیمی — بازبینی کنید": "Old access — review",
+  "زنجیره‌ی گواهی به مرجع مورد اعتماد نمی‌رسد": "the certificate chain does not reach a trusted authority",
+  "شناسه‌ی هدف نامعتبر است.": "Invalid target ID.",
+  "صادرکننده مورد اعتماد نیست": "the issuer is not trusted",
+  "فقط برای نقش فقط‌خواندنی؛ این حساب را فقط روی نمایشگر دیواری به کار ببرید.": "Read-only role only; use this account only on a wall display.",
+  "مرجع صادرکننده مورد اعتماد نیست": "the issuing authority is not trusted",
+  "منقضی شده است": "has expired",
+  "نشست با بی‌کاری بسته نمی‌شود": "Session does not end when idle",
+  "نمایشگر دیواری": "Wall display",
+  "نمایشگر دیواری (NOC): نشست با بی‌کاری بسته نمی‌شود": "Wall display (NOC): session does not end when idle",
+  "هنوز معتبر نشده است": "is not valid yet",
+  "گواهی TLS معتبر نیست:": "TLS certificate is not valid:"
+}

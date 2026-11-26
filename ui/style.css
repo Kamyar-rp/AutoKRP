@@ -28,8 +28,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 h1, h2, h3 { margin: 0; font-weight: 600; }
 h1 { font-size: 21px; } h2 { font-size: 15px; } h3 { font-size: 14px; }
 .muted { color: var(--muted); font-size: 13px; }
+.dpath { direction: ltr; text-align: left; unicode-bidi: isolate; display: block; overflow-wrap: anywhere; word-break: break-all; font-family: Consolas, "Vazir", monospace; font-size: 12px; }
 .ltr { direction: ltr; text-align: left; font-family: "Vazir", Consolas, sans-serif; unicode-bidi: plaintext; }
 td.ltr, .ip { font-family: "Vazir", sans-serif; direction: ltr; unicode-bidi: isolate; }
+.ltr.lat { display: inline; unicode-bidi: isolate; font-family: "Vazir", sans-serif; }   /* 1.59.10: latTxt — نام/IP لاتین داخل متن */
 [hidden] { display: none !important; }
 
 ::-webkit-scrollbar { width: 11px; height: 11px; }
@@ -228,6 +230,8 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; font-siz
 html[dir="rtl"] .grid td.wrap { text-align: right; } html[dir="ltr"] .grid td.wrap { text-align: left; }
 /* 1.55: مقدارهای لاتین در فهرست «برچسب: مقدار» کنار برچسب می‌مانند (قبلاً به لبه‌ی دیگر پنجره می‌چسبیدند) */
 html[dir="rtl"] .kv dd { text-align: right !important; } html[dir="ltr"] .kv dd { text-align: left !important; }
+/* 1.59.10 (F4): مسیر فایل در فهرست برچسب/مقدار (تنظیمات ← پایگاه داده) همیشه چپ‌چین و با قلم ثابت */
+html[dir] .kv dd.dpath { text-align: left !important; font-family: Consolas, "Vazir", monospace; direction: ltr; }
 .kv dd a, .m-body p a, .hint a, main p a { color: var(--accent); text-decoration: none; } .kv dd a:hover, .m-body p a:hover, .hint a:hover, main p a:hover { text-decoration: underline; }
 div.field > .btn:only-child { align-self: flex-start; min-width: 110px; }
 .grid td.chk, .grid th.chk { width: 36px; text-align: center; cursor: default; }
@@ -1456,3 +1460,18 @@ html[dir=rtl] .ipx-chip { padding: 3px 10px 3px 4px; }
 .ipx-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ipx-chip button { all: unset; cursor: pointer; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; }
 .ipx-chip button:hover { background: color-mix(in srgb, var(--text) 15%, transparent); }
+
+/* 1.59.10: دکمه‌ی + «افزودن به داشبورد» روی نمودار/جدول جزئیات دستگاه */
+.dplus { flex: none; width: 22px; height: 22px; padding: 0; border-radius: 6px; border: 1px solid var(--line); background: var(--panel2); color: var(--muted);
+  font: 600 16px/1 Consolas, "Vazir", sans-serif; cursor: pointer; display: inline-grid; place-items: center; margin-inline-start: auto; opacity: .75; }
+.dplus:hover, .dplus:focus-visible { opacity: 1; color: var(--accent); border-color: var(--accent); }
+.chart-head .dplus ~ .btn, .chart-head .dplus ~ #snPr { margin-inline-start: 0; }
+.toolbar .dplus { margin-inline-start: auto; }
+.md-kpiw { display: flex; gap: 8px; align-items: flex-start; } .md-kpiw > .dplus { margin-top: 8px; } .md-kpiw .md-kpi { flex: 1; }
+.dplus-pop { position: fixed; z-index: 96; width: 270px; background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow);
+  padding: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.dplus-pop label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
+.dplus-pop label[hidden] { display: none; }
+.dplus-pop select, .dplus-pop .input { width: 100%; }
+.dplus-pop .dplus-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dplus-f { justify-content: flex-end; gap: 6px; }

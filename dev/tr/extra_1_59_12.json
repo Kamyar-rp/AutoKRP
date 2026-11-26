@@ -1,0 +1,5 @@
+{
+  "اتصال رد شد (پورت بسته است)": "Connection refused (port closed)",
+  "مقصد در دسترس نیست": "Destination unreachable",
+  "مهلت پاسخ تمام شد": "Timed out"
+}

@@ -10,6 +10,8 @@ const DB = { list: [], canShared: false, personalOk: false, cur: null, page: 0, 
 const DB_COLS = 12, DB_ROW = 62, DB_GAP = 10;
 const DB_RANGES = { "1h": "۱ ساعت", "6h": "۶ ساعت", "24h": "۲۴ ساعت", "7d": "۷ روز", "30d": "۳۰ روز" };
 const DB_KEYS = { cpu: ["CPU", "%"], mem: ["حافظه", "%"], temp: ["دما", "°C"], disk: ["دیسک", "%"], rtt: ["زمان پاسخ", "ms"] };
+/* 1.59.10: «نمودار مقدار» نشست‌ها و OIDهای دستی/MIB را هم می‌پذیرد (کلید oid:<OID> با نام در cfg.okeys/onames) */
+const DB_MKEYS = { ...DB_KEYS, ses: ["نشست‌های فعال", ""] };
 const DB_VKEYS = { ...DB_KEYS, ses: ["نشست‌های فعال", ""], avail: ["دسترس‌پذیری ۲۴ ساعت", "%"], ports: ["پورت‌های وصل", ""] };
 const DB_TOPK = { cpu: "CPU", mem: "حافظه", temp: "دما", rtt: "زمان پاسخ", traffic: "ترافیک پورت", avail: "کمترین دسترس‌پذیری ۲۴ ساعت" };
 /* نوع ← [عنوان، نماد، عرض، ارتفاع پیش‌فرض، توضیح] */
@@ -32,6 +34,8 @@ const DB_TYPES = {
   tiles: ["کاشی‌های وضعیت", "▣", 6, 3, "یک کاشی رنگی برای هر سرویس (NOC)"],
   availbar: ["نوار دسترس‌پذیری", "▬", 8, 4, "نوار ۲۴ ساعته‌ی وصل و قطع هر سرویس"],
   snmptab: ["جدول SNMP", "▥", 6, 5, "پورت‌ها، سخت‌افزار یا OIDهای یک دستگاه SNMP"],
+  availline: ["نمودار دسترس‌پذیری", "⌇", 6, 4, "در دسترس بودن (٪) چند سرویس روی یک نمودار"],      // 1.59.10
+  outages: ["قطعی‌های اخیر", "⛔", 6, 4, "قطعی‌های سرویس‌ها در بازه (شروع، پایان، مدت، علت)"],      // 1.59.10
 };
 const DB_SVC_K = ["ping", "tcp", "http"];
 const DB_KIND_N = { ping: "Ping", tcp: "TCP", http: "HTTP", snmp: "SNMP" };
@@ -131,6 +135,23 @@ function dbSvcScope(c) {
   const ks = Array.isArray(c.kinds) && c.kinds.length ? c.kinds : DB_SVC_K;
   return dbScope(c).filter((t) => ks.includes(t.kind)).sort((a, b) => a.name.localeCompare(b.name, "fa"));
 }
+/** 1.59.10: نمودار خطی چند سرویس: زمان پاسخ (rtt) یا در دسترس بودن (avail) */
+async function dbSvcLine(w, el, c, light, what) {
+  const ts = dbSvcScope(c).slice(0, 8), rng = dbRange(w);
+  if (!ts.length) { el.innerHTML = `<div class="db-hint">${esc(I18N.t(DB.edit ? "با ⚙ سرویس‌ها را انتخاب کنید." : "سرویسی انتخاب نشده است."))}</div>`; return; }
+  const ids = ts.map((t) => t.id), key = `a|${rng}|${ids.join(",")}`;
+  const cc = DB.cache.get(key);
+  if (light && cc && cc.r && Date.now() - cc.at < 60000 && el.dataset.k === key && el.dataset.at === String(cc.at)) return;
+  const r = await dbFetch(key, 60000, () => api("mon_report", rng, ids));
+  if (!el.isConnected) return;
+  if (!r || !r.ok) { el.innerHTML = `<div class="db-hint">${esc((r && r.error) || "")}</div>`; return; }
+  el.dataset.k = key; el.dataset.at = String((DB.cache.get(key) || {}).at || 0);
+  const C = COLORS(), cols = [C.info, C.warn, "#c678dd", C.ok, C.err, "#0ea5a4", "#d19a66", C.acc || "#4f8fe6"], ax = monAxis(r.keys, r.step);
+  const av = what === "avail";
+  const series = (r.rows || []).map((x, i) => ({ name: x.name, color: cols[i % cols.length], values: av ? x.avail_series : x.rtt_series }));
+  const fmt = av ? (v) => Math.round(v * 100) / 100 + "%" : (v) => Math.round(v * 10) / 10 + " ms";
+  dbFitChart(el, (hh) => { el.innerHTML = ""; drawChart(el, ax.lab, series, { type: "line", height: hh, fmt, times: ax.times, tips: ax.tips }); });
+}
 function dbRange(w) { return (w.cfg && w.cfg.range) || (DB.edit ? DB.draft.data.range : DB.range) || "1h"; }
 /** درخواست سنگین (نمودار، گزارش، رخداد) با کش: همان درخواست تا maxAge دوباره فرستاده نمی‌شود */
 async function dbFetch(key, maxAge, fn) {
@@ -158,7 +179,7 @@ function dbShell() {
           <button class="btn sm" id="dbFs" title="تمام‌صفحه (F)">⛶ تمام‌صفحه</button>
           ${canEdit ? `<button class="btn sm" id="dbEdit">✎ ویرایش</button>` : ""}` : ""}
         ${DB.edit ? `<button class="btn sm" id="dbSet">⚙ تنظیمات داشبورد</button><button class="btn sm ghost" id="dbCancel">انصراف</button><button class="btn sm primary" id="dbSave">ذخیره</button>`
-          : `<button class="btn sm" id="dbNew" title="داشبورد تازه">+ داشبورد</button>`}
+          : `<button class="btn sm" id="dbNew" title="داشبورد تازه">+ داشبورد</button>${isAdmin() ? `<button class="btn sm ghost" id="dbAdm" title="داشبوردهای شخصی کاربران">👥</button>` : ""}`}
       </div>
     </div>
     <div class="db-rot" id="dbRot" ${DB.rot && !DB.edit ? "" : "hidden"}><i></i></div>
@@ -183,7 +204,7 @@ function dbShell() {
     };
   }
   const on = (id, f) => { const b = $("#" + id); if (b) b.onclick = f; };
-  on("dbNew", dbNew); on("dbEdit", dbEditOn); on("dbCancel", dbEditCancel); on("dbSave", dbEditSave); on("dbSet", dbSettings); on("dbFs", dbFull);
+  on("dbNew", dbNew); on("dbAdm", dbAdminList); on("dbEdit", dbEditOn); on("dbCancel", dbEditCancel); on("dbSave", dbEditSave); on("dbSet", dbSettings); on("dbFs", dbFull);
   on("dbRotB", () => { DB.rot = !DB.rot; DB.rotAt = Date.now(); dbShell(); dbDraw(); });
   if (DB.edit) dbLibBind();
   dbTabs();
@@ -276,12 +297,17 @@ function dbDraw(light) {
   for (const el of have.values()) el.remove();
   if (DB.edit) dbBindEdit(g);
 }
+/** [[کلید oid:<OID>، نام]] از cfg.okeys / cfg.onames (فهرست‌های موازی؛ cfg فقط دو سطح تو در تو می‌پذیرد) */
+function dbMetricOids(c) {
+  const K = Array.isArray(c.okeys) ? c.okeys : [], N = Array.isArray(c.onames) ? c.onames : [];
+  return K.filter((o) => /^[0-9.]{3,200}$/.test(String(o))).slice(0, 8).map((o, i) => ["oid:" + o, String(N[i] || o)]);
+}
 function dbDefTitle(w) {
   const c = w.cfg || {};
   if (w.type === "topn") return DB_TOPT[c.key] || DB_TOPT.cpu;
   if (w.type === "gauge") return (DB_KEYS[c.key] || DB_KEYS.cpu)[0];
   if (w.type === "value") return (DB_VKEYS[c.key] || DB_VKEYS.cpu)[0];
-  if (w.type === "metric") return (c.keys || ["cpu"]).filter((k) => DB_KEYS[k]).map((k) => DB_KEYS[k][0]).join(" · ") || DB_TYPES.metric[0];
+  if (w.type === "metric") return [...(c.keys || (dbMetricOids(c).length ? [] : ["cpu"])).filter((k) => DB_MKEYS[k]).map((k) => DB_MKEYS[k][0]), ...dbMetricOids(c).map((o) => o[1])].join(" · ") || DB_TYPES.metric[0];
   if (w.type === "traffic") return "ترافیک";
   if (w.type === "avail") return "کمترین دسترس‌پذیری";
   if (w.type === "snmptab") return { ports: "پورت‌ها", hw: "سخت‌افزار", oids: "OIDها" }[c.tab || "ports"];
@@ -330,8 +356,9 @@ const DB_RENDER = {
       .sort((a, b) => R[a[1]] - R[b[1]] || (a[0].since || 0) - (b[0].since || 0)).slice(0, c.n || 50);
     if (!L.length) { el.innerHTML = `<div class="db-allok">همه سالم‌اند ✓</div>`; return; }
     el.innerHTML = `<table class="db-tbl"><thead><tr><th>زمان</th><th>دستگاه</th><th>مشکل</th><th>مدت</th></tr></thead><tbody>${L.map(([t, s]) => {
-      const why = s === "down" ? (t.err || I18N.t("قطع")) : s === "unr" ? `${I18N.t("به‌خاطر قطع")} «${t.cause}»` : s === "maint" ? I18N.t("نگهداری")
-        : t.alm.length ? t.alm.join(" · ") : t.st === "slow" ? `${num(t.rtt)} ms` : I18N.t("هشدار");
+      // 1.59.10 (G5): پیام سرور (قطع/هشدار) هم ترجمه شود؛ span بدون ترجمه‌ی DOM است چون نام دستگاه داخلش می‌آید
+      const why = s === "down" ? I18N.t(t.err || "قطع") : s === "unr" ? `${I18N.t("به‌خاطر قطع")} «${t.cause}»` : s === "maint" ? I18N.t("نگهداری")
+        : t.alm.length ? t.alm.map((x) => I18N.t(x)).join(" · ") : t.st === "slow" ? `${num(t.rtt)} ms` : I18N.t("هشدار");
       const cls = s === "down" ? "err" : s === "unr" ? "unr" : s === "maint" ? "info" : t.lvl === "crit" ? "high" : "warn";
       return `<tr><td class="ltr">${t.since ? fmtTime(t.since).slice(0, 5) : "—"}</td><td>${monIcon(t.icon, "db-ic")}${dbN(t.name)}</td>
         <td><span class="db-tag ${cls}" data-no-i18n>${esc(why)}</span></td><td>${t.since && s !== "warn" ? monDur(now - t.since) : ""}</td></tr>`;
@@ -348,9 +375,11 @@ const DB_RENDER = {
   async metric(w, el, c, light) {
     const t = DB.tg.get(Number(c.tid));
     if (t.kind !== "snmp") { el.innerHTML = `<div class="db-hint">فقط برای هدف SNMP.</div>`; return; }
-    const ks = (c.keys || ["cpu"]).filter((k) => DB_KEYS[k]);
-    const cols = ["info", "acc", "warn", "ok", "err"];
-    await dbChart(w, el, light, t.id, ks, ks.map((k, i) => [k, I18N.t(DB_KEYS[k][0]), cols[i % cols.length]]), { pct: ks.every((k) => DB_KEYS[k][1] === "%") });
+    const ok = dbMetricOids(c), ks = [...(c.keys || (ok.length ? [] : ["cpu"])).filter((k) => DB_MKEYS[k]), ...ok.map((o) => o[0])].slice(0, 8);
+    if (!ks.length) { el.innerHTML = `<div class="db-hint">${esc(I18N.t("مقداری انتخاب نشده است."))}</div>`; return; }
+    const cols = ["info", "acc", "warn", "ok", "err"], on = new Map(ok);
+    await dbChart(w, el, light, t.id, ks, ks.map((k, i) => [k, on.has(k) ? on.get(k) : I18N.t(DB_MKEYS[k][0]), cols[i % cols.length]]),
+      { pct: ks.every((k) => DB_MKEYS[k] && DB_MKEYS[k][1] === "%"), withMax: ok.length > 0 && ks.length === 1 });
   },
   gauge(w, el, c) {
     const t = dbT(c.tid), k = DB_KEYS[c.key] ? c.key : "cpu", v = t[k];
@@ -457,20 +486,7 @@ const DB_RENDER = {
     $$("th[data-sk]", el).forEach((h) => (h.onclick = (e) => { e.stopPropagation(); sk.d = sk.k === h.dataset.sk ? -sk.d : 1; sk.k = h.dataset.sk; DB_RENDER.svc(w, el, c); }));
     dbRowClicks(el);
   },
-  async rtt(w, el, c, light) {
-    const ts = dbSvcScope(c).slice(0, 8), rng = dbRange(w);
-    if (!ts.length) { el.innerHTML = `<div class="db-hint">${esc(I18N.t(DB.edit ? "با ⚙ سرویس‌ها را انتخاب کنید." : "سرویسی انتخاب نشده است."))}</div>`; return; }
-    const ids = ts.map((t) => t.id), key = `a|${rng}|${ids.join(",")}`;
-    const cc = DB.cache.get(key);
-    if (light && cc && cc.r && Date.now() - cc.at < 60000 && el.dataset.k === key && el.dataset.at === String(cc.at)) return;
-    const r = await dbFetch(key, 60000, () => api("mon_report", rng, ids));
-    if (!el.isConnected) return;
-    if (!r || !r.ok) { el.innerHTML = `<div class="db-hint">${esc((r && r.error) || "")}</div>`; return; }
-    el.dataset.k = key; el.dataset.at = String((DB.cache.get(key) || {}).at || 0);
-    const C = COLORS(), cols = [C.info, C.warn, "#c678dd", C.ok, C.err, "#0ea5a4", "#d19a66", C.acc || "#4f8fe6"], ax = monAxis(r.keys, r.step);
-    const series = (r.rows || []).map((x, i) => ({ name: x.name, color: cols[i % cols.length], values: x.rtt_series }));
-    dbFitChart(el, (hh) => { el.innerHTML = ""; drawChart(el, ax.lab, series, { type: "line", height: hh, fmt: (v) => Math.round(v * 10) / 10 + " ms", times: ax.times, tips: ax.tips }); });
-  },
+  async rtt(w, el, c, light) { return dbSvcLine(w, el, c, light, "rtt"); },
   tiles(w, el, c) {
     const ts = dbSvcScope(c).slice(0, Number(c.n) || 60);
     if (!ts.length) { el.innerHTML = `<div class="db-hint">${esc(I18N.t("سرویس Ping، TCP یا HTTP در این محدوده نیست."))}</div>`; return; }
@@ -490,6 +506,17 @@ const DB_RENDER = {
       <b class="ltr">${t.avail == null ? "—" : (t.avail >= 99.995 ? "100" : t.avail.toFixed(2)) + "%"}</b></div>`).join("")}
       <div class="db-avr db-avx"><span></span><span class="db-avt ltr"><span>-24h</span><span>-12h</span><span>${esc(I18N.t("اکنون"))}</span></span><b></b></div></div></div>`;
     dbRowClicks(el);
+  },
+  async availline(w, el, c, light) { return dbSvcLine(w, el, c, light, "avail"); },
+  async outages(w, el, c, light) {
+    const ts = dbSvcScope(c).slice(0, 30), rng = dbRange(w);
+    if (!ts.length) { el.innerHTML = `<div class="db-hint">${esc(I18N.t(DB.edit ? "با ⚙ سرویس‌ها را انتخاب کنید." : "سرویسی انتخاب نشده است."))}</div>`; return; }
+    const ids = ts.map((t) => t.id), key = `a|${rng}|${ids.join(",")}`;
+    const r = await dbFetch(key, 60000, () => api("mon_report", rng, ids));
+    if (!el.isConnected) return;
+    if (!r || !r.ok) { el.innerHTML = `<div class="db-hint">${esc((r && r.error) || "")}</div>`; return; }
+    const evs = (r.events || []).slice(0, Number(c.n) || 20);
+    el.innerHTML = evs.length ? `<div class="db-scroll">${monEvTable(evs, ids.length > 1)}</div>` : `<div class="db-allok">${esc(I18N.t("قطعی‌ای ثبت نشده است."))}</div>`;
   },
   async snmptab(w, el, c, light) {
     const t = DB.tg.get(Number(c.tid));
@@ -691,6 +718,27 @@ function dbSample() {
     W("avail", 0, 6, 6, 4, { n: 8 }), W("topn", 6, 6, 6, 4, { key: "traffic", n: 6 }),
   ] }] };
 }
+/** 1.59.10 (G2): ادمین — فهرست و حذف داشبوردهای شخصی کاربران (محتوا نمایش داده نمی‌شود) */
+async function dbAdminList() {
+  const r = await api("dash_admin_list"); if (!r.ok) return toast(r.error, "error");
+  openModal({ title: "داشبوردهای شخصی کاربران", wide: true,
+    body: r.items.length ? `<p class="hint">هر کاربر حداکثر ۲۰ داشبورد شخصی دارد. با حذف کاربر داشبوردهای شخصی‌اش هم حذف می‌شود.</p>
+      <div class="table-wrap inner"><table class="grid"><thead><tr><th><input type="checkbox" id="dbaAll"></th><th>کاربر</th><th>نام</th><th>ویجت</th><th>ساخته‌شده</th></tr></thead><tbody>
+      ${r.items.map((x) => `<tr><td><input type="checkbox" data-id="${x.id}"></td><td class="ltr" data-no-i18n>${esc(x.owner)}</td><td class="wrap w-md" data-no-i18n>${esc(x.name)}</td><td data-sv="${x.widgets}">${num(x.widgets)}</td><td class="ltr" data-sv="${x.created || 0}">${x.created ? fmtDate(x.created) : "—"}</td></tr>`).join("")}</tbody></table></div>`
+      : `<div class="empty">داشبورد شخصی‌ای نیست.</div>`,
+    foot: `${r.items.length ? `<button class="btn danger-ghost" data-a="del">حذف انتخاب‌شده‌ها</button>` : ""}<button class="btn ghost" data-a="close">بستن</button>`,
+    onOpen: (m, close) => {
+      if ($("#dbaAll", m)) $("#dbaAll", m).onchange = (e) => $$("[data-id]", m).forEach((c) => (c.checked = e.target.checked));
+      $$("[data-a]", m).forEach((b) => (b.onclick = async () => {
+        if (b.dataset.a === "close") return close();
+        const ids = $$("[data-id]:checked", m).map((c) => Number(c.dataset.id));
+        if (!ids.length) return toast("چیزی انتخاب نشده است.", "warn");
+        if (!(await confirm2({ title: "حذف داشبوردها", body: `<p>${esc(num(ids.length))} ${esc(I18N.t("داشبورد شخصی حذف شود؟"))}</p>`, confirm: "حذف", danger: true }))) return;
+        const d = await api("dash_admin_delete", ids); if (!d.ok) return toast(d.error, "error");
+        toast(`${I18N.t("حذف شد")}: ${num(d.deleted)}`, "ok"); close(); dashRender();
+      }));
+    } });
+}
 async function dbNew() {
   if (DB.edit) return;
   const both = DB.canShared && DB.personalOk;
@@ -803,7 +851,7 @@ function dbAdd(type, x, y) {
   ws.push(it); dbLayout(ws, it.id); dbLayout(ws, null); DB.dirty = true;
   dbDraw();
   const el = $(`.db-w[data-w="${it.id}"]`); if (el) { el.scrollIntoView({ block: "nearest", behavior: "smooth" }); el.classList.add("flash"); }
-  if (["traffic", "metric", "gauge", "value", "map", "text", "rtt", "snmptab"].includes(type)) dbCfg(it.id);
+  if (["traffic", "metric", "gauge", "value", "map", "text", "rtt", "snmptab", "availline", "outages"].includes(type)) dbCfg(it.id);
 }
 function dbDefCfg(type) {
   const first = [...DB.tg.values()].find((t) => t.kind === "snmp");
@@ -822,6 +870,8 @@ function dbDefCfg(type) {
     case "tiles": return { kinds: [], n: 60 };
     case "availbar": return { kinds: [], n: 12 };
     case "snmptab": return { tid: first ? first.id : 0, tab: "ports", pf: "down", n: 50 };
+    case "availline": return { kinds: [], tids: [...DB.tg.values()].filter((t) => DB_SVC_K.includes(t.kind)).slice(0, 3).map((t) => t.id), range: "" };
+    case "outages": return { kinds: [], n: 20, range: "24h" };
     default: return {};
   }
 }
@@ -900,9 +950,9 @@ function dbChipVal(m, id) { const el = $("#" + id, m); if (!el) return null; con
 async function dbCfg(wid) {
   const ws = dbWs(), w = ws.find((x) => x.id === wid); if (!w) return;
   const c = w.cfg || {}, T = w.type;
-  const rangeF = ["traffic", "metric", "avail", "events", "svc", "rtt"].includes(T)
+  const rangeF = ["traffic", "metric", "avail", "events", "svc", "rtt", "availline", "outages"].includes(T)
     ? `<div class="field"><label>بازه</label>${dbChips("dcR", [["", "مثل داشبورد"], ...Object.entries(DB_RANGES)], c.range || "", false)}</div>` : "";
-  const scopeF = ["status", "severity", "problems", "topn", "avail", "svc", "rtt", "tiles", "availbar"].includes(T)
+  const scopeF = ["status", "severity", "problems", "topn", "avail", "svc", "rtt", "tiles", "availbar", "availline", "outages"].includes(T)
     ? `<div class="row" style="gap:12px"><div class="field" style="flex:1"><label>گروه</label><select class="input" id="dcG"><option value="">همه‌ی گروه‌ها</option>${dbGroups().map((g) => `<option ${g === c.grp ? "selected" : ""} data-no-i18n>${esc(g)}</option>`).join("")}</select></div>
         <div class="field" style="flex:2"><label>فقط این هدف‌ها (هیچ = همه‌ی هدف‌های گروه و نوع)</label>
           <div class="db-tpick"><div class="row" style="gap:6px"><input class="input" id="dcTq" placeholder="جستجوی نام…" style="flex:1"><button type="button" class="btn sm ghost" id="dcTa">همه‌ی نمایش‌داده</button><button type="button" class="btn sm ghost" id="dcTn">هیچ</button><span class="muted" id="dcTc"></span></div>
@@ -912,13 +962,14 @@ async function dbCfg(wid) {
   let extra = "";
   if (["traffic", "metric", "gauge", "value", "snmptab"].includes(T)) extra += `<div class="field"><label>دستگاه</label><select class="input" id="dcT">${dbTgOpts(c.tid, T !== "value")}</select></div>`;
   if (T === "svc") extra += `<p class="hint">${esc(I18N.t("هر ردیف یک هدف Ping، TCP یا HTTP است. «وضعیت» و «پاسخ فعلی» از آخرین بررسی می‌آیند؛ «میانگین / بیشینه»، «دسترس‌پذیری» و «روند» (نمودار کوچک زمان پاسخ) برای بازه‌ی انتخابی پایین حساب می‌شوند؛ «گواهی» روزهای مانده تا انقضای گواهی HTTPS است. با کلیک روی سرستون مرتب می‌شود و با کلیک روی ردیف نمودار همان سرویس باز می‌شود."))}</p>`;
-  if (["svc", "rtt", "tiles", "availbar"].includes(T)) extra += `<div class="field"><label>نوع سرویس (هیچ = Ping، TCP و HTTP)</label>${dbChips("dcSk", [["ping", "Ping"], ["tcp", "TCP"], ["http", "HTTP"], ["snmp", "SNMP"]], c.kinds || [], true)}</div>`
-    + (T === "rtt" ? `<p class="hint">${esc(I18N.t("حداکثر ۸ سرویس روی نمودار؛ از فهرست «فقط این هدف‌ها» انتخاب کنید."))}</p>` : "")
-    + (T !== "rtt" ? nF(T === "svc" ? 50 : T === "tiles" ? 60 : 12, 100) : "");
+  if (["svc", "rtt", "tiles", "availbar", "availline", "outages"].includes(T)) extra += `<div class="field"><label>نوع سرویس (هیچ = Ping، TCP و HTTP)</label>${dbChips("dcSk", [["ping", "Ping"], ["tcp", "TCP"], ["http", "HTTP"], ["snmp", "SNMP"]], c.kinds || [], true)}</div>`
+    + (T === "rtt" || T === "availline" ? `<p class="hint">${esc(I18N.t("حداکثر ۸ سرویس روی نمودار؛ از فهرست «فقط این هدف‌ها» انتخاب کنید."))}</p>` : "")
+    + (T !== "rtt" && T !== "availline" ? nF(T === "svc" ? 50 : T === "tiles" ? 60 : T === "outages" ? 20 : 12, 100) : "");
   if (T === "snmptab") extra += `<div class="field"><label>جدول</label>${dbChips("dcTb", [["ports", "پورت‌ها"], ["hw", "سخت‌افزار"], ["oids", "OIDها"]], c.tab || "ports", false)}</div>
     <div class="field" id="dcPfw"><label>پورت‌ها</label>${dbChips("dcPf", [["all", "همه"], ["up", "وصل"], ["down", "قطع"], ["watch", "پیگیری‌شده"], ["top", "پرمصرف‌ترین"]], c.pf || "down", false)}</div>${nF(50, 100)}`;
   if (T === "traffic") extra += `<div class="field"><label>پورت (یک یا چند؛ حداکثر ۴)</label><div id="dcP" class="db-chips" data-multi="1"><span class="muted">…</span></div><p class="hint">نمودار فقط برای پورت‌هایی است که تاریخچه‌ی ترافیک‌شان ثبت می‌شود (تنظیم SNMP هدف).</p></div>`;
-  if (T === "metric") extra += `<div class="field"><label>مقدارها</label>${dbChips("dcK", Object.entries(DB_KEYS).map(([k, v]) => [k, v[0]]), c.keys || ["cpu"], true)}</div>`;
+  if (T === "metric") extra += `<div class="field"><label>مقدارها</label>${dbChips("dcK", [...Object.entries(DB_MKEYS).map(([k, v]) => [k, v[0]]), ...dbMetricOids(c)],
+    [...(c.keys || (dbMetricOids(c).length ? [] : ["cpu"])), ...dbMetricOids(c).map((o) => o[0])], true)}</div>`;
   if (T === "gauge") extra += `<div class="field"><label>مقدار</label>${dbChips("dcK", Object.entries(DB_KEYS).filter(([k]) => k !== "rtt").map(([k, v]) => [k, v[0]]), c.key || "cpu", false)}</div>
     <div class="row" style="gap:12px"><div class="field"><label>هشدار از</label><input class="input ltr" id="dcW" type="number" value="${c.warn || ""}" placeholder="75"></div><div class="field"><label>بحرانی از</label><input class="input ltr" id="dcC" type="number" value="${c.crit || ""}" placeholder="90"></div></div>`;
   if (T === "value") extra += `<div class="field"><label>مقدار</label>${dbChips("dcK", Object.entries(DB_VKEYS).map(([k, v]) => [k, v[0]]), c.key || "cpu", false)}</div>`;
@@ -959,7 +1010,7 @@ async function dbCfg(wid) {
       if ($("#dcT", m)) $("#dcT", m).onchange = loadPorts;
       if ($("#dcTs", m)) {        // 1.59.1: فهرست هدف‌ها با گروه، نوع و جستجو فیلتر می‌شود
         const tf = () => { const gg = $("#dcG", m).value, q = $("#dcTq", m).value.trim().toLowerCase(), ks = $("#dcSk", m) ? dbChipVal(m, "dcSk") : [];
-          const svcT = ["svc", "rtt", "tiles", "availbar"].includes(T), kk = ks.length ? ks : svcT ? DB_SVC_K : null;
+          const svcT = ["svc", "rtt", "tiles", "availbar", "availline", "outages"].includes(T), kk = ks.length ? ks : svcT ? DB_SVC_K : null;
           $$("#dcTs label", m).forEach((l) => { l.hidden = (gg && l.dataset.g !== gg) || (kk && !kk.includes(l.dataset.k)) || (q && !l.textContent.toLowerCase().includes(q)); });
           const n = $$("#dcTs input:checked", m).filter((x) => !x.closest("label").hidden).length;
           $("#dcTc", m).textContent = n ? `${num(n)} ${I18N.t("انتخاب‌شده")}` : I18N.t("همه"); };
@@ -1000,7 +1051,12 @@ async function dbCfg(wid) {
         const o = {}, g = (id) => $("#" + id, m);
         if (g("dcT")) o.tid = Number(g("dcT").value) || 0;
         if (g("dcP")) o.ports = dbChipVal(m, "dcP").slice(0, 4);
-        if (T === "metric") { o.keys = dbChipVal(m, "dcK"); if (!o.keys.length) o.keys = ["cpu"]; }
+        if (T === "metric") {
+          const all = dbChipVal(m, "dcK"), om = new Map(dbMetricOids(c));
+          o.keys = all.filter((k) => DB_MKEYS[k]); const ok = all.filter((k) => om.has(k));
+          o.okeys = ok.map((k) => k.slice(4)); o.onames = ok.map((k) => om.get(k));
+          if (!o.keys.length && !ok.length) o.keys = ["cpu"];
+        }
         if (["gauge", "value", "topn"].includes(T)) o.key = dbChipVal(m, "dcK");
         if (g("dcW")) { o.warn = Number(g("dcW").value) || 0; o.crit = Number(g("dcC").value) || 0; }
         if (g("dcN")) o.n = Math.max(1, Math.min(100, Number(g("dcN").value) || 0)) || undefined;
